@@ -8,10 +8,12 @@
 #![deny(clippy::large_stack_frames)]
 
 use bt_hci::controller::ExternalController;
+use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
+use esp_println as _;
 use esp_radio::ble::controller::BleConnector;
 use trouble_host::prelude::*;
 
@@ -47,6 +49,8 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 
+    info!("Embassy initialized!");
+
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
     let (mut _wifi_controller, _interfaces) =
         esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
@@ -62,6 +66,7 @@ async fn main(spawner: Spawner) -> ! {
     let _ = spawner;
 
     loop {
+        info!("Hello world!");
         Timer::after(Duration::from_secs(1)).await;
     }
 
