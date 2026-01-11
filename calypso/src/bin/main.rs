@@ -8,14 +8,18 @@
 #![deny(clippy::large_stack_frames)]
 
 use bt_hci::controller::ExternalController;
-use defmt::info;
+use defmt::{info, warn};
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Timer, Delay};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::i2c::master::I2c;
 use esp_println as _;
 use esp_radio::ble::controller::BleConnector;
 use trouble_host::prelude::*;
+
+use bno055::BNO055OperationMode;
+use bno055::Bno055;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -65,8 +69,36 @@ async fn main(spawner: Spawner) -> ! {
     // TODO: Spawn some tasks
     let _ = spawner;
 
+    // Setup the bno055 imu
+    info!("Setting up i2c");
+    // pinout for esp32 pico
+    // https://learn.adafruit.com/assets/112309
+    let mut i2c = I2c::new(peripherals.I2C0, esp_hal::i2c::master::Config::default()).unwrap()
+    .with_sda(peripherals.GPIO22).with_scl(peripherals.GPIO19);
+    info!("Done setting up i2c");
+
+    let mut delay = Delay;
+
+    info!("Setting up Bno055");
+    let mut bno055 = Bno055::new(i2c).with_alternative_address();
+    bno055.init(&mut delay).unwrap();
+    info!("Bno055 initialized");
+    bno055.set_mode(BNO055OperationMode::NDOF, &mut delay).unwrap();
+
+    // info!("Waiting for BNO055 to calibrate");
+    // while !bno055.is_fully_calibrated().unwrap() {}
+
+    info!("BNO055 calibrated");
+
     loop {
-        info!("Hello world!");
+        info!("temperature {}C", bno055.temperature().unwrap());
+        match bno055.quaternion() {
+            Ok(quat) => info!(
+                "Quaternion: w={} x={} y={} z={}",
+                quat.s, quat.v.x, quat.v.y, quat.v.z
+            ),
+            Err(e) => warn!("BNO055 quaternion read error"),
+        }
         Timer::after(Duration::from_secs(1)).await;
     }
 
