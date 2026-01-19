@@ -65,7 +65,11 @@ trouble-host = { version = "0.5.0", features = ["gatt"] }
 critical-section = "1.2.0"
 static_cell      = "2.1.1"
 bno055 = "0.4.0"
+esp-storage = { version = "0.8.1", features = ["esp32"] }
+embedded-storage = "0.3.1"
 
+[profile.dev.package.esp-storage]
+opt-level = 3
 
 [profile.dev]
 # Rust debug is too slow.
