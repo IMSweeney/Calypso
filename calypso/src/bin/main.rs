@@ -11,6 +11,7 @@ use bt_hci::controller::ExternalController;
 use defmt::{info, warn};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer, Delay};
+use esp_hal::{Blocking};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::i2c::master::I2c;
@@ -90,12 +91,23 @@ async fn main(spawner: Spawner) -> ! {
     info!("Bno055 initialized");
     bno055.set_mode(BNO055OperationMode::NDOF, &mut delay).unwrap();
 
-    // Set up nvs to store calibration data
     let mut flash = FlashStorage::new(peripherals.FLASH);
     info!("Flash size = {}", flash.capacity());
+    setup_calibration(&mut bno055, &mut flash);
 
+    loop {
+        info!("temperature {}C", bno055.temperature().unwrap());
+        let _level = get_level_sense(&mut bno055);
+        Timer::after(Duration::from_secs(1)).await;
+    }
+
+    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v~1.0/examples
+}
+
+fn setup_calibration(bno055: &mut Bno055<I2c<'_, Blocking>>, flash: &mut FlashStorage) {
+    // Set up nvs to store calibration data
     let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
-    let pt = partitions::read_partition_table(&mut flash, &mut pt_mem).unwrap();
+    let pt = partitions::read_partition_table(flash, &mut pt_mem).unwrap();
 
     let nvs = pt
         .find_partition(partitions::PartitionType::Data(
@@ -103,13 +115,14 @@ async fn main(spawner: Spawner) -> ! {
         ))
         .unwrap()
         .unwrap();
-    let mut nvs_partition = nvs.as_embedded_storage(&mut flash);
+    let mut nvs_partition = nvs.as_embedded_storage(flash);
 
     let mut bno055_calibration: [u8; BNO055_CALIB_SIZE] = [0; BNO055_CALIB_SIZE];
     nvs_partition
         .read(BNO055_CALIBRATION_ADDR, &mut bno055_calibration)
         .unwrap();
 
+    let mut delay = Delay;
     // Calibration
     let mut calib = BNO055Calibration::from_buf(&bno055_calibration);
     bno055.set_calibration_profile(calib, &mut delay).unwrap();
@@ -123,18 +136,22 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     info!("BNO055 calibrated");
+}
 
-    loop {
-        info!("temperature {}C", bno055.temperature().unwrap());
-        match bno055.quaternion() {
-            Ok(quat) => info!(
-                "Quaternion: w={} x={} y={} z={}",
-                quat.s, quat.v.x, quat.v.y, quat.v.z
-            ),
-            Err(_e) => warn!("BNO055 quaternion read error"),
+fn get_level_sense(bno055: &mut Bno055<I2c<'_, Blocking>>) -> f32 {
+    match bno055.gravity() {
+        Ok(grav) => {
+            // info!("Gravity vector: x={} y={} z={}", grav.x, grav.y, grav.z);
+            if grav.x < 0.1 && grav.x > -0.1 {
+                info!("Sensor is level on the X axis, gravity only on Y/Z");
+            } else {
+                info!("Sensor is not level: X-grav={}", grav.x);
+            }
+            return grav.x;
+        },
+        Err(_e) => {
+            warn!("BNO055 gravity read error");
+            return 0.0;
         }
-        Timer::after(Duration::from_secs(1)).await;
     }
-
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v~1.0/examples
 }
