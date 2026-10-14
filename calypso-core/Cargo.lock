@@ -42,6 +42,7 @@ name = "calypso-core"
 version = "0.1.0"
 dependencies = [
  "embassy-sync",
+ "embedded-storage",
  "trouble-host",
 ]
 
@@ -194,6 +195,12 @@ checksum = "3ff09972d4073aa8c299395be75161d582e7629cd663171d62af73c8d50dba3f"
 dependencies = [
  "embedded-io",
 ]
+
+[[package]]
+name = "embedded-storage"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c815b3ed4213d85d6cfd274b871f430c0681084e28dfd4a537877f47f844ec83"
 
 [[package]]
 name = "fnv"

@@ -10,3 +10,4 @@ description  = "Platform-independent logic for the Calypso firmware; unit-testab
 # built here so host tests can poke at it exactly like a BLE client would.
 trouble-host = { version = "0.5.0", features = ["gatt"] }
 embassy-sync = "0.7.2"
+embedded-storage = "0.3.1"

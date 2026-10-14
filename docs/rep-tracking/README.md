@@ -193,11 +193,13 @@ Two tiers:
 ## TODO
 
 ### 1. Flash log (`calypso-esp32` + `calypso-core`)
-- [ ] Add `partitions.csv`: shrink app to 1.5 MB, add ~2.3 MB `data` partition
-- [ ] `calypso-core`: sector-ring log (append, sequence numbers, wrap/erase)
-      against a generic `NorFlash` impl
-- [ ] Host tests: in-memory flash, wrap, power-loss mid-write recovery
-- [ ] Wire into firmware against the real data partition
+- [x] Add `partitions.csv`: shrink app to 1.5 MB, add ~2.3 MB `data` partition
+- [x] `calypso-core`: sector-ring log (append, sequence numbers, wrap/erase)
+      against a generic `NorFlash` impl (`flashlog::FlashLog`)
+- [x] Host tests: in-memory flash, wrap, power-loss mid-write recovery
+- [x] Wire into firmware against the real data partition
+      (`mount_rep_log` in `calypso-esp32/src/bin/main.rs`; record writes
+      land in Phase 4)
 
 ### 2. Sampler & ring buffer (`calypso-esp32`)
 - [ ] Switch BNO055 to IMU mode; I2C to 400 kHz

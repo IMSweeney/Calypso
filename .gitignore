@@ -22,3 +22,4 @@ target
 
 # Pre-built firmware images are build artifacts
 dist/**/*.bin
+.DS_Store

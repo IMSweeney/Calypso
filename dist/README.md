@@ -20,8 +20,15 @@ cd calypso-esp32
 source ~/export-esp.sh    # one-time per shell; see "First time setup" in the top-level README
 cargo build --release
 espflash save-image --chip esp32 --merge \
+  --partition-table partitions.csv \
   target/xtensa-esp32-none-elf/release/calypso ../dist/esp32/calypso.bin
 ```
+
+The `--partition-table` flag bakes `calypso-esp32/partitions.csv` (which
+defines the `log` data partition used for rep-record storage) into the
+merged image. **The first flash with this table repartitions the device**;
+the `nvs` partition keeps its default offset, so the stored BLE device name
+and BNO055 calibration survive.
 
 ## Test
 
@@ -43,7 +50,8 @@ cd dist/esp32
 ```
 
 or equivalently `espflash write-bin --chip esp32 0x0 calypso.bin` followed by
-`espflash monitor`.
+`espflash monitor`. (The merged image includes the partition table, so
+`write-bin` also applies the repartition on first flash.)
 
 When iterating on source, flashing from the firmware crate is simpler:
 `cd calypso-esp32 && cargo run` (builds, flashes, and monitors in one step).

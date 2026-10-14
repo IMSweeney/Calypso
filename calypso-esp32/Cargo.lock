@@ -123,6 +123,7 @@ name = "calypso-core"
 version = "0.1.0"
 dependencies = [
  "embassy-sync 0.7.2",
+ "embedded-storage",
  "trouble-host",
 ]
 

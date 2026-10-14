@@ -115,6 +115,12 @@ async fn main(spawner: Spawner) -> ! {
     let device_name = load_device_name(&mut flash);
     info!("BLE device name: {}", device_name.as_str());
 
+    // Mount the rep-record flash log (see docs/rep-tracking).
+    match mount_rep_log(&mut flash) {
+        Ok(sectors) => info!("Rep log mounted: {} sectors", sectors),
+        Err(()) => warn!("Rep log: partition missing or unusable"),
+    }
+
     let stack = trouble_host::new(ble_controller, &mut resources)
         .set_random_address(Address::random([0xca, 0xa7, 0x19, 0x50, 0xe4, 0xff]));
     let Host {
@@ -257,6 +263,26 @@ async fn main(spawner: Spawner) -> ! {
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v~1.0/examples
     loop {}
+}
+
+/// Mount the rep-record flash log on the `log` data partition (subtype
+/// `undefined`, see partitions.csv). Returns the number of sectors in the
+/// ring. The log is dropped again for now — Phase 4 will keep it alive and
+/// start writing rep records.
+fn mount_rep_log(flash: &mut FlashStorage) -> Result<u32, ()> {
+    let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
+    let pt = partitions::read_partition_table(flash, &mut pt_mem).map_err(|_| ())?;
+    let Some(log_part) = pt
+        .find_partition(partitions::PartitionType::Data(
+            partitions::DataPartitionSubType::Undefined,
+        ))
+        .map_err(|_| ())?
+    else {
+        return Err(());
+    };
+    let region = log_part.as_embedded_storage(flash);
+    let log = calypso_core::flashlog::FlashLog::mount(region).map_err(|_| ())?;
+    Ok(log.sectors())
 }
 
 /// Load the BLE device name from the NVS partition, falling back to the default.
