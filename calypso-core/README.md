@@ -28,6 +28,18 @@ cargo test
 Tests run on the host (macOS/Linux) with the stock toolchain — no espup or
 ESP32 needed.
 
+This includes integration tests (`tests/gatt_table.rs`) that act as a mock
+BLE client: the trouble-host attribute table is platform-independent, so the
+tests build the exact GATT table the firmware serves and read/write
+characteristics the way a phone would (rename the device, read back the
+value, check the persistence codec round-trips, verify the notify CCCD
+exists).
+
+What this does **not** cover: the radio itself (advertising, connections).
+QEMU/Wokwi emulate the ESP32 CPU but not its BLE radio, and trouble-host's
+own integration tests require real HCI hardware — so end-to-end radio
+behavior still needs a device (see `embedded-test` for on-device tests).
+
 ## Deploy
 
 This crate is a library; it is not deployed on its own. It is compiled into

@@ -4,3 +4,9 @@ name         = "calypso-core"
 rust-version = "1.88"
 version      = "0.1.0"
 description  = "Platform-independent logic for the Calypso firmware; unit-testable on the host."
+
+[dependencies]
+# trouble-host is no_std and platform-independent: the GATT attribute table is
+# built here so host tests can poke at it exactly like a BLE client would.
+trouble-host = { version = "0.5.0", features = ["gatt"] }
+embassy-sync = "0.7.2"

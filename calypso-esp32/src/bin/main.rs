@@ -50,14 +50,6 @@ const BNO055_CALIBRATION_ADDR: u32 = 0x00;
 const BLE_DEVICE_NAME_ADDR: u32 = 0x1000;
 const DEFAULT_DEVICE_NAME: &str = "Calypso";
 
-/// Custom GATT service exposing the IMU's gravity vector.
-const GRAVITY_SERVICE_UUID: Uuid = Uuid::new_long([
-    0x00, 0x00, 0xca, 0x10, 0xb0, 0xcd, 0x11, 0xec, 0x87, 0x1f, 0xd4, 0x5d, 0xdf, 0x13, 0x88, 0x40,
-]);
-const GRAVITY_X_UUID: Uuid = Uuid::new_long([
-    0x00, 0x00, 0xca, 0x11, 0xb0, 0xcd, 0x11, 0xec, 0x87, 0x1f, 0xd4, 0x5d, 0xdf, 0x13, 0x88, 0x40,
-]);
-
 /// Latest X-axis gravity reading (m/s^2), shared between the IMU loop and the
 /// BLE task as raw f32 bits.
 static GRAVITY_X_BITS: AtomicU32 = AtomicU32::new(0);
@@ -132,42 +124,27 @@ async fn main(spawner: Spawner) -> ! {
     } = stack.build();
 
     // GATT table: GAP service with a *writable* Device Name characteristic
-    // (0x2A00) backed by `name_store`, a read-only Appearance characteristic,
-    // and the mandatory GATT service declaration. We build the GAP service
-    // manually instead of via `GapConfig` because `GapConfig` only supports a
-    // read-only name.
+    // (0x2A00), a read-only Appearance characteristic, the mandatory GATT
+    // service declaration, and a custom gravity service. Built in
+    // calypso-core so host integration tests can exercise the exact same
+    // table (see calypso-core/tests/gatt_table.rs).
     let mut name_store = [0u8; DEVICE_NAME_MAX];
     let mut gravity_x_store = [0u8; 4];
-    let mut table: AttributeTable<'_, NoopRawMutex, 12> = AttributeTable::new();
-    let mut gap = table.add_service(Service::new(service::GAP));
-    let name_char = gap
-        .add_characteristic(
-            characteristic::DEVICE_NAME,
-            &[CharacteristicProp::Read, CharacteristicProp::Write],
-            device_name.clone(),
-            &mut name_store[..],
-        )
-        .build();
-    gap.add_characteristic_ro(
-        characteristic::APPEARANCE,
-        &appearance::sensor::GENERIC_SENSOR,
-    );
-    gap.build();
-    table.add_service(Service::new(service::GATT)).build();
-
-    // Custom service: X-axis gravity, readable and notifiable.
-    let gravity_x_char = table
-        .add_service(Service::new(GRAVITY_SERVICE_UUID.clone()))
-        .add_characteristic(
-            GRAVITY_X_UUID.clone(),
-            &[CharacteristicProp::Read, CharacteristicProp::Notify],
-            0.0f32,
-            &mut gravity_x_store[..],
-        )
-        .build();
-
-    let server =
-        AttributeServer::<NoopRawMutex, DefaultPacketPool, 12, 1, CONNECTIONS_MAX>::new(table);
+    let gatt = calypso_core::ble::build_gatt_table::<NoopRawMutex>(
+        device_name.as_str(),
+        &mut name_store[..],
+        &mut gravity_x_store[..],
+    )
+    .unwrap();
+    let name_char = gatt.device_name;
+    let gravity_x_char = gatt.gravity_x;
+    let server = AttributeServer::<
+        NoopRawMutex,
+        DefaultPacketPool,
+        { calypso_core::ble::GATT_TABLE_MAX },
+        1,
+        CONNECTIONS_MAX,
+    >::new(gatt.table);
 
     info!("Starting BLE stack");
     join3(

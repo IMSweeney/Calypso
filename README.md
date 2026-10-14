@@ -30,7 +30,7 @@ For on-device tests, look at [`embedded-test`](https://crates.io/crates/embedded
 ## TODO
 - [X] Save calibration to memory between power cycles
 - [X] Simple level sensor along one axis
-- [ ] Export data over BLE [Example](https://github.com/esp-rs/esp-hal/blob/main/examples/ble/bas_peripheral/src/main.rs)
+- [X] Export data over BLE [Example](https://github.com/esp-rs/esp-hal/blob/main/examples/ble/bas_peripheral/src/main.rs)
 - [ ] OTA code updates [Example](https://github.com/esp-rs/esp-hal/blob/main/examples/ota/update/src/main.rs)
 - [ ] Storing path/time data. (how much can we store?)
 - [ ] Detecting reps, calculating rep stats (speed, distance)
