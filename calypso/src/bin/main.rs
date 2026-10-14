@@ -383,7 +383,7 @@ fn get_level_sense(bno055: &mut Bno055<I2c<'_, Blocking>>) -> f32 {
     match bno055.gravity() {
         Ok(grav) => {
             // info!("Gravity vector: x={} y={} z={}", grav.x, grav.y, grav.z);
-            if grav.x < 0.1 && grav.x > -0.1 {
+            if calypso_core::is_level_along_axis(grav.x) {
                 info!("Sensor is level on the X axis, gravity only on Y/Z");
             } else {
                 info!("Sensor is not level: X-grav={}", grav.x);
