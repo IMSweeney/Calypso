@@ -1,0 +1,6 @@
+[package]
+edition      = "2021"
+name         = "calypso-core"
+rust-version = "1.88"
+version      = "0.1.0"
+description  = "Platform-independent logic for the Calypso firmware; unit-testable on the host."

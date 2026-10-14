@@ -10,6 +10,9 @@
 use bt_hci::controller::ExternalController;
 use defmt::{info, warn};
 use embassy_executor::Spawner;
+use embassy_futures::join::join3;
+use embassy_futures::select::{select, Either};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Timer, Delay};
 use esp_hal::{Blocking};
 use esp_hal::clock::CpuClock;
@@ -21,9 +24,12 @@ use trouble_host::prelude::*;
 use esp_bootloader_esp_idf::partitions;
 use esp_storage::FlashStorage;
 use embedded_storage::{ReadStorage, Storage};
+use embedded_storage::nor_flash::NorFlash;
 
 use bno055::{BNO055OperationMode, BNO055Calibration, BNO055_CALIB_SIZE};
 use bno055::Bno055;
+use calypso_core::DEVICE_NAME_MAX;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -33,9 +39,28 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 extern crate alloc;
 
 const CONNECTIONS_MAX: usize = 1;
-const L2CAP_CHANNELS_MAX: usize = 1;
+// Signal channel + ATT channel
+const L2CAP_CHANNELS_MAX: usize = 2;
 
 const BNO055_CALIBRATION_ADDR: u32 = 0x00;
+
+/// Offset of the BLE device name blob inside the NVS partition. Lives in the
+/// partition's second flash sector so erasing it never touches the calibration
+/// blob in the first sector.
+const BLE_DEVICE_NAME_ADDR: u32 = 0x1000;
+const DEFAULT_DEVICE_NAME: &str = "Calypso";
+
+/// Custom GATT service exposing the IMU's gravity vector.
+const GRAVITY_SERVICE_UUID: Uuid = Uuid::new_long([
+    0x00, 0x00, 0xca, 0x10, 0xb0, 0xcd, 0x11, 0xec, 0x87, 0x1f, 0xd4, 0x5d, 0xdf, 0x13, 0x88, 0x40,
+]);
+const GRAVITY_X_UUID: Uuid = Uuid::new_long([
+    0x00, 0x00, 0xca, 0x11, 0xb0, 0xcd, 0x11, 0xec, 0x87, 0x1f, 0xd4, 0x5d, 0xdf, 0x13, 0x88, 0x40,
+]);
+
+/// Latest X-axis gravity reading (m/s^2), shared between the IMU loop and the
+/// BLE task as raw f32 bits.
+static GRAVITY_X_BITS: AtomicU32 = AtomicU32::new(0);
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -70,9 +95,8 @@ async fn main(spawner: Spawner) -> ! {
     let ble_controller = ExternalController::<_, 1>::new(transport);
     let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
         HostResources::new();
-    let _stack = trouble_host::new(ble_controller, &mut resources);
 
-    // TODO: Spawn some tasks
+    // Everything runs in this task via join3 below; no extra tasks needed.
     let _ = spawner;
 
     // Setup the bno055 imu
@@ -95,13 +119,232 @@ async fn main(spawner: Spawner) -> ! {
     info!("Flash size = {}", flash.capacity());
     setup_calibration(&mut bno055, &mut flash);
 
-    loop {
-        info!("temperature {}C", bno055.temperature().unwrap());
-        let _level = get_level_sense(&mut bno055);
-        Timer::after(Duration::from_secs(1)).await;
-    }
+    // Load the persisted BLE device name, falling back to the default.
+    let device_name = load_device_name(&mut flash);
+    info!("BLE device name: {}", device_name.as_str());
+
+    let stack = trouble_host::new(ble_controller, &mut resources)
+        .set_random_address(Address::random([0xca, 0xa7, 0x19, 0x50, 0xe4, 0xff]));
+    let Host {
+        mut peripheral,
+        mut runner,
+        ..
+    } = stack.build();
+
+    // GATT table: GAP service with a *writable* Device Name characteristic
+    // (0x2A00) backed by `name_store`, a read-only Appearance characteristic,
+    // and the mandatory GATT service declaration. We build the GAP service
+    // manually instead of via `GapConfig` because `GapConfig` only supports a
+    // read-only name.
+    let mut name_store = [0u8; DEVICE_NAME_MAX];
+    let mut gravity_x_store = [0u8; 4];
+    let mut table: AttributeTable<'_, NoopRawMutex, 12> = AttributeTable::new();
+    let mut gap = table.add_service(Service::new(service::GAP));
+    let name_char = gap
+        .add_characteristic(
+            characteristic::DEVICE_NAME,
+            &[CharacteristicProp::Read, CharacteristicProp::Write],
+            device_name.clone(),
+            &mut name_store[..],
+        )
+        .build();
+    gap.add_characteristic_ro(
+        characteristic::APPEARANCE,
+        &appearance::sensor::GENERIC_SENSOR,
+    );
+    gap.build();
+    table.add_service(Service::new(service::GATT)).build();
+
+    // Custom service: X-axis gravity, readable and notifiable.
+    let gravity_x_char = table
+        .add_service(Service::new(GRAVITY_SERVICE_UUID.clone()))
+        .add_characteristic(
+            GRAVITY_X_UUID.clone(),
+            &[CharacteristicProp::Read, CharacteristicProp::Notify],
+            0.0f32,
+            &mut gravity_x_store[..],
+        )
+        .build();
+
+    let server =
+        AttributeServer::<NoopRawMutex, DefaultPacketPool, 12, 1, CONNECTIONS_MAX>::new(table);
+
+    info!("Starting BLE stack");
+    join3(
+        // HCI runner: must run forever alongside any other BLE tasks.
+        async {
+            loop {
+                if runner.run().await.is_err() {
+                    warn!("BLE runner error");
+                }
+            }
+        },
+        // Advertising + GATT event handling.
+        async {
+            let mut name = device_name;
+            loop {
+                // (Re)advertise with the current name. A name written over GATT
+                // shows up in advertising on the next advertising cycle (i.e.
+                // after the current connection closes).
+                let mut adv_data = [0u8; 31];
+                let adv_len = AdStructure::encode_slice(
+                    &[
+                        AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
+                        AdStructure::CompleteLocalName(name.as_bytes()),
+                    ],
+                    &mut adv_data[..],
+                )
+                .unwrap();
+
+                let advertiser = match peripheral
+                    .advertise(
+                        &Default::default(),
+                        Advertisement::ConnectableScannableUndirected {
+                            adv_data: &adv_data[..adv_len],
+                            scan_data: &[],
+                        },
+                    )
+                    .await
+                {
+                    Ok(advertiser) => advertiser,
+                    Err(_) => {
+                        warn!("failed to start advertising");
+                        Timer::after(Duration::from_millis(500)).await;
+                        continue;
+                    }
+                };
+                info!("advertising");
+
+                let conn = match advertiser.accept().await {
+                    Ok(conn) => match conn.with_attribute_server(&server) {
+                        Ok(conn) => conn,
+                        Err(_) => continue,
+                    },
+                    Err(_) => continue,
+                };
+                info!("BLE connection established");
+
+                loop {
+                    // Service GATT events; once a second, push the latest
+                    // gravity reading to the client (no-op unless subscribed).
+                    let event = match select(conn.next(), Timer::after(Duration::from_secs(1))).await {
+                        Either::First(event) => event,
+                        Either::Second(()) => {
+                            let value = f32::from_bits(GRAVITY_X_BITS.load(Ordering::Relaxed));
+                            if gravity_x_char.notify(&conn, &value).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+                    match event {
+                        GattConnectionEvent::Disconnected { .. } => {
+                            info!("BLE disconnected");
+                            break;
+                        }
+                        GattConnectionEvent::Gatt { event } => {
+                            let wrote_name =
+                                matches!(&event, GattEvent::Write(w) if w.handle() == name_char.handle);
+                            if let Ok(reply) = event.accept() {
+                                let _ = reply.send().await;
+                            }
+                            if wrote_name {
+                                // The write has been applied to the attribute
+                                // store by `accept`; read the new name back,
+                                // keep it in memory and persist it to flash.
+                                if let Ok(new_name) = server.table().get(&name_char) {
+                                    if new_name != name {
+                                        name = new_name;
+                                        info!("device name set to {}", name.as_str());
+                                        save_device_name(&mut flash, name.as_str());
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        },
+        // IMU loop.
+        async {
+            loop {
+                info!("temperature {}C", bno055.temperature().unwrap());
+                let level = get_level_sense(&mut bno055);
+                GRAVITY_X_BITS.store(level.to_bits(), Ordering::Relaxed);
+                Timer::after(Duration::from_secs(1)).await;
+            }
+        },
+    )
+    .await;
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v~1.0/examples
+    loop {}
+}
+
+/// Load the BLE device name from the NVS partition, falling back to the default.
+///
+/// Blob layout at [`BLE_DEVICE_NAME_ADDR`]: 1 length byte followed by up to
+/// [`DEVICE_NAME_MAX`] name bytes, padded to a 4-byte boundary.
+fn load_device_name(flash: &mut FlashStorage) -> HeaplessString<DEVICE_NAME_MAX> {
+    let mut fallback: HeaplessString<DEVICE_NAME_MAX> = HeaplessString::new();
+    let _ = fallback.push_str(DEFAULT_DEVICE_NAME);
+
+    let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
+    let Ok(pt) = partitions::read_partition_table(flash, &mut pt_mem) else {
+        return fallback;
+    };
+    let Ok(Some(nvs)) = pt.find_partition(partitions::PartitionType::Data(
+        partitions::DataPartitionSubType::Nvs,
+    )) else {
+        return fallback;
+    };
+    let mut nvs_partition = nvs.as_embedded_storage(flash);
+
+    let mut buf = [0u8; calypso_core::DEVICE_NAME_BLOB_SIZE];
+    if nvs_partition.read(BLE_DEVICE_NAME_ADDR, &mut buf).is_err() {
+        return fallback;
+    }
+    match calypso_core::decode_device_name(&buf) {
+        Some(s) => {
+            let mut name = HeaplessString::new();
+            if name.push_str(s).is_ok() { name } else { fallback }
+        }
+        None => fallback,
+    }
+}
+
+/// Persist the BLE device name to the NVS partition. Flash bits only go from
+/// 1 to 0 when writing, so the sector is erased first. The name lives in its
+/// own sector, leaving the calibration blob in the first sector untouched.
+fn save_device_name(flash: &mut FlashStorage, name: &str) {
+    let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
+    let Ok(pt) = partitions::read_partition_table(flash, &mut pt_mem) else {
+        warn!("NVS: partition table read failed");
+        return;
+    };
+    let Ok(Some(nvs)) = pt.find_partition(partitions::PartitionType::Data(
+        partitions::DataPartitionSubType::Nvs,
+    )) else {
+        warn!("NVS: partition not found");
+        return;
+    };
+    let mut nvs_partition = nvs.as_embedded_storage(flash);
+
+    if nvs_partition
+        .erase(BLE_DEVICE_NAME_ADDR, BLE_DEVICE_NAME_ADDR + 0x1000)
+        .is_err()
+    {
+        warn!("NVS: erase failed");
+        return;
+    }
+    let Some(buf) = calypso_core::encode_device_name(name) else {
+        warn!("NVS: device name is empty or too long");
+        return;
+    };
+    if Storage::write(&mut nvs_partition, BLE_DEVICE_NAME_ADDR, &buf).is_err() {
+        warn!("NVS: write failed");
+    }
 }
 
 fn setup_calibration(bno055: &mut Bno055<I2c<'_, Blocking>>, flash: &mut FlashStorage) {
@@ -130,9 +373,7 @@ fn setup_calibration(bno055: &mut Bno055<I2c<'_, Blocking>>, flash: &mut FlashSt
         info!("Waiting for BNO055 to calibrate");
         while !bno055.is_fully_calibrated().unwrap() {}
         calib = bno055.calibration_profile(&mut delay).unwrap();
-        nvs_partition
-        .write(BNO055_CALIBRATION_ADDR, &calib.as_bytes())
-        .unwrap();
+        Storage::write(&mut nvs_partition, BNO055_CALIBRATION_ADDR, &calib.as_bytes()).unwrap();
     }
 
     info!("BNO055 calibrated");
