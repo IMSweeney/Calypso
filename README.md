@@ -9,12 +9,17 @@
 - `cargo install espflash`
 - probe-rs?
 
+## Layout
+- `calypso-esp32/` — ESP32 (Xtensa) firmware
+- `calypso-core/` — platform-independent logic, unit-tested on the host
+- `dist/` — deploy scripts and docs; flash images are generated, not committed
+
 ### Flashing
-- `cargo build`
+- `cd calypso-esp32 && cargo build`
 - `cargo run`
 
 ### Testing
-`cargo test` in `calypso/` does not work: the firmware target
+`cargo test` in `calypso-esp32/` does not work: the firmware target
 (`xtensa-esp32-none-elf`) is `no_std`, and Rust's test harness requires `std`.
 Platform-independent logic lives in the `calypso-core` crate instead, which is
 tested on the host:

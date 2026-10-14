@@ -1,19 +1,22 @@
 # dist
 
-Pre-built, deployable firmware packages, one folder per chip family.
+Deployable firmware packages, one folder per chip family. Flash images
+(`*.bin`) are build artifacts: they are generated locally (see below) and
+not committed to git.
 
 - `esp32/` — original ESP32 (Xtensa, `xtensa-esp32-none-elf`), e.g. the
-  ESP32-PICO-D4 this project targets.
+  ESP32-PICO-D4 this project targets. Firmware source lives in
+  `calypso-esp32/`.
 
-Each chip-family folder contains a merged flash image (`*.bin`) and a
-`flash.sh` script to deploy it.
+Each chip-family folder contains a `flash.sh` script to deploy the generated
+image.
 
 ## Build
 
 From the repo root:
 
 ```
-cd calypso
+cd calypso-esp32
 source ~/export-esp.sh    # one-time per shell; see "First time setup" in the top-level README
 cargo build --release
 espflash save-image --chip esp32 --merge \
@@ -43,4 +46,4 @@ or equivalently `espflash write-bin --chip esp32 0x0 calypso.bin` followed by
 `espflash monitor`.
 
 When iterating on source, flashing from the firmware crate is simpler:
-`cd calypso && cargo run` (builds, flashes, and monitors in one step).
+`cd calypso-esp32 && cargo run` (builds, flashes, and monitors in one step).

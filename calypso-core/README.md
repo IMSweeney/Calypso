@@ -7,7 +7,8 @@ the host with the standard Rust toolchain — the firmware target
 
 Anything that is pure logic (data formats, codecs, sensor math, rep
 detection, ...) belongs here so it gets host test coverage. Anything that
-touches hardware stays in `calypso/`.
+touches hardware stays in the chip-family firmware crates
+(e.g. `calypso-esp32/`).
 
 ## Build
 
@@ -16,7 +17,7 @@ cargo build
 ```
 
 The crate is `#![no_std]` when built normally, so it can be linked into the
-firmware (`calypso/` depends on it via a path dependency).
+firmware (`calypso-esp32/` depends on it via a path dependency).
 
 ## Test
 
