@@ -1,0 +1,177 @@
+//! Host tests for the BLE sync streaming logic: BLE-sized trace chunks, the
+//! summary cursor, and request decoding. No radio involved.
+
+use calypso_core::pb::{self, msg};
+use calypso_core::rep::TracePoint;
+use calypso_core::sync::{
+    decode_trace_request, encode_summary_message, SummaryCursor, TraceStreamer, BLE_CHUNK_SAMPLES,
+    BLE_NOTIFY_BYTES,
+};
+
+fn point(i: usize) -> TracePoint {
+    TracePoint {
+        t_ms: 1000 + (i as u32) * 10,
+        pos: [0.01 * i as f32, 0.2, -0.3],
+        accel: [0, -981, 12],
+        quat: [16384, 0, 1024, -2048],
+    }
+}
+
+fn trace(n: usize) -> Vec<TracePoint> {
+    (0..n).map(point).collect()
+}
+
+#[test]
+fn trace_streams_in_ble_sized_chunks() {
+    let points = trace(10);
+    let mut streamer = TraceStreamer::all(3, points[0].t_ms, &points);
+    let mut buf = [0u8; 512];
+
+    let mut seen = Vec::new();
+    let mut indices = Vec::new();
+    while let Some(n) = streamer.next_message(&mut buf) {
+        assert!(n <= BLE_NOTIFY_BYTES, "chunk message {n} bytes, over the MTU");
+        let msg = pb::decode_sync(&buf[..n]).unwrap();
+        match msg.body {
+            Some(msg::SyncMessage_::Body::Trace(chunk)) => {
+                assert_eq!(chunk.rep_id, 3);
+                indices.push(chunk.index);
+                for s in chunk.samples.iter() {
+                    seen.push(pb::trace_point_from_message(s));
+                }
+            }
+            other => panic!("expected a trace chunk, got {other:?}"),
+        }
+    }
+
+    // 10 points -> ceil(10/4) = 3 chunks, numbered 0,1,2.
+    assert_eq!(TraceStreamer::chunk_count(10), 3);
+    assert_eq!(indices, vec![0, 1, 2]);
+    // Reassembled in index order, the trace is identical (timestamps are
+    // relative to the rep's first point).
+    assert_eq!(seen.len(), points.len());
+    for (got, want) in seen.iter().zip(points.iter()) {
+        assert_eq!(got.t_ms, want.t_ms - points[0].t_ms);
+        assert_eq!(got.accel, want.accel);
+        assert_eq!(got.quat, want.quat);
+        assert!((got.pos[0] - want.pos[0]).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn chunk_count_matches_the_stream() {
+    for n in [0usize, 1, 4, 5, 8, 512] {
+        let points = trace(n);
+        let expected = n.div_ceil(BLE_CHUNK_SAMPLES) as u32;
+        assert_eq!(TraceStreamer::chunk_count(n), expected, "n = {n}");
+
+        let mut streamer = TraceStreamer::all(1, 1000, &points);
+        let mut buf = [0u8; 512];
+        let mut count = 0;
+        while streamer.next_message(&mut buf).is_some() {
+            count += 1;
+        }
+        assert_eq!(count, expected as usize, "n = {n}");
+    }
+}
+
+#[test]
+fn single_chunk_request_sends_exactly_one() {
+    let points = trace(20); // 5 chunks
+    let mut streamer = TraceStreamer::one(7, points[0].t_ms, &points, 3);
+    let mut buf = [0u8; 512];
+
+    let n = streamer.next_message(&mut buf).unwrap();
+    let msg = pb::decode_sync(&buf[..n]).unwrap();
+    match msg.body {
+        Some(msg::SyncMessage_::Body::Trace(chunk)) => {
+            assert_eq!(chunk.index, 3);
+            assert_eq!(chunk.rep_id, 7);
+            assert_eq!(chunk.samples.len(), BLE_CHUNK_SAMPLES);
+        }
+        other => panic!("expected a trace chunk, got {other:?}"),
+    }
+    // ...and then the stream is finished.
+    assert!(streamer.next_message(&mut buf).is_none());
+}
+
+#[test]
+fn out_of_range_single_chunk_yields_nothing() {
+    let points = trace(8); // 2 chunks (0, 1)
+    let mut streamer = TraceStreamer::one(7, 1000, &points, 9);
+    let mut buf = [0u8; 512];
+    assert!(streamer.next_message(&mut buf).is_none());
+}
+
+#[test]
+fn worst_case_chunk_fits_the_notification_budget() {
+    // Extreme values, so every field takes its maximum encoding.
+    let worst = TracePoint {
+        t_ms: u32::MAX,
+        pos: [f32::MAX, f32::MIN, -1.5e30],
+        accel: [i16::MIN, i16::MAX, -32767],
+        quat: [i16::MIN, i16::MAX, -16384, 16383],
+    };
+    let points = vec![worst; BLE_CHUNK_SAMPLES];
+    let mut streamer = TraceStreamer::all(1, 0, &points);
+    let mut buf = [0u8; 512];
+    let n = streamer.next_message(&mut buf).unwrap();
+    assert!(
+        n <= BLE_NOTIFY_BYTES,
+        "worst-case chunk is {n} bytes, over the {BLE_NOTIFY_BYTES}-byte budget"
+    );
+}
+
+#[test]
+fn summary_messages_and_cursor() {
+    let summary = pb::summary_message(5, &Default::default(), 2);
+    let mut buf = [0u8; 128];
+    let n = encode_summary_message(summary, &mut buf).unwrap();
+    let msg = pb::decode_sync(&buf[..n]).unwrap();
+    match msg.body {
+        Some(msg::SyncMessage_::Body::Summary(s)) => assert_eq!(s.rep_id, 5),
+        other => panic!("expected a summary, got {other:?}"),
+    }
+
+    // The cursor tracks what the subscriber has already been sent.
+    let mut cursor = SummaryCursor::new();
+    assert_eq!(cursor.next(), 0);
+    assert_eq!(cursor.remaining(4), 4);
+    cursor.advance(2);
+    assert_eq!(cursor.remaining(4), 2);
+    // Re-subscribing after reps fell off the ring rewinds to what exists.
+    cursor.clamp_to(1);
+    assert_eq!(cursor.next(), 1);
+    cursor.clamp_to(9);
+    assert_eq!(cursor.next(), 1);
+}
+
+#[test]
+fn trace_requests_are_validated() {
+    let mut buf = [0u8; 32];
+    let mut encode = |rep_id, all_chunks, chunk_index| {
+        let n = pb::encode_trace_request(
+            &msg::TraceRequest {
+                rep_id,
+                all_chunks,
+                chunk_index,
+            },
+            &mut buf,
+        )
+        .unwrap();
+        buf[..n].to_vec()
+    };
+
+    let ok = decode_trace_request(&encode(12, true, 0)).unwrap();
+    assert_eq!(ok.rep_id, 12);
+    assert!(ok.all_chunks);
+
+    let one = decode_trace_request(&encode(12, false, 5)).unwrap();
+    assert_eq!(one.chunk_index, 5);
+
+    // rep_id 0 is meaningless, and an absurd chunk index is rejected.
+    assert!(decode_trace_request(&encode(0, true, 0)).is_none());
+    assert!(decode_trace_request(&encode(1, false, 9999)).is_none());
+    // Garbage bytes don't panic.
+    assert!(decode_trace_request(&[0xFF, 0xFF, 0xFF, 0xFF]).is_none());
+}

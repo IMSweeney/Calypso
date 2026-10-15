@@ -9,6 +9,7 @@ name = "calypso"
 path = "./src/bin/main.rs"
 
 [dependencies]
+heapless = "0.9"
 esp-hal = { version = "~1.0", features = ["defmt", "esp32", "unstable"] }
 
 esp-rtos = { version = "0.2.0", features = [

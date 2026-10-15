@@ -198,6 +198,11 @@ pub fn decode_record(bytes: &[u8]) -> Result<Record, Error> {
     }
 }
 
+/// Encode a trace request (app -> device; used by the app and by tests).
+pub fn encode_trace_request(request: &msg::TraceRequest, out: &mut [u8]) -> Result<usize, Error> {
+    encode_message(request, out)
+}
+
 /// Decode a sync message (app -> device or device -> app).
 pub fn decode_sync(bytes: &[u8]) -> Result<msg::SyncMessage, Error> {
     let mut message = msg::SyncMessage::default();

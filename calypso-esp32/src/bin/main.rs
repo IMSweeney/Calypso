@@ -33,7 +33,10 @@ use embedded_storage::nor_flash::NorFlash;
 
 use bno055::{BNO055OperationMode, BNO055Calibration, BNO055_CALIB_SIZE};
 use bno055::Bno055;
+use calypso_core::ble::{BleVec, SYNC_MSG_MAX};
 use calypso_core::flashlog::FlashLog;
+use calypso_core::pb::msg;
+use calypso_core::sync::{self, decode_trace_request, SummaryCursor, TraceStreamer};
 use calypso_core::rep::{compute_rep, Detector, TraceBuf, TracePoint, MARGIN_MS};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::sampler::{quantize, Sample, SampleRing, QUAT_SCALE, SAMPLE_RATE_HZ};
@@ -193,14 +196,33 @@ async fn main(spawner: Spawner) -> ! {
     // table (see calypso-core/tests/gatt_table.rs).
     let mut name_store = [0u8; DEVICE_NAME_MAX];
     let mut gravity_x_store = [0u8; 4];
+    let mut sync_msg_store = [0u8; calypso_core::ble::SYNC_MSG_MAX];
+    let mut sync_request_store = [0u8; calypso_core::ble::SYNC_REQUEST_MAX];
+    let mut sync_chunk_store = [0u8; calypso_core::ble::SYNC_MSG_MAX];
     let gatt = calypso_core::ble::build_gatt_table::<NoopRawMutex>(
         device_name.as_str(),
         &mut name_store[..],
         &mut gravity_x_store[..],
+        &mut sync_msg_store[..],
+        &mut sync_request_store[..],
+        &mut sync_chunk_store[..],
     )
     .unwrap();
     let name_char = gatt.device_name;
     let gravity_x_char = gatt.gravity_x;
+    let summary_char = gatt.summary;
+    let trace_request_char = gatt.trace_request;
+    let trace_chunk_char = gatt.trace_chunk;
+
+    // Buffers for the sync path: a trace read back from the log, and a
+    // reusable record scratch (both heap: too big for the stack/static RAM).
+    let mut trace_vec = AllocVec::new();
+    trace_vec.resize(TRACE_POINTS, TracePoint::ZERO);
+    let sync_trace_storage: &'static mut [TracePoint] = Box::leak(trace_vec.into_boxed_slice());
+    let mut sync_rec_vec = AllocVec::new();
+    sync_rec_vec.resize(RECORD_BUF_BYTES, 0u8);
+    let sync_rec_buf: &'static mut [u8] = Box::leak(sync_rec_vec.into_boxed_slice());
+    info!("Sync buffers ready, heap free {} B", esp_alloc::HEAP.free());
     let server = AttributeServer::<
         NoopRawMutex,
         DefaultPacketPool,
@@ -264,6 +286,12 @@ async fn main(spawner: Spawner) -> ! {
                 };
                 info!("BLE connection established");
 
+                // Sync state: how many summaries this subscriber has been
+                // sent. Notifications fail while nobody is subscribed, so the
+                // cursor only advances on a successful send and the next tick
+                // retries — no CCCD bookkeeping needed.
+                let mut cursor = SummaryCursor::new();
+
                 loop {
                     // Service GATT events; once a second, push the latest
                     // gravity reading to the client (no-op unless subscribed).
@@ -271,9 +299,21 @@ async fn main(spawner: Spawner) -> ! {
                         Either::First(event) => event,
                         Either::Second(()) => {
                             let value = f32::from_bits(GRAVITY_X_BITS.load(Ordering::Relaxed));
-                            if gravity_x_char.notify(&conn, &value).await.is_err() {
-                                break;
+                            if let Err(_) = gravity_x_char.notify(&conn, &value).await {
+                                // No subscriber yet; still fine to keep the
+                                // connection (and try again on the next tick).
                             }
+                            // Auto-sync: push any summaries the app hasn't
+                            // seen. A failed notify means nobody is
+                            // subscribed, so we stop and retry next tick.
+                            stream_new_summaries(
+                                flash,
+                                sync_rec_buf,
+                                &summary_char,
+                                &conn,
+                                &mut cursor,
+                            )
+                            .await;
                             continue;
                         }
                     };
@@ -285,8 +325,28 @@ async fn main(spawner: Spawner) -> ! {
                         GattConnectionEvent::Gatt { event } => {
                             let wrote_name =
                                 matches!(&event, GattEvent::Write(w) if w.handle() == name_char.handle);
+                            let wrote_request = matches!(&event, GattEvent::Write(w)
+                                if w.handle() == trace_request_char.handle);
                             if let Ok(reply) = event.accept() {
                                 let _ = reply.send().await;
+                            }
+                            if wrote_request {
+                                // The app asked for a rep's trace: read it
+                                // back from the log and stream it.
+                                if let Ok(request) = server.table().get(&trace_request_char) {
+                                    if let Some(request) = decode_trace_request(&request) {
+                                        info!("trace request: rep {} ", request.rep_id);
+                                        stream_trace(
+                                            flash,
+                                            sync_rec_buf,
+                                            &mut *sync_trace_storage,
+                                            &trace_chunk_char,
+                                            &conn,
+                                            request,
+                                        )
+                                        .await;
+                                    }
+                                }
                             }
                             if wrote_name {
                                 // The write has been applied to the attribute
@@ -441,6 +501,126 @@ fn mount_rep_log(flash: &mut FlashStorage) -> Result<u32, ()> {
     let mut region = log_part.as_embedded_storage(flash);
     let log = FlashLog::mount(&mut region).map_err(|_| ())?;
     Ok(log.sectors())
+}
+
+/// Push any log summaries the subscriber hasn't been sent yet, oldest first.
+/// Stops (without advancing the cursor) as soon as a notification fails,
+/// which is how "nobody is subscribed" shows up — so the next tick picks up
+/// where this one left off.
+async fn stream_new_summaries(
+    flash: &'static AsyncMutex<NoopRawMutex, FlashDevice<'static>>,
+    rec_buf: &mut [u8],
+    summary_char: &Characteristic<BleVec<SYNC_MSG_MAX>>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
+    cursor: &mut SummaryCursor,
+) {
+    const BATCH: usize = 16;
+
+    // Collect the next batch of summaries from the log, then notify them one
+    // at a time (notifications are async, so they can't happen inside the
+    // log's sync iteration).
+    let mut batch: heapless::Vec<msg::RepSummary, BATCH> = heapless::Vec::new();
+    let total;
+    {
+        let mut guard = flash.lock().await;
+        let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
+        let Ok(pt) = partitions::read_partition_table(&mut *guard, &mut pt_mem) else {
+            return;
+        };
+        let Ok(Some(partition)) = pt.find_partition(partitions::PartitionType::Data(
+            partitions::DataPartitionSubType::Undefined,
+        )) else {
+            return;
+        };
+        let mut region = partition.as_embedded_storage(&mut *guard);
+        let Ok(mut log) = FlashLog::mount(&mut region) else {
+            return;
+        };
+        let skip = cursor.next();
+        let mut seen = 0usize;
+        let _ = store::for_each_summary(&mut log, rec_buf, |s| {
+            if seen >= skip && batch.len() < BATCH {
+                let _ = batch.push(s);
+            }
+            seen += 1;
+        });
+        total = seen;
+    }
+    // Reps fall off the ring as it wraps; never point past the end.
+    cursor.clamp_to(total);
+
+    let mut scratch = [0u8; SYNC_MSG_MAX];
+    let mut payload: BleVec<SYNC_MSG_MAX> = BleVec::new();
+    for summary in batch.iter() {
+        let Some(n) = sync::encode_summary_message(*summary, &mut scratch) else {
+            return;
+        };
+        payload.clear();
+        if payload.extend_from_slice(&scratch[..n]).is_err() {
+            return;
+        }
+        if summary_char.notify(conn, &payload).await.is_err() {
+            return; // nobody subscribed (yet)
+        }
+        cursor.advance(1);
+    }
+}
+
+/// Read a requested rep's trace back from the log and notify it to the app in
+/// MTU-sized chunks.
+async fn stream_trace(
+    flash: &'static AsyncMutex<NoopRawMutex, FlashDevice<'static>>,
+    rec_buf: &mut [u8],
+    trace_storage: &mut [TracePoint],
+    chunk_char: &Characteristic<BleVec<SYNC_MSG_MAX>>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
+    request: msg::TraceRequest,
+) {
+    let mut trace = TraceBuf::new(trace_storage);
+    {
+        let mut guard = flash.lock().await;
+        let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
+        let Ok(pt) = partitions::read_partition_table(&mut *guard, &mut pt_mem) else {
+            return;
+        };
+        let Ok(Some(partition)) = pt.find_partition(partitions::PartitionType::Data(
+            partitions::DataPartitionSubType::Undefined,
+        )) else {
+            return;
+        };
+        let mut region = partition.as_embedded_storage(&mut *guard);
+        let Ok(mut log) = FlashLog::mount(&mut region) else {
+            return;
+        };
+        if store::read_trace(&mut log, rec_buf, request.rep_id, &mut trace)
+            .map(|n| n == 0)
+            .unwrap_or(true)
+        {
+            warn!("trace for rep {} is no longer in the log", request.rep_id);
+            return;
+        }
+    }
+
+    let t0_ms = trace.get(0).map(|p| p.t_ms).unwrap_or(0);
+    let points = trace.as_slice();
+    let mut streamer = if request.all_chunks {
+        TraceStreamer::all(request.rep_id, t0_ms, points)
+    } else {
+        TraceStreamer::one(request.rep_id, t0_ms, points, request.chunk_index)
+    };
+
+    let mut scratch = [0u8; sync::SYNC_CHUNK_MAX];
+    let mut payload: BleVec<SYNC_MSG_MAX> = BleVec::new();
+    while let Some(n) = streamer.next_message(&mut scratch) {
+        payload.clear();
+        if payload.extend_from_slice(&scratch[..n]).is_err() {
+            return;
+        }
+        if chunk_char.notify(conn, &payload).await.is_err() {
+            warn!("trace stream interrupted (unsubscribed?)");
+            return;
+        }
+    }
 }
 
 /// Append one rep (summary + trace chunks) to the flash log partition.

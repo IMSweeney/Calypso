@@ -246,10 +246,22 @@ encoded record always fits one 4 KB erase sector (the log's record limit is
 (the build uses `protoc-bin-vendored`).
 
 ### 5. BLE sync (`calypso-esp32`)
-- [ ] "Log sync" GATT service
-- [ ] Auto-stream new `RepSummary` records on subscribe
-- [ ] On-demand `TraceRequest{rep_id}` → chunked `TraceChunk` notify stream
-      with app ack/reassembly
+- [x] "Log sync" GATT service (UUIDs in `ble.rs`): summary notify (0xca21),
+      trace-request write (0xca22), trace-chunk notify (0xca23)
+- [x] Auto-stream new `RepSummary` records on subscribe (polled on the
+      existing 1 Hz BLE tick, driven by a `SummaryCursor`)
+- [x] On-demand `TraceRequest{rep_id, all_chunks, chunk_index}` → chunked
+      `TraceChunk` notify stream
+
+Flow control: notifications are MTU-bound, so traces are re-chunked on the
+way out at `sync::BLE_CHUNK_SAMPLES` (4) points per notification (~200 bytes,
+inside a 247-byte MTU's 244-byte payload). The app reassembles by `index`;
+the summary count in `RepSummary.chunk_count` is the log's chunk count, so
+apps should count received chunks rather than trusting it. "Subscribed" is
+inferred from notify success: the cursor only advances on a successful send,
+so an unsubscribed app simply means the next tick retries from the same
+position (no CCCD bookkeeping). Reps that fell off the ring are reported as
+unavailable rather than streamed. Re-requesting is idempotent.
 
 ### 6. App (separate repo, out of scope here)
 - [ ] Decode sync stream; workout history from summaries

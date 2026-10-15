@@ -6,7 +6,9 @@
 //! characteristic. No radio or device required — the trouble-host attribute
 //! table is platform-independent.
 
-use calypso_core::ble::{build_gatt_table, BuildError, GattTable, GATT_TABLE_MAX};
+use calypso_core::ble::{
+    build_gatt_table, BleVec, BuildError, GattTable, GATT_TABLE_MAX, SYNC_MSG_MAX, SYNC_REQUEST_MAX,
+};
 use calypso_core::{decode_device_name, encode_device_name, DEVICE_NAME_MAX};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use trouble_host::prelude::*;
@@ -17,7 +19,18 @@ macro_rules! gatt_table {
     ($name:expr) => {{
         let name_store = Box::leak(Box::new([0u8; DEVICE_NAME_MAX]));
         let gravity_store = Box::leak(Box::new([0u8; 4]));
-        build_gatt_table::<NoopRawMutex>($name, name_store, gravity_store).unwrap()
+        let summary_store = Box::leak(Box::new([0u8; SYNC_MSG_MAX]));
+        let request_store = Box::leak(Box::new([0u8; SYNC_REQUEST_MAX]));
+        let chunk_store = Box::leak(Box::new([0u8; SYNC_MSG_MAX]));
+        build_gatt_table::<NoopRawMutex>(
+            $name,
+            name_store,
+            gravity_store,
+            summary_store,
+            request_store,
+            chunk_store,
+        )
+        .unwrap()
     }};
 }
 
@@ -79,17 +92,97 @@ fn characteristics_have_distinct_handles() {
 }
 
 #[test]
+fn sync_characteristics_are_wired_up() {
+    let gatt = gatt_table!("Calypso");
+
+    // The app subscribes to summaries and trace chunks...
+    assert!(gatt.summary.cccd_handle.is_some());
+    assert!(gatt.trace_chunk.cccd_handle.is_some());
+    // ...and writes on-demand trace requests.
+    assert!(gatt.trace_request.cccd_handle.is_none());
+
+    // Distinct handles, findable by the value handles clients address.
+    let handles = [
+        gatt.gravity_x.handle,
+        gatt.summary.handle,
+        gatt.trace_request.handle,
+        gatt.trace_chunk.handle,
+    ];
+    for (i, a) in handles.iter().enumerate() {
+        for b in &handles[i + 1..] {
+            assert_ne!(a, b);
+        }
+    }
+    assert!(gatt
+        .table
+        .find_characteristic_by_value_handle::<BleVec<SYNC_MSG_MAX>>(gatt.summary.handle)
+        .map(|c| c.handle == gatt.summary.handle)
+        .unwrap_or(false));
+}
+
+#[test]
+fn sync_payloads_round_trip_through_the_table() {
+    let gatt = gatt_table!("Calypso");
+
+    // A TraceRequest written by the app arrives as raw bytes for the
+    // firmware to decode.
+    let mut scratch = [0u8; SYNC_REQUEST_MAX];
+    let n = calypso_core::pb::encode_trace_request(
+        &calypso_core::pb::msg::TraceRequest {
+            rep_id: 42,
+            all_chunks: true,
+            chunk_index: 0,
+        },
+        &mut scratch,
+    )
+    .unwrap();
+    let mut request: BleVec<SYNC_REQUEST_MAX> = BleVec::new();
+    request.extend_from_slice(&scratch[..n]).unwrap();
+    gatt.table.set(&gatt.trace_request, &request).unwrap();
+    let readback: BleVec<SYNC_REQUEST_MAX> = gatt.table.get(&gatt.trace_request).unwrap();
+    let decoded = calypso_core::sync::decode_trace_request(&readback).unwrap();
+    assert_eq!(decoded.rep_id, 42);
+
+    // A summary notification payload round-trips byte for byte.
+    let mut summary_msg: BleVec<SYNC_MSG_MAX> = BleVec::new();
+    summary_msg.extend_from_slice(&[
+        0x0A, 0x04, 0x08, 0x07, 0x10, 0x01, // SyncMessage { summary { .. } }
+    ])
+    .unwrap();
+    gatt.table.set(&gatt.summary, &summary_msg).unwrap();
+    let readback: BleVec<SYNC_MSG_MAX> = gatt.table.get(&gatt.summary).unwrap();
+    assert_eq!(readback.as_slice(), summary_msg.as_slice());
+}
+
+#[test]
 fn rejects_invalid_names() {
     let mut name_store = [0u8; DEVICE_NAME_MAX];
     let mut gravity_store = [0u8; 4];
+    let mut summary_store = [0u8; SYNC_MSG_MAX];
+    let mut request_store = [0u8; SYNC_REQUEST_MAX];
+    let mut chunk_store = [0u8; SYNC_MSG_MAX];
 
     {
         let too_long = "a".repeat(DEVICE_NAME_MAX + 1);
-        let result = build_gatt_table::<NoopRawMutex>(&too_long, &mut name_store, &mut gravity_store);
+        let result = build_gatt_table::<NoopRawMutex>(
+            &too_long,
+            &mut name_store,
+            &mut gravity_store,
+            &mut summary_store,
+            &mut request_store,
+            &mut chunk_store,
+        );
         assert!(matches!(result, Err(BuildError::InvalidName)));
     }
     {
-        let result = build_gatt_table::<NoopRawMutex>("", &mut name_store, &mut gravity_store);
+        let result = build_gatt_table::<NoopRawMutex>(
+            "",
+            &mut name_store,
+            &mut gravity_store,
+            &mut summary_store,
+            &mut request_store,
+            &mut chunk_store,
+        );
         assert!(matches!(result, Err(BuildError::InvalidName)));
     }
 }
