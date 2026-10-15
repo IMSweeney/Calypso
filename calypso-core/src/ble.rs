@@ -14,7 +14,7 @@ use crate::DEVICE_NAME_MAX;
 /// Number of attributes in the table:
 /// GAP service (1) + device name (2) + appearance (2) + GATT service (1)
 /// + gravity service (1) + gravity-x characteristic (2) + its CCCD (1),
-/// plus 2 spare.
+///   plus 2 spare.
 pub const GATT_TABLE_MAX: usize = 12;
 
 /// Custom GATT service exposing the IMU's gravity vector.

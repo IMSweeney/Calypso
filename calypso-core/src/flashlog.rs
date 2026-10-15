@@ -85,7 +85,7 @@ impl<N: NorFlash> FlashLog<N> {
             flash.read(s * sector_size, &mut hdr).map_err(Error::Flash)?;
             let magic = u32::from_le_bytes(hdr[0..4].try_into().unwrap());
             let epoch = u32::from_le_bytes(hdr[4..8].try_into().unwrap());
-            if magic == SECTOR_MAGIC && head.map_or(true, |(_, e)| epoch > e) {
+            if magic == SECTOR_MAGIC && head.is_none_or(|(_, e)| epoch > e) {
                 head = Some((s, epoch));
             }
         }
