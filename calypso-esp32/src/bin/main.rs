@@ -13,11 +13,13 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join3;
 use embassy_futures::select::{select, Either};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_time::{Duration, Timer, Delay};
+use embassy_time::{Duration, Instant, Ticker, Timer, Delay};
+use core::cell::RefCell;
 use esp_hal::{Blocking};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::i2c::master::I2c;
+use esp_hal::time::Rate;
 use esp_println as _;
 use esp_radio::ble::controller::BleConnector;
 use trouble_host::prelude::*;
@@ -28,8 +30,10 @@ use embedded_storage::nor_flash::NorFlash;
 
 use bno055::{BNO055OperationMode, BNO055Calibration, BNO055_CALIB_SIZE};
 use bno055::Bno055;
+use calypso_core::sampler::{quantize, Sample, SampleRing, QUAT_SCALE, SAMPLE_RATE_HZ};
 use calypso_core::DEVICE_NAME_MAX;
 use core::sync::atomic::{AtomicU32, Ordering};
+use alloc::boxed::Box;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -53,6 +57,16 @@ const DEFAULT_DEVICE_NAME: &str = "Calypso";
 /// Latest X-axis gravity reading (m/s^2), shared between the IMU loop and the
 /// BLE task as raw f32 bits.
 static GRAVITY_X_BITS: AtomicU32 = AtomicU32::new(0);
+
+/// Ring-buffer window: 30 s at 100 Hz (60 KB). The rep detector (Phase 3)
+/// consumes sliding windows from here; BLE trace sync will read it too.
+const SAMPLE_RING_LEN: usize = 30 * SAMPLE_RATE_HZ as usize;
+
+/// The sampler's sample window. Lives on the heap (leaked at startup): 60 KB
+/// is too much for the DRAM static region, but fits the ~160 KB heap. Only
+/// the sampler task touches it today; Phase 3/4 will hand it to the detector
+/// and BLE task behind a mutex.
+type SampleWindow = RefCell<SampleRing<SAMPLE_RING_LEN>>;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -95,7 +109,10 @@ async fn main(spawner: Spawner) -> ! {
     info!("Setting up i2c");
     // pinout for esp32 pico
     // https://learn.adafruit.com/assets/112309
-    let i2c = I2c::new(peripherals.I2C0, esp_hal::i2c::master::Config::default()).unwrap()
+    // 400 kHz so the 100 Hz sampler's ~14 bytes/sample cost ~0.5 ms of the
+    // 10 ms period.
+    let i2c_config = esp_hal::i2c::master::Config::default().with_frequency(Rate::from_khz(400));
+    let i2c = I2c::new(peripherals.I2C0, i2c_config).unwrap()
     .with_sda(peripherals.GPIO22).with_scl(peripherals.GPIO19);
     info!("Done setting up i2c");
 
@@ -105,7 +122,10 @@ async fn main(spawner: Spawner) -> ! {
     let mut bno055 = Bno055::new(i2c).with_alternative_address();
     bno055.init(&mut delay).unwrap();
     info!("Bno055 initialized");
-    bno055.set_mode(BNO055OperationMode::NDOF, &mut delay).unwrap();
+    // IMU mode: accel + gyro fusion, no magnetometer (unreliable near
+    // barbells). Roll/pitch stay accurate; yaw drift is corrected per rep by
+    // ZUPT (Phase 3).
+    bno055.set_mode(BNO055OperationMode::IMU, &mut delay).unwrap();
 
     let mut flash = FlashStorage::new(peripherals.FLASH);
     info!("Flash size = {}", flash.capacity());
@@ -120,6 +140,9 @@ async fn main(spawner: Spawner) -> ! {
         Ok(sectors) => info!("Rep log mounted: {} sectors", sectors),
         Err(()) => warn!("Rep log: partition missing or unusable"),
     }
+
+    // 30 s of samples on the heap, alive for the program's lifetime.
+    let samples: &'static SampleWindow = Box::leak(Box::new(RefCell::new(SampleRing::new())));
 
     let stack = trouble_host::new(ble_controller, &mut resources)
         .set_random_address(Address::random([0xca, 0xa7, 0x19, 0x50, 0xe4, 0xff]));
@@ -249,13 +272,59 @@ async fn main(spawner: Spawner) -> ! {
                 }
             }
         },
-        // IMU loop.
+        // Sampler loop: 100 Hz IMU samples into the RAM ring buffer. The
+        // gravity-x BLE characteristic is fed off the same samples, decimated.
         async {
+            let start = Instant::now();
+            let mut ticker = Ticker::every(Duration::from_hz(SAMPLE_RATE_HZ as u64));
+            let mut n: u32 = 0;
             loop {
-                info!("temperature {}C", bno055.temperature().unwrap());
-                let level = get_level_sense(&mut bno055);
-                GRAVITY_X_BITS.store(level.to_bits(), Ordering::Relaxed);
-                Timer::after(Duration::from_secs(1)).await;
+                ticker.next().await;
+                let t_ms = start.elapsed().as_millis() as u32;
+                let Ok(accel) = bno055.linear_acceleration_fixed() else {
+                    warn!("BNO055 linear accel read error");
+                    continue;
+                };
+                let Ok(q) = bno055.quaternion() else {
+                    warn!("BNO055 quaternion read error");
+                    continue;
+                };
+                let sample = Sample {
+                    t_ms,
+                    accel: [accel.x, accel.y, accel.z],
+                    quat: [
+                        quantize(q.s, QUAT_SCALE),
+                        quantize(q.v.x, QUAT_SCALE),
+                        quantize(q.v.y, QUAT_SCALE),
+                        quantize(q.v.z, QUAT_SCALE),
+                    ],
+                };
+                samples.borrow_mut().push(sample);
+
+                n += 1;
+                // Gravity-x: update at 10 Hz (BLE pushes it at 1 Hz).
+                if n % 10 == 0 {
+                    if let Ok(g) = bno055.gravity_fixed() {
+                        let x = g.x as f32 / 100.0;
+                        GRAVITY_X_BITS.store(x.to_bits(), Ordering::Relaxed);
+                    }
+                }
+                // Level-sense log at 1 Hz, matching the old loop.
+                if n % SAMPLE_RATE_HZ == 0 {
+                    get_level_sense(&mut bno055);
+                    let (len, pushed) = {
+                        let r = samples.borrow();
+                        (r.len(), r.pushed())
+                    };
+                    info!(
+                        "sampler: {} Hz, ring {}/{} samples, {} pushed, heap free {} B",
+                        SAMPLE_RATE_HZ,
+                        len,
+                        SAMPLE_RING_LEN,
+                        pushed,
+                        esp_alloc::HEAP.free()
+                    );
+                }
             }
         },
     )
@@ -372,9 +441,22 @@ fn setup_calibration(bno055: &mut Bno055<I2c<'_, Blocking>>, flash: &mut FlashSt
     // Calibration
     let mut calib = BNO055Calibration::from_buf(&bno055_calibration);
     bno055.set_calibration_profile(calib, &mut delay).unwrap();
-    if !bno055.is_fully_calibrated().unwrap() {
+    // IMU mode has no magnetometer, so the mag status never reaches 3 (and
+    // `is_fully_calibrated` requires it). Gate on sys/gyro/accel only.
+    let imu_ready = |s: &bno055::BNO055CalibrationStatus| s.sys == 3 && s.gyr == 3 && s.acc == 3;
+    let is_calibrated = bno055
+        .get_calibration_status()
+        .map(|s| imu_ready(&s))
+        .unwrap_or(false);
+    if !is_calibrated {
         info!("Waiting for BNO055 to calibrate");
-        while !bno055.is_fully_calibrated().unwrap() {}
+        loop {
+            if let Ok(s) = bno055.get_calibration_status() {
+                if imu_ready(&s) {
+                    break;
+                }
+            }
+        }
         calib = bno055.calibration_profile(&mut delay).unwrap();
         Storage::write(&mut nvs_partition, BNO055_CALIBRATION_ADDR, &calib.as_bytes()).unwrap();
     }

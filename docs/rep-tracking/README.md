@@ -202,10 +202,12 @@ Two tiers:
       land in Phase 4)
 
 ### 2. Sampler & ring buffer (`calypso-esp32`)
-- [ ] Switch BNO055 to IMU mode; I2C to 400 kHz
-- [ ] 100 Hz sampler task: `{ t_ms, accel[i16;3], quat[i16;4] }` into a RAM
-      ring buffer (~30 s window)
-- [ ] Feed existing gravity-x BLE characteristic from the sampler (decimated)
+- [x] Switch BNO055 to IMU mode; I2C to 400 kHz (calibration gate relaxed
+      to sys/gyro/accel — the magnetometer never calibrates in IMU mode)
+- [x] 100 Hz sampler task: `{ t_ms, accel[i16;3], quat[i16;4] }` into a RAM
+      ring buffer (30 s window; `calypso_core::sampler::{Sample, SampleRing}`)
+- [x] Feed existing gravity-x BLE characteristic from the sampler (decimated
+      to a 10 Hz update, BLE still notifies at 1 Hz)
 
 ### 3. Rep detector (`calypso-core`, host-testable)
 - [ ] State machine: IDLE → MOVING → SETTLE → ZUPT → close rep

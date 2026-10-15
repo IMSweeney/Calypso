@@ -9,6 +9,7 @@
 
 pub mod ble;
 pub mod flashlog;
+pub mod sampler;
 
 /// Longest device name supported; a complete local name must fit in the
 /// 31-byte advertising packet alongside the flags field.
