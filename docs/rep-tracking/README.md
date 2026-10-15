@@ -264,8 +264,8 @@ position (no CCCD bookkeeping). Reps that fell off the ring are reported as
 unavailable rather than streamed. Re-requesting is idempotent.
 
 ### 6. App (`calypso-app/`)
-Planning now lives in [`docs/app/README.md`](../app/README.md): shell options,
-recommendation, crate layout, fixture-based testing, milestones.
+Planning now lives in [`docs/app/plan.md`](../app/plan.md) (phases, decisions,
+TODO) with the design in [`docs/app/README.md`](../app/README.md).
 - [ ] Decode sync stream; workout history from summaries
 - [ ] Bar path (displacement) + tilt (quaternion) plots from traces
 - [ ] Later: fault detection (bar dip, forward lean) on the traces
