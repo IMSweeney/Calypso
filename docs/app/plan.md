@@ -245,11 +245,22 @@ timestamps.
       truncated back to a record boundary before the next append, so a crash
       can't desync the archive — and the dropped rep is re-synced because it was
       never recorded as received
-- [ ] Widget tests for the list: written but **not registered** — they fail on
-      `rootBundle` asset loading inside a widget test, which is an injection
-      problem, not a screen problem. Next step: pass fixture bytes into the
-      screen instead of loading by asset name (also makes it easier to drive from
-      a real transport).
+- [x] Widget tests for the list, driven through injection seams: the screen takes
+      a `RepArchive` and a `RepTransport`, so tests pass an in-memory archive and
+      a transport built from fixture bytes read synchronously. Fixed by
+      `lib/store/rep_archive.dart` (the interface, plus `scanBlocks` and
+      `assembleTraceFromBlock` shared by both implementations) and
+      `lib/store/memory_archive.dart`.
+
+Two things this fixed beyond the tests:
+
+- **Widget tests under a fake clock never complete real I/O.** The original
+  failure was `pumpAndSettle timed out`: reading a file or an asset in
+  `initState` leaves the spinner running forever, because the fake clock never
+  advances the real async work. The seam is the fix; `tester.runAsync` would only
+  have papered over it.
+- **A layout bug the tests caught:** the plot screen's stats row overflowed by
+  73px. It is a `Wrap` now, so five stats reflow on a phone instead of clipping.
 
 ### 5. BLE transport
 - [ ] Protocol: end-of-stream signal for a streamed trace (`TraceChunk.total_chunks`

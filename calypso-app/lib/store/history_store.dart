@@ -18,34 +18,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../model/rep.dart';
-import '../protocol/calypso.pb.dart' as pb;
-import '../protocol/pblog.dart';
-import '../sync/trace_reassembly.dart';
+import 'rep_archive.dart';
 
-/// A rep in the archive: its summary, where its records live, and when the
-/// client took receipt of it.
-class StoredRep {
-  StoredRep({
-    required this.summary,
-    required this.offset,
-    required this.length,
-    this.receivedAt,
-  });
-
-  final RepSummary summary;
-
-  /// Byte range of this rep's whole record block (summary + chunks).
-  final int offset;
-  final int length;
-
-  /// Wall-clock time the client received the summary, if known.
-  ///
-  /// The device has no RTC, so this is the only absolute time available. It is
-  /// the time of receipt, not of the lift: if the client is closed mid-set, the
-  /// reps it finds later are stamped when it comes back (see the plan's open
-  /// question on wall-clock time).
-  final DateTime? receivedAt;
-}
+export 'rep_archive.dart' show StoredRep;
 
 /// Where [HistoryStore] records live, so tests can use a temporary directory.
 class HistoryFiles {
@@ -57,7 +32,7 @@ class HistoryFiles {
   File get receiptTimes => File('${directory.path}/received.json');
 }
 
-class HistoryStore {
+class HistoryStore implements RepArchive {
   HistoryStore(this.files);
 
   final HistoryFiles files;
@@ -67,14 +42,17 @@ class HistoryStore {
   int _bytes = 0;
 
   /// Reps in the archive, oldest first.
+  @override
   List<StoredRep> get reps => List.unmodifiable(_reps);
 
   /// Size of the records file.
+  @override
   int get sizeBytes => _bytes;
 
   /// True if the records file ends mid-record: the tail of a write that did not
   /// finish. The records before it are still good, and the next append repairs
   /// the file (see [appendNew]).
+  @override
   bool truncated = false;
 
   /// Size of the prefix that ended on a record boundary. A torn tail beyond it
@@ -82,6 +60,7 @@ class HistoryStore {
   int _goodBytes = 0;
 
   /// Reads (or creates) the archive.
+  @override
   Future<void> load() async {
     _reps.clear();
     _received.clear();
@@ -99,63 +78,10 @@ class HistoryStore {
     _bytes = bytes.length;
     _goodBytes = 0;
 
-    var pos = 0;
-    int? blockStart;
-    var blockLength = 0;
-    StoredRep? pending;
-    while (pos + 4 <= bytes.length) {
-      final length = ByteData.sublistView(bytes, pos, pos + 4).getUint32(0, Endian.little);
-      final start = pos + 4;
-      if (length <= 0 || start + length > bytes.length) {
-        truncated = true;
-        break;
-      }
-      // A summary starts a new block; chunks just extend the current one.
-      pb.RepRecord record;
-      try {
-        record = pb.RepRecord.fromBuffer(bytes.sublist(start, start + length));
-      } catch (_) {
-        truncated = true;
-        break;
-      }
-      if (record.hasSummary()) {
-        // Everything up to this record parsed on a boundary.
-        _goodBytes = pos;
-        if (pending != null) {
-          _reps.add(StoredRep(
-            summary: pending.summary,
-            offset: blockStart!,
-            length: blockLength,
-            receivedAt: _received[pending.summary.repId],
-          ));
-        }
-        pending = StoredRep(
-          summary: RepSummary.fromProto(record.summary),
-          offset: 0,
-          length: 0,
-          receivedAt: _received[record.summary.repId],
-        );
-        blockStart = pos;
-        blockLength = 0;
-      }
-      blockLength += 4 + length;
-      pos = start + length;
-    }
-    if (pending == null) return;
-    if (truncated) {
-      // The tail rep's records were cut short. Drop it: a summary with a partial
-      // trace would be worse than re-syncing, and because it is no longer
-      // recorded as received, the next sync fetches it again.
-      _received.remove(pending.summary.repId);
-      return;
-    }
-    _reps.add(StoredRep(
-      summary: pending.summary,
-      offset: blockStart!,
-      length: blockLength,
-      receivedAt: _received[pending.summary.repId],
-    ));
-    _goodBytes = bytes.length;
+    final scan = scanBlocks(bytes, _received);
+    _reps.addAll(scan.reps);
+    truncated = scan.truncated;
+    _goodBytes = scan.goodBytes;
   }
 
   /// Adds records for reps the archive does not already have.
@@ -164,6 +90,7 @@ class HistoryStore {
   /// produced by the transport. Reps already in the archive are skipped, which is
   /// what makes re-syncing — every connection, and every fixture reload — cheap
   /// and idempotent.
+  @override
   Future<int> appendNew(Map<int, Uint8List> recordBlocks, {DateTime? receivedAt}) async {
     // Repair a torn tail first: appending after a partial record would desync
     // the framing for every future read.
@@ -192,25 +119,23 @@ class HistoryStore {
   }
 
   /// Whether the archive already holds this rep.
+  @override
   bool contains(int repId) => _received.containsKey(repId);
 
   /// Reads one rep's trace out of the archive.
+  @override
   Future<List<TracePoint>> trace(int repId) async {
-    final stored = _reps.where((r) => r.summary.repId == repId).firstOrNull;
+    StoredRep? stored;
+    for (final r in _reps) {
+      if (r.summary.repId == repId) stored = r;
+    }
     if (stored == null) return const [];
 
     final handle = await files.records.open();
     try {
       await handle.setPosition(stored.offset);
       final block = await handle.read(stored.length);
-      final dump = readDump(Uint8List.fromList(block));
-      final chunks = traceChunksFor(dump.records, repId);
-      if (chunks.isEmpty) return const [];
-      final assembler = TraceAssembler(repId);
-      for (final chunk in chunks) {
-        assembler.add(chunk);
-      }
-      return assembler.assemble();
+      return assembleTraceFromBlock(Uint8List.fromList(block), repId);
     } finally {
       await handle.close();
     }

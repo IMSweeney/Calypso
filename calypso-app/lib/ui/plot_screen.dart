@@ -10,13 +10,13 @@ import 'package:flutter/material.dart';
 
 import '../model/rep.dart';
 import '../plot/rep_plot.dart';
-import '../store/history_store.dart';
+import '../store/rep_archive.dart';
 
 /// One rep from the archive: its summary, its 3D bar path, and a scrubber.
 class PlotScreen extends StatefulWidget {
   const PlotScreen({super.key, required this.store, required this.repId});
 
-  final HistoryStore store;
+  final RepArchive store;
   final int repId;
 
   @override
@@ -91,8 +91,12 @@ class _PlotScreenState extends State<PlotScreen> {
           if (selected != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              // Wrap, not Row: five stats do not fit a phone's width, and an
+              // overflowing Row would clip them.
+              child: Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                spacing: 16,
+                runSpacing: 4,
                 children: [
                   Text('${selected.durationMs} ms'),
                   Text('ROM ${selected.rom.toStringAsFixed(2)} m'),

@@ -14,7 +14,9 @@ import 'package:path_provider/path_provider.dart';
 
 import '../store/history_store.dart';
 import '../store/record_blocks.dart';
+import '../store/rep_archive.dart';
 import '../transport/fixture_transport.dart';
+import '../transport/transport.dart';
 import 'plot_screen.dart';
 
 /// Fixture to load on start-up, so the app has something to show with no device.
@@ -23,13 +25,27 @@ const String seedFixture =
     String.fromEnvironment('FIXTURE', defaultValue: 'synthetic-squat');
 
 class RepListScreen extends StatefulWidget {
-  const RepListScreen({super.key, this.historyDirectory, this.fixture = seedFixture});
+  const RepListScreen({
+    super.key,
+    this.historyDirectory,
+    this.archive,
+    this.source,
+    this.fixture = seedFixture,
+  });
 
   /// Where history lives. Injected by tests (a temporary directory); the app
   /// uses the platform's application support directory.
   final Directory? historyDirectory;
 
-  /// Fixture to archive on start-up, or empty.
+  /// The archive to show. Injected by tests (an in-memory archive), because
+  /// widget tests run under a fake clock where real file I/O never completes.
+  final RepArchive? archive;
+
+  /// Where to sync from. Injected by tests; the app uses a fixture asset (and a
+  /// BLE transport once phase 5 lands).
+  final RepTransport? source;
+
+  /// Fixture asset to archive on start-up when no [source] is given, or empty.
   final String fixture;
 
   @override
@@ -37,7 +53,7 @@ class RepListScreen extends StatefulWidget {
 }
 
 class _RepListScreenState extends State<RepListScreen> {
-  HistoryStore? _store;
+  RepArchive? _store;
   String? _error;
   bool _loading = true;
   int _synced = 0;
@@ -50,18 +66,22 @@ class _RepListScreenState extends State<RepListScreen> {
 
   Future<void> _load() async {
     try {
-      final directory = widget.historyDirectory ?? await getApplicationSupportDirectory();
-      final store = HistoryStore(HistoryFiles(directory));
+      final store = widget.archive ??
+          HistoryStore(HistoryFiles(
+              widget.historyDirectory ?? await getApplicationSupportDirectory()));
       await store.load();
 
       // Bring the archive up to date from whatever source we have. With no
       // device wired up yet, that is a fixture: the archive is the same either
       // way, which is the point of one record format.
       var synced = 0;
-      if (widget.fixture.isNotEmpty) {
+      var source = widget.source;
+      if (source == null && widget.fixture.isNotEmpty) {
         final data = await rootBundle.load('assets/fixtures/${widget.fixture}.pblog');
-        final transport = FixtureTransport.fromBytes(data.buffer.asUint8List());
-        synced = await store.appendNew(await recordBlocksFrom(transport));
+        source = FixtureTransport.fromBytes(data.buffer.asUint8List());
+      }
+      if (source != null) {
+        synced = await store.appendNew(await recordBlocksFrom(source));
       }
 
       if (!mounted) return;
