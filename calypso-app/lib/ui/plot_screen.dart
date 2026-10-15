@@ -6,31 +6,25 @@
 /// on the Mac, driven entirely by a fixture (no device, no BLE).
 library;
 
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
 
 import '../model/rep.dart';
 import '../plot/rep_plot.dart';
-import '../transport/fixture_transport.dart';
-import '../transport/transport.dart';
+import '../store/history_store.dart';
 
-/// Which fixture to open; override with `--dart-define=FIXTURE=name`.
-const String fixtureName =
-    String.fromEnvironment('FIXTURE', defaultValue: 'synthetic-squat');
-
+/// One rep from the archive: its summary, its 3D bar path, and a scrubber.
 class PlotScreen extends StatefulWidget {
-  const PlotScreen({super.key});
+  const PlotScreen({super.key, required this.store, required this.repId});
+
+  final HistoryStore store;
+  final int repId;
 
   @override
   State<PlotScreen> createState() => _PlotScreenState();
 }
 
 class _PlotScreenState extends State<PlotScreen> {
-  FixtureTransport? _transport;
-  List<RepSummary> _summaries = const [];
-  int? _selectedRepId;
+  RepSummary? _summary;
   List<TracePoint> _trace = const [];
   int? _scrubIndex;
   String? _error;
@@ -44,19 +38,19 @@ class _PlotScreenState extends State<PlotScreen> {
 
   Future<void> _load() async {
     try {
-      final data = await rootBundle.load('assets/fixtures/$fixtureName.pblog');
-      final bytes = Uint8List.sublistView(data);
-      final transport = FixtureTransport.fromBytes(bytes);
-      final summaries = await transport.summaries();
+      final repId = widget.repId;
+      final stored = widget.store.reps.where((r) => r.summary.repId == repId).firstOrNull;
+      final trace = await widget.store.trace(repId);
       if (!mounted) return;
       setState(() {
-        _transport = transport;
-        _summaries = summaries;
-        _selectedRepId = summaries.isEmpty ? null : summaries.first.repId;
+        _summary = stored?.summary;
+        _trace = trace;
         _loading = false;
+        if (trace.isEmpty) {
+          _error = 'Rep $repId: no trace in the archive '
+              '(${stored?.summary.chunkCount ?? 0} chunks were expected)';
+        }
       });
-      final repId = _selectedRepId;
-      if (repId != null) await _selectRep(repId);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -66,65 +60,17 @@ class _PlotScreenState extends State<PlotScreen> {
     }
   }
 
-  Future<void> _selectRep(int repId) async {
-    final transport = _transport;
-    if (transport == null) return;
-    setState(() {
-      _selectedRepId = repId;
-      _scrubIndex = null;
-    });
-    try {
-      final trace = await transport.trace(repId);
-      if (!mounted) return;
-      setState(() => _trace = trace);
-    } on TraceUnavailableException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _trace = const [];
-        _error = 'Rep $repId: ${e.reason}';
-      });
-    }
-  }
-
-  RepSummary? get _selected {
-    for (final s in _summaries) {
-      if (s.repId == _selectedRepId) return s;
-    }
-    return null;
-  }
+  RepSummary? get _selected => _summary;
 
   @override
   Widget build(BuildContext context) {
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    if (_summaries.isEmpty) {
-      return Scaffold(
-        appBar: AppBar(title: Text('Calypso — $fixtureName')),
-        body: Center(child: Text(_error ?? 'No reps in this fixture')),
-      );
-    }
-
     final selected = _selected;
     return Scaffold(
       appBar: AppBar(
-        title: Text('Calypso — $fixtureName'),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: DropdownButton<int>(
-              value: _selectedRepId,
-              onChanged: (id) => id == null ? null : _selectRep(id),
-              items: [
-                for (final s in _summaries)
-                  DropdownMenuItem(
-                    value: s.repId,
-                    child: Text('Rep ${s.repId} · ${s.rom.toStringAsFixed(2)} m'),
-                  ),
-              ],
-            ),
-          ),
-        ],
+        title: Text(selected == null ? 'Rep ${widget.repId}' : 'Rep ${selected.repId}'),
       ),
       body: Column(
         children: [

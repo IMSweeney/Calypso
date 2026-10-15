@@ -18,6 +18,8 @@ dependencies:
   # 3D maths for the plot model (projection, camera).
   vector_math: ^2.1.4
   provider: ^6.1.2
+  # Where the history file lives (iOS application support directory).
+  path_provider: ^2.1.4
 
 dev_dependencies:
   flutter_test:

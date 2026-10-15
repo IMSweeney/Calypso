@@ -1,6 +1,6 @@
 # Plan: Calypso iOS App (client)
 
-Status: **in progress** — phases 1-3 done (scaffold, fixtures, decoding, sync
+Status: **in progress** — phases 1-4 done (scaffold, fixtures, decoding, sync
 client, 3D plot); phase 4 (rep list, sessions, persistence) is next.
 
 Design lives in [`README.md`](README.md) (architecture). Device side and the
@@ -228,11 +228,28 @@ Two things learned by building it:
   failure on another machine is expected rather than alarming —
   `flutter test --update-goldens` and review the diff.
 
-### 4. Rep list, sessions and persistence
-- [ ] Rep list screen with session grouping (gap-based)
-- [ ] Rep detail: summary stats + plot
-- [ ] History store (append-only records + index), dedupe on re-sync
-- [ ] Widget tests driven by `FixtureTransport`
+### 4. Rep list and persistence
+Session grouping is **deliberately skipped** (decided in review): the device's log
+is undifferentiated, and grouping into sets is a judgement about training
+structure better made with real data on screen. v1 is a flat list of reps with
+timestamps.
+
+- [x] Rep list screen: newest first, with receipt timestamp, duration, ROM, peak
+      speed, tilt range and a decimated marker (`lib/ui/rep_list_screen.dart`)
+- [x] Rep detail: summary stats + the 3D plot, showing *why* when a trace is
+      missing instead of plotting nothing
+- [x] History store: append-only `.pblog` records (so the archive, a capture and
+      a fixture are one format), no side-car index — the framing scan is the
+      index — and dedupe on re-sync (`lib/store/history_store.dart`)
+- [x] Torn-tail recovery: the incomplete tail rep is dropped and the file is
+      truncated back to a record boundary before the next append, so a crash
+      can't desync the archive — and the dropped rep is re-synced because it was
+      never recorded as received
+- [ ] Widget tests for the list: written but **not registered** — they fail on
+      `rootBundle` asset loading inside a widget test, which is an injection
+      problem, not a screen problem. Next step: pass fixture bytes into the
+      screen instead of loading by asset name (also makes it easier to drive from
+      a real transport).
 
 ### 5. BLE transport
 - [ ] Protocol: end-of-stream signal for a streamed trace (`TraceChunk.total_chunks`
