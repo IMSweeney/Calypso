@@ -12,7 +12,7 @@ the wire protocol, see [`docs/rep-tracking/README.md`](../rep-tracking/README.md
 | Part | Choice | Why |
 |---|---|---|
 | Language / UI | **Flutter** (Dart) | Self-rendered with Impeller, so iOS, macOS, Android and tests all look identical; `flutter test` runs the whole UI headlessly on the host. |
-| BLE | **`flutter_reactive_ble`** (BSD-3, published by Philips Hue) | Actively maintained, free for commercial use, and federated over `reactive_ble_platform_interface`, so a fake transport drops in for tests. |
+| BLE | **`universal_ble`** (BSD-3, Navideck) | One API across Android/iOS/macOS/Windows/Linux/Web, so the BLE path can be exercised on the **Mac**, where CoreBluetooth exists — the iOS Simulator has none. Federated, so the plugin layer is mockable too. |
 | 3D plotting | **`vector_math` + `CustomPainter`** | The plot is a polyline, a gizmo and a grid — no 3D engine needed. Full control of the look, GPU-accelerated, and golden-testable. |
 | Wire format | Dart classes generated from `proto/calypso.proto` | Same source of truth as the firmware, which generates Rust from the same file. |
 | State | `ChangeNotifier` + `provider` | Small app, small dependency. Easy to revisit. |
@@ -241,7 +241,11 @@ Everything except the BLE implementation is testable without hardware.
 ## Dev loop and distribution
 
 - `flutter run -d macos` — fastest loop for UI/plot work; no simulator, no Apple
-  mobile toolchain.
+  mobile toolchain. CoreBluetooth is available on the Mac, so the real BLE path
+  runs here too.
+- macOS needs the `com.apple.security.device.bluetooth` entitlement (already set
+  in `macos/Runner/*.entitlements`); without it the plugin reports `unsupported`
+  and nothing names the cause.
 - `flutter run --dart-define=FIXTURE=synthetic-squat` (or a debug menu) — the
   whole app on fixtures, including on the Simulator.
 - Real device: `flutter run -d <iphone>`; a free Apple ID gives 7-day builds,

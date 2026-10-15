@@ -32,9 +32,10 @@ Requirements carried over from the earlier rounds of review:
   **golden-file image comparisons headlessly on the host**. That is the
   strongest available answer to the no-device requirement, and it covers the
   plot itself, not just the logic.
-- **`flutter_reactive_ble`** for BLE: BSD-3, published by Philips Hue, actively
-  maintained, and federated over a platform interface so a fake drops in for
-  tests.
+- **`universal_ble`** for BLE: BSD-3, actively maintained, one API across
+  Android/iOS/macOS/Windows/Linux/Web. Chosen over `flutter_reactive_ble` for
+  exactly one reason — the Mac has CoreBluetooth and the Simulator does not, so
+  this is what makes the BLE path testable without a phone.
 - **Plot by hand** (`vector_math` + `CustomPainter`) rather than in a 3D engine.
   The plot is a polyline, a gizmo and a grid; an engine would add a dependency
   and lose control of the look.
@@ -76,9 +77,9 @@ Requirements carried over from the earlier rounds of review:
 - **`flutter_blue_plus`** — the nicest BLE API, but since 2.0 it needs a paid
   licence for for-profit use ($999/yr for an individual) that explicitly covers
   development and testing, versus BSD-3 for `flutter_reactive_ble`.
-- **`universal_ble`** — BSD-3 and covers macOS/web in addition to mobile; a
-  reasonable alternative if we want to exercise the BLE code on the Mac, which
-  `flutter_reactive_ble` cannot do (Android/iOS only).
+- **`flutter_reactive_ble`** — BSD-3, well maintained (Philips Hue), federated.
+  Rejected only for being Android/iOS only, which would have kept the BLE path
+  untestable without a phone.
 
 **Open design details folded in as they were settled:**
 
@@ -219,11 +220,10 @@ as nothing. The asymmetric version bows, which is the thing worth looking at.
 
 Two things learned by building it:
 
-- `flutter build macos --debug` succeeds with `flutter_reactive_ble` in the
-  pubspec (it declares no macOS platform, so it is simply not registered there).
-  That keeps the Mac dev loop, but **calling** the plugin on macOS would throw
-  `MissingPluginException`, so the BLE transport must be platform-guarded and the
-  Mac must stay fixture-only (phase 5).
+- macOS is sandboxed, so CoreBluetooth needs
+  `com.apple.security.device.bluetooth` in `macos/Runner/DebugProfile.entitlements`
+  and `Release.entitlements`. Without it the plugin reports `unsupported`, with
+  nothing pointing at the entitlement — already set.
 - Goldens are host-dependent (anti-aliasing differs across machines), so a golden
   failure on another machine is expected rather than alarming —
   `flutter test --update-goldens` and review the diff.
@@ -266,7 +266,12 @@ Two things this fixed beyond the tests:
 - [x] Protocol: end-of-stream signal for a streamed trace — `TraceChunk.total_chunks`
       is set on every streamed chunk (0 in stored records); landed on the device
       side first, with Rust and Dart regenerated from `proto/calypso.proto`
-- [ ] Scan/connect/permission flow
+- [ ] Scan/connect/permission flow (and confirm the Mac can see the device)
+- [ ] Decide chunk sizing against the negotiated MTU: Apple platforms manage the
+      MTU themselves and historically negotiated ~185 bytes, where our 4-sample
+      (~200 byte) chunk would not fit. The peripheral knows the connection's MTU,
+      so the device can size chunks to it (safe now that `total_chunks` tells the
+      client how many to expect); a 3-sample fallback is the cheap interim.
 - [ ] Subscribe to `0xca21`, write `0xca22`, collect `0xca23`
 - [ ] Reconnect + re-sync behaviour, connection state in the UI
 - [ ] First real capture -> checked-in fixture (via `RecordingTransport`)

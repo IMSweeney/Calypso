@@ -11,10 +11,12 @@ dependencies:
     sdk: flutter
   # Wire format, generated from proto/calypso.proto (see tool/gen_proto.sh).
   protobuf: ^6.1.0
-  # BLE: BSD-3, Philips Hue, federated over a platform interface so tests can
-  # fake it. (flutter_blue_plus is nicer but needs a paid licence for
-  # for-profit use since 2.0, including development.)
-  flutter_reactive_ble: ^5.6.0
+  # BLE: BSD-3 (Navideck), one API across Android/iOS/macOS/Windows/Linux/Web.
+  # Chosen over flutter_reactive_ble (Android/iOS only) so the BLE path can be
+  # developed on the Mac, where CoreBluetooth exists. (flutter_blue_plus is
+  # nicer but needs a paid licence for for-profit use since 2.0, including
+  # development.)
+  universal_ble: ^2.3.0
   # 3D maths for the plot model (projection, camera).
   vector_math: ^2.1.4
   provider: ^6.1.2
