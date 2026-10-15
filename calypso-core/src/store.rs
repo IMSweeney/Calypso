@@ -14,10 +14,11 @@ use crate::pb::{self, TRACE_CHUNK_SAMPLES};
 use crate::rep::{RepSummary, TraceBuf, TracePoint};
 use embedded_storage::nor_flash::NorFlash;
 
-/// Size of the caller's record buffer. A full trace chunk of 48 samples with
-/// worst-case field values encodes to ~2.0 KB, and the flash log's record
-/// limit for a 4 KB sector is 4076 bytes.
-pub const RECORD_BUF_BYTES: usize = 2048;
+/// Size of the caller's record buffer. A full trace chunk of 48 samples
+/// encodes to at most 2459 bytes even with worst-case field values (asserted
+/// by a test), and the flash log's record limit for a 4 KB sector is 4076
+/// bytes, so this covers every record we can produce with margin.
+pub const RECORD_BUF_BYTES: usize = 3072;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error<E> {

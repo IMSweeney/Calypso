@@ -110,6 +110,12 @@ fn full_chunk_fits_one_flash_sector() {
     // flashlog::max_payload for a 4 KB sector: 4096 - 8 (sector header)
     // - 8 (record header) - 4 (trailer) = 4076.
     assert!(n <= 4076, "chunk encoded to {n} bytes, over the record limit");
+    // ... and the device's per-record scratch must hold it: the firmware
+    // encodes every chunk into one reusable buffer of this size.
+    assert!(
+        n <= calypso_core::store::RECORD_BUF_BYTES,
+        "chunk encoded to {n} bytes, over RECORD_BUF_BYTES"
+    );
 }
 
 #[test]
