@@ -13,7 +13,10 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join3;
 use embassy_futures::select::{select, Either};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::mutex::Mutex as AsyncMutex;
 use embassy_time::{Duration, Instant, Ticker, Timer, Delay};
+use esp_storage::FlashStorage as FlashDevice;
+use alloc::vec::Vec as AllocVec;
 use core::cell::RefCell;
 use esp_hal::{Blocking};
 use esp_hal::clock::CpuClock;
@@ -30,7 +33,9 @@ use embedded_storage::nor_flash::NorFlash;
 
 use bno055::{BNO055OperationMode, BNO055Calibration, BNO055_CALIB_SIZE};
 use bno055::Bno055;
+use calypso_core::flashlog::FlashLog;
 use calypso_core::rep::{compute_rep, Detector, TraceBuf, TracePoint, MARGIN_MS};
+use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::sampler::{quantize, Sample, SampleRing, QUAT_SCALE, SAMPLE_RATE_HZ};
 use calypso_core::DEVICE_NAME_MAX;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -160,7 +165,18 @@ async fn main(spawner: Spawner) -> ! {
     let rep_trace_storage: &'static mut [TracePoint] =
         Box::leak(trace_vec.into_boxed_slice());
     let mut rep_trace = TraceBuf::new(rep_trace_storage);
+    // Scratch for encoding one log record at a time (~2 KB).
+    let mut rec_vec = AllocVec::new();
+    rec_vec.resize(RECORD_BUF_BYTES, 0u8);
+    let rec_buf: &'static mut [u8] = Box::leak(rec_vec.into_boxed_slice());
     info!("Rep detector ready, heap free {} B", esp_alloc::HEAP.free());
+
+    // The one flash peripheral, shared by the BLE task (device name) and the
+    // sampler task (rep log). An async mutex, not a critical section: erasing
+    // a sector takes tens of milliseconds and must not block interrupts. All
+    // three futures below run in this task, so a no-op raw mutex suffices.
+    let flash: &'static AsyncMutex<NoopRawMutex, FlashDevice> =
+        Box::leak(Box::new(AsyncMutex::new(flash)));
 
     let stack = trouble_host::new(ble_controller, &mut resources)
         .set_random_address(Address::random([0xca, 0xa7, 0x19, 0x50, 0xe4, 0xff]));
@@ -280,7 +296,8 @@ async fn main(spawner: Spawner) -> ! {
                                     if new_name != name {
                                         name = new_name;
                                         info!("device name set to {}", name.as_str());
-                                        save_device_name(&mut flash, name.as_str());
+                                        let mut f = flash.lock().await;
+                                        save_device_name(&mut f, name.as_str());
                                     }
                                 }
                             }
@@ -338,10 +355,23 @@ async fn main(spawner: Spawner) -> ! {
                         warn!("rep window unavailable (ring too short)");
                     } else {
                         reps += 1;
+                        let rep_id = reps;
                         let sum = compute_rep(&rep_window[..copied], &mut rep_trace);
+                        // Persist the rep (summary + trace chunks). This
+                        // happens right after the rest debounce, i.e. while
+                        // the sensor is at rest, so the tens of ms an erase
+                        // takes here can't land in the middle of a rep.
+                        let stored = {
+                            let mut f = flash.lock().await;
+                            store_rep(&mut f, rec_buf, rep_id, &sum, &rep_trace)
+                        };
+                        match stored {
+                            Ok(n) => info!("rep {} stored as {} log records", rep_id, n),
+                            Err(()) => warn!("rep {} could not be stored", rep_id),
+                        }
                         info!(
                             "rep {}: {}..{} ms ({} ms), {} trace pts{}, rom {=f32} m, peak v {=f32} m/s, mean v {=f32} m/s, peak a {=f32} m/s^2, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
-                            reps,
+                            rep_id,
                             span.start_ms,
                             span.end_ms,
                             sum.duration_ms,
@@ -395,8 +425,8 @@ async fn main(spawner: Spawner) -> ! {
 
 /// Mount the rep-record flash log on the `log` data partition (subtype
 /// `undefined`, see partitions.csv). Returns the number of sectors in the
-/// ring. The log is dropped again for now — Phase 4 will keep it alive and
-/// start writing rep records.
+/// ring. Mounting here formats the partition on first boot; individual reps
+/// are written later by [`store_rep`].
 fn mount_rep_log(flash: &mut FlashStorage) -> Result<u32, ()> {
     let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
     let pt = partitions::read_partition_table(flash, &mut pt_mem).map_err(|_| ())?;
@@ -408,9 +438,36 @@ fn mount_rep_log(flash: &mut FlashStorage) -> Result<u32, ()> {
     else {
         return Err(());
     };
-    let region = log_part.as_embedded_storage(flash);
-    let log = calypso_core::flashlog::FlashLog::mount(region).map_err(|_| ())?;
+    let mut region = log_part.as_embedded_storage(flash);
+    let log = FlashLog::mount(&mut region).map_err(|_| ())?;
     Ok(log.sectors())
+}
+
+/// Append one rep (summary + trace chunks) to the flash log partition.
+///
+/// Returns the number of log records written. The log is mounted per append:
+/// mounting is a scan of the sector headers, and appends are rare (once per
+/// rep, at rest), so there's no need to keep it alive between reps.
+fn store_rep(
+    flash: &mut FlashDevice,
+    rec_buf: &mut [u8],
+    rep_id: u32,
+    summary: &calypso_core::rep::RepSummary,
+    trace: &TraceBuf<'_>,
+) -> Result<u32, ()> {
+    let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
+    let pt = partitions::read_partition_table(flash, &mut pt_mem).map_err(|_| ())?;
+    let Some(log_partition) = pt
+        .find_partition(partitions::PartitionType::Data(
+            partitions::DataPartitionSubType::Undefined,
+        ))
+        .map_err(|_| ())?
+    else {
+        return Err(());
+    };
+    let mut region = log_partition.as_embedded_storage(flash);
+    let mut log = FlashLog::mount(&mut region).map_err(|_| ())?;
+    store::append_rep(&mut log, rec_buf, rep_id, summary, trace.as_slice()).map_err(|_| ())
 }
 
 /// Load the BLE device name from the NVS partition, falling back to the default.

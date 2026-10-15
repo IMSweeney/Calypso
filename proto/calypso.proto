@@ -1,0 +1,110 @@
+// Calypso wire format: rep records stored in the device flash log, and the
+// BLE sync protocol between the device and the phone app.
+//
+// This file is the single source of truth for both sides. The device builds
+// Rust types from it with `micropb` (see `calypso-core/build.rs`); the app
+// generates its own classes from the same file.
+//
+// Fixed-point scales (see `calypso_core::sampler`):
+//   - accel: 0.01 m/s^2 per LSB (BNO055 native)
+//   - quat:  1/2^14 per LSB, order [w, x, y, z] (BNO055 native)
+// Positions/velocities are metres and metres per second (float).
+//
+// Storage layout: each rep is one `RepSummary` record followed by
+// `summary.chunk_count` `TraceChunk` records carrying that `rep_id`.
+
+syntax = "proto3";
+
+package calypso;
+
+// One IMU sample as sampled at 100 Hz by the firmware.
+message Sample {
+  uint32 t_ms = 1;  // monotonic device uptime, milliseconds
+  sint32 ax = 2;
+  sint32 ay = 3;
+  sint32 az = 4;  // linear (gravity-removed) acceleration
+  sint32 qw = 5;
+  sint32 qx = 6;
+  sint32 qy = 7;
+  sint32 qz = 8;  // orientation quaternion
+}
+
+// One point of a stored rep trace.
+//
+// Both the derived displacement and the raw inputs are kept, so the app can
+// re-derive traces with better algorithms later without a firmware update.
+message TraceSample {
+  uint32 t_offset_ms = 1;  // ms from the rep's first trace point
+  float px = 2;
+  float py = 3;
+  float pz = 4;  // ZUPT-anchored displacement from the rep start (m)
+  sint32 ax = 5;
+  sint32 ay = 6;
+  sint32 az = 7;  // raw linear acceleration
+  sint32 qw = 8;
+  sint32 qx = 9;
+  sint32 qy = 10;
+  sint32 qz = 11;  // raw orientation quaternion
+}
+
+// Summary statistics for one rep. Angles are degrees, distances metres.
+message RepSummary {
+  uint32 rep_id = 1;  // monotonic, from the device's rep counter
+  uint32 t_start_ms = 2;
+  uint32 t_end_ms = 3;
+  uint32 duration_ms = 4;
+  float rom = 5;  // peak-to-peak displacement on the dominant axis
+  float peak_velocity = 6;
+  float mean_velocity = 7;
+  float peak_accel = 8;
+  float roll_min_deg = 9;
+  float roll_max_deg = 10;
+  float pitch_min_deg = 11;
+  float pitch_max_deg = 12;
+  uint32 trace_len = 13;    // trace points stored across all chunks
+  uint32 chunk_count = 14;  // TraceChunk records following this summary
+  bool decimated = 15;      // trace was decimated to fit device memory
+}
+
+// A slice of a rep's trace: as stored in the log, and as sent over BLE.
+message TraceChunk {
+  uint32 rep_id = 1;
+  uint32 index = 2;              // 0-based chunk index
+  uint32 first_t_offset_ms = 3;  // t_offset_ms of the first sample
+  repeated TraceSample samples = 4;
+}
+
+// One log record: a rep summary or one of its trace chunks. Keeping both
+// under one wire type makes the log a single self-describing stream.
+message RepRecord {
+  oneof body {
+    RepSummary summary = 1;
+    TraceChunk trace = 2;
+  }
+}
+
+// --- BLE sync -------------------------------------------------------------
+
+// Sent by the app to request a rep's trace. `chunk_index` is ignored unless
+// `all_chunks` is false.
+message TraceRequest {
+  uint32 rep_id = 1;
+  bool all_chunks = 2;
+  uint32 chunk_index = 3;
+}
+
+// Everything sent device -> app on the sync service.
+message SyncMessage {
+  oneof body {
+    RepSummary summary = 1;  // auto-streamed as reps are recorded
+    TraceChunk trace = 2;    // on demand, in response to TraceRequest
+    SyncStatus status = 3;
+  }
+}
+
+message SyncStatus {
+  uint32 rep_count = 1;        // reps currently in the log ring
+  uint32 oldest_rep_id = 2;    // ids fall off the ring when it wraps
+  uint32 newest_rep_id = 3;
+  bool trace_unavailable = 4;  // requested trace has been overwritten
+}

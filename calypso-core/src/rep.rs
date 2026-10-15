@@ -223,7 +223,13 @@ impl<'a> TraceBuf<'a> {
         self.points[..self.len].iter()
     }
 
-    fn push(&mut self, p: TracePoint) {
+    /// The stored points, oldest first.
+    pub fn as_slice(&self) -> &[TracePoint] {
+        &self.points[..self.len]
+    }
+
+    /// Append a point; silently ignored once the buffer is full.
+    pub fn push(&mut self, p: TracePoint) {
         if self.len < self.points.len() {
             self.points[self.len] = p;
             self.len += 1;

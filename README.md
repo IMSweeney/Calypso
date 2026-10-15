@@ -13,6 +13,9 @@
 - `calypso-esp32/` — ESP32 (Xtensa) firmware
 - `calypso-core/` — platform-independent logic, unit-tested on the host
 - `dist/` — deploy scripts and docs; flash images are generated, not committed
+- `proto/` — the protobuf wire format (`calypso.proto`), shared with the app;
+  `calypso-core` generates its Rust types from it at build time (no `protoc`
+  install needed — the build vendored one)
 
 ### Flashing
 - `cd calypso-esp32 && cargo build`

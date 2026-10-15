@@ -228,10 +228,22 @@ Tunables live in `calypso-core/src/rep.rs`: on/rest accel thresholds
 bounds (0.4–8 s), and a 200 ms ZUPT margin each side of the stored trace.
 
 ### 4. Data format (`calypso-core` + app)
-- [ ] Write the real `.proto` (`Sample`, `Rep`, `RepSummary`, `TraceRequest`,
-      `TraceChunk`), shared with the app
-- [ ] `micropb` encode/decode in `calypso-core`; round-trip host tests
-- [ ] Rep record → flash log on rep close (device)
+- [x] Write the real `.proto` (`Sample`, `TraceSample`, `RepSummary`,
+      `TraceChunk`, `RepRecord`, `TraceRequest`, `SyncMessage`, `SyncStatus`)
+      at `proto/calypso.proto`, shared with the app
+- [x] `micropb` encode/decode in `calypso-core` (`pb` module: conversions,
+      record encode/decode into caller buffers, generated types); round-trip
+      and sizing host tests
+- [x] Rep record → flash log on rep close (device): `store::append_rep`
+      writes one summary record plus trace chunks; the firmware stores each
+      detected rep from the sampler task
+
+Record layout: `[RepSummary][TraceChunk 0][TraceChunk 1]…` sharing one
+`rep_id`. Chunks hold up to `pb::TRACE_CHUNK_SAMPLES` (48) trace points so an
+encoded record always fits one 4 KB erase sector (the log's record limit is
+4076 bytes; a worst-case chunk encodes to ~2 KB). A full 512-point trace is
+11 chunks. `proto/` is shared with the app; codegen needs no `protoc` install
+(the build uses `protoc-bin-vendored`).
 
 ### 5. BLE sync (`calypso-esp32`)
 - [ ] "Log sync" GATT service

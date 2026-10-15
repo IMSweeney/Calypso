@@ -54,8 +54,8 @@ fn crc16(mut crc: u16, data: &[u8]) -> u16 {
     crc
 }
 
-pub struct FlashLog<N> {
-    flash: N,
+pub struct FlashLog<'a, N> {
+    flash: &'a mut N,
     sector_size: u32,
     sectors: u32,
     /// Sector currently being appended to.
@@ -66,11 +66,12 @@ pub struct FlashLog<N> {
     next_id: u32,
 }
 
-impl<N: NorFlash> FlashLog<N> {
-    /// Mount the log over the whole flash region `flash` exposes, scanning
-    /// for the current head sector and write position. Formats (erases
-    /// everything) if no valid sector is found.
-    pub fn mount(mut flash: N) -> Result<Self, Error<N::Error>> {
+impl<'a, N: NorFlash> FlashLog<'a, N> {
+    /// Mount the log over the whole flash region `flash` exposes (borrowed, so
+    /// the caller keeps ownership and can reuse it after the log is dropped),
+    /// scanning for the current head sector and write position. Formats
+    /// (erases everything) if no valid sector is found.
+    pub fn mount(flash: &'a mut N) -> Result<Self, Error<N::Error>> {
         let sector_size = N::ERASE_SIZE as u32;
         let capacity = flash.capacity() as u32;
         let sectors = capacity / sector_size;
@@ -199,11 +200,6 @@ impl<N: NorFlash> FlashLog<N> {
     /// Number of erase sectors in the ring.
     pub fn sectors(&self) -> u32 {
         self.sectors
-    }
-
-    /// Consume the log and return the underlying flash (e.g. to remount).
-    pub fn into_inner(self) -> N {
-        self.flash
     }
 
     /// Iterate all live records, oldest first. Records larger than `buf`

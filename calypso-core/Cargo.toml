@@ -13,6 +13,15 @@ embassy-sync = "0.7.2"
 embedded-storage = "0.3.1"
 # no_std math (sqrt/atan2/asin) for the rep trace integration.
 libm = "0.2"
+# Protobuf wire format for rep records and BLE sync (proto/calypso.proto).
+# heapless containers keep the generated types allocation-free.
+micropb = { version = "0.6.0", features = ["container-heapless-0-9"] }
+heapless = "0.9"
+
+[build-dependencies]
+micropb-gen = "0.6.0"
+# Prebuilt protoc, so no system install (or CI setup) is needed.
+protoc-bin-vendored = "3"
 
 [dev-dependencies]
 # used by the synthetic fixture generators in tests/
