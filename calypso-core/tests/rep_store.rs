@@ -4,75 +4,27 @@
 
 mod common;
 
-use calypso_core::rep::{compute_rep, Detector, TraceBuf, TracePoint, MARGIN_MS};
-use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, QUAT_SCALE};
+use calypso_core::fixtures::{detect_and_trace, squat_set};
+use calypso_core::rep::{RepSummary, TraceBuf, TracePoint};
+use calypso_core::sampler::{Sample, QUAT_SCALE};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use common::{mount, BigFlash, MockFlash};
 
-const DT_MS: u32 = 10;
 const Q_ID: [i16; 4] = [QUAT_SCALE as i16, 0, 0, 0];
 
-fn sample(t_ms: u32, accel: [f32; 3]) -> Sample {
-    Sample {
-        t_ms,
-        accel: accel.map(|a| quantize(a, ACCEL_SCALE)),
-        quat: Q_ID,
-    }
-}
-
-/// Squat-like motion: down to -`a` and back to 0 over `t_ms`, with rest
-/// either side (see `tests/rep.rs` for the derivation).
-fn squat_set(reps: usize, t_ms: u32, rest_ms: u32, a: f32) -> Vec<Sample> {
-    let mut out = Vec::new();
-    let mut t = 0u32;
-    for _ in 0..(300 / DT_MS) {
-        out.push(sample(t, [0.0, 0.0, 0.0]));
-        t += DT_MS;
-    }
-    for _ in 0..reps {
-        let tt = t_ms as f32 / 1000.0;
-        let peak = 2.0 * core::f32::consts::PI.powi(2) * a / (tt * tt);
-        for i in 0..=(t_ms / DT_MS) {
-            let time = i as f32 * DT_MS as f32 / 1000.0;
-            let accel = -peak * libm::cosf(2.0 * core::f32::consts::PI * time / tt);
-            out.push(sample(t, [0.0, 0.0, accel]));
-            t += DT_MS;
-        }
-        for _ in 0..(rest_ms / DT_MS) {
-            out.push(sample(t, [0.0, 0.0, 0.0]));
-            t += DT_MS;
-        }
-    }
-    out
-}
-
-/// Run the full sampler pipeline over `samples` and return each rep's
-/// trace, the way the firmware's sampler task does.
-fn detect_and_trace(samples: &[Sample]) -> (Vec<Vec<TracePoint>>, Vec<calypso_core::rep::RepSummary>) {
-    let mut ring = calypso_core::sampler::SampleRing::<4096>::new();
-    let mut det = Detector::new();
-    let mut window = [Sample::ZERO; 900];
-    let mut traces = Vec::new();
-    let mut summaries = Vec::new();
-    for s in samples {
-        ring.push(*s);
-        if let Some(span) = det.update(s) {
-            let n = ring.copy_window(span.start_ms, span.end_ms, MARGIN_MS, MARGIN_MS, &mut window);
-            assert!(n > 0);
-            let mut storage = vec![TracePoint::ZERO; 512];
-            let mut buf = TraceBuf::new(&mut storage);
-            let sum = compute_rep(&window[..n], &mut buf);
-            traces.push(buf.iter().copied().collect());
-            summaries.push(sum);
-        }
-    }
-    (traces, summaries)
+/// Runs the shared fixture pipeline and splits it the way these tests want.
+fn pipeline(samples: &[Sample]) -> (Vec<Vec<TracePoint>>, Vec<RepSummary>) {
+    let reps = detect_and_trace(samples, 512);
+    (
+        reps.iter().map(|(_, trace)| trace.clone()).collect(),
+        reps.iter().map(|(summary, _)| *summary).collect(),
+    )
 }
 
 #[test]
 fn rep_survives_the_round_trip_through_flash() {
-    let samples = squat_set(3, 1500, 800, 0.4);
-    let (traces, summaries) = detect_and_trace(&samples);
+    let (samples, _) = squat_set(3, 1500, 800, 0.4);
+    let (traces, summaries) = pipeline(&samples);
     assert_eq!(traces.len(), 3);
     assert_eq!(summaries.len(), 3);
 
@@ -136,7 +88,8 @@ fn rep_survives_the_round_trip_through_flash() {
 fn oldest_reps_fall_off_when_the_ring_wraps() {
     // Small mock sectors (256 B) so a handful of reps wrap the ring; the
     // trace is short so each record still fits a 236-byte record payload.
-    let summary = detect_and_trace(&squat_set(1, 1500, 800, 0.4)).1.remove(0);
+    let (samples, _) = squat_set(1, 1500, 800, 0.4);
+    let summary = pipeline(&samples).1.remove(0);
     let trace: Vec<TracePoint> = (0..4)
         .map(|i| TracePoint {
             t_ms: i * 10,
@@ -167,8 +120,8 @@ fn oldest_reps_fall_off_when_the_ring_wraps() {
 
 #[test]
 fn summary_and_chunks_share_the_rep_id() {
-    let samples = squat_set(1, 1500, 800, 0.4);
-    let (traces, summaries) = detect_and_trace(&samples);
+    let (samples, _) = squat_set(1, 1500, 800, 0.4);
+    let (traces, summaries) = pipeline(&samples);
     let trace = &traces[0];
     let summary = summaries[0];
 

@@ -304,6 +304,10 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> RepSummary {
         n.div_ceil(capacity).max(1)
     };
     summary.decimated = capacity > 0 && stride > 1;
+    // Anchor the decimation grid at the *last* sample, so the rep's end is
+    // always stored (it is the most interesting point when plotting) and the
+    // count stays within capacity.
+    let first = if capacity == 0 { 0 } else { (n - 1) % stride };
 
     let t0 = samples[0].t_ms;
     let t_end = samples[n - 1].t_ms;
@@ -391,7 +395,7 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> RepSummary {
         if pitch > summary.pitch_max_deg {
             summary.pitch_max_deg = pitch;
         }
-        if i % stride == 0 || i == n - 1 {
+        if i >= first && (i - first) % stride == 0 {
             out.push(TracePoint {
                 t_ms: samples[i].t_ms,
                 pos,

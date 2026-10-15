@@ -1,6 +1,7 @@
 # Plan: Calypso iOS App (client)
 
-Status: **draft for review** — no client code yet.
+Status: **in progress** — phase 1 partly done. The Dart/Flutter side is blocked
+on installing the Flutter SDK; the Rust fixture tooling is done and tested.
 
 Design lives in [`README.md`](README.md) (architecture). Device side and the
 wire protocol: [`docs/rep-tracking/README.md`](../rep-tracking/README.md).
@@ -155,11 +156,19 @@ Connection/permission UX, empty and error states, sync progress, the
 ## TODO
 
 ### 1. Scaffold and fixtures
-- [ ] `flutter create` in `calypso-app/` (iOS + macOS targets, org id)
-- [ ] Decide and set up proto -> Dart codegen (`protobuf` package)
-- [ ] Rust example writing `synthetic-squat.pblog` + edge-case fixtures
-- [ ] Dart decode round-trip test over every fixture
-- [ ] `.gitignore` / CI story for generated files and fixtures
+- [ ] `flutter create` in `calypso-app/` (iOS + macOS targets, org id) —
+  **blocked on the Flutter SDK** (not installed on this machine yet)
+- [x] Decide and set up proto -> Dart codegen: generated Dart is checked in, and
+      `calypso-app/tool/gen_proto.sh` regenerates it from `proto/calypso.proto`
+      (needs `protoc` + `protoc_plugin`; run only when the .proto changes)
+- [x] Rust fixture generator: `calypso-core/src/fixtures.rs` +
+      `examples/gen_fixtures.rs` write `calypso-app/assets/fixtures/*.pblog`
+      (squat set, single point, decimated long rep, ring-dropped summary,
+      extreme values, truncated, empty), using the firmware's own encoders
+- [ ] Dart decode round-trip test over every fixture — blocked on the SDK
+- [x] `.gitignore` for Flutter/iOS build output; generated protobuf Dart is
+      deliberately checked in; fixtures are checked in (they are test data,
+      ~21 KB total)
 
 ### 2. Protocol and sync client
 - [ ] Record + chunk decoding into `TracePoint` / `RepSummary`

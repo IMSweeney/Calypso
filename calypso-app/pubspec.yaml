@@ -1,0 +1,29 @@
+name: calypso
+description: Calypso client — sync reps from the device, list summaries, plot a rep in 3D.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Wire format, generated from proto/calypso.proto (see tool/gen_proto.sh).
+  protobuf: ^4.0.0
+  # BLE: BSD-3, Philips Hue, federated over a platform interface so tests can
+  # fake it. (flutter_blue_plus is nicer but needs a paid licence for
+  # for-profit use since 2.0, including development.)
+  flutter_reactive_ble: ^5.6.0
+  # 3D maths for the plot model (projection, camera).
+  vector_math: ^2.1.4
+  provider: ^6.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  assets:
+    - assets/fixtures/

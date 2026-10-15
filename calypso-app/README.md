@@ -22,4 +22,5 @@ Planned layout:
 - `lib/plot/` — plot model (pure Dart) + `CustomPainter` renderer
 - `lib/state/`, `lib/ui/` — state controllers and screens
 - `test/` — unit, widget and golden tests
-- `assets/fixtures/` — checked-in `.pblog` logs from the firmware's encoders
+- `assets/fixtures/` — checked-in `.pblog` logs from the firmware's encoders;
+  regenerate with `cargo run -p calypso-core --example gen_fixtures`

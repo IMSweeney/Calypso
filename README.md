@@ -30,6 +30,11 @@ Platform-independent logic lives in the `calypso-core` crate instead, which is
 tested on the host:
 - `cd calypso-core && cargo test`
 
+Client fixtures (`.pblog` log dumps the iOS app is developed against) are
+generated from the same encoders the firmware uses:
+
+- `cargo run -p calypso-core --example gen_fixtures`
+
 For on-device tests, look at [`embedded-test`](https://crates.io/crates/embedded-test).
 
 ## TODO

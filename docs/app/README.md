@@ -186,9 +186,29 @@ The device stores an undifferentiated rep log, so grouping is a client concern:
 ## Fixtures (`.pblog`)
 
 A `.pblog` is a *log dump*: the same `RepRecord` messages the device stores,
-length-delimited, without the flash sector framing. Because it is produced by the
+without the flash sector framing, written as a sequence of
+**`[u32 little-endian length][record bytes]`**. Because the records come from the
 firmware's own `pb::encode_summary` / `pb::encode_trace_chunk` calls, a fixture
-cannot drift from the wire format.
+cannot drift from the wire format. The Rust reference implementation of the
+framing is `calypso_core::fixtures::read_dump`; the Dart reader must match it,
+and must report a trailing partial record (torn capture) rather than ignore it.
+
+Fixtures are generated, not hand-written:
+
+```text
+cargo run -p calypso-core --example gen_fixtures
+```
+
+which writes `calypso-app/assets/fixtures/`: a normal three-rep set, a
+single-point trace, a decimated long rep, a summary whose trace fell off the
+device ring, extreme values, a truncated dump, and an empty dump.
+
+Note on decimation: the device keeps at most 512 trace points per rep, and
+`compute_rep` anchors its decimation grid at the **last** sample, so a rep's end
+is always stored. Trace capacity is also why a long rep can come back with
+`decimated = true` — the fixture for that case is built by running the trace
+computation directly, because a smooth synthetic 10 s squat has peak
+accelerations (~0.2 m/s²) below the detector's 0.6 m/s² start threshold.
 
 Sources:
 

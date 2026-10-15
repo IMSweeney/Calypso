@@ -1,0 +1,17 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/ephemeral/
+# macOS
+macos/Pods/
+macos/Flutter/ephemeral/
+# Generated protobuf output is checked in on purpose (see tool/gen_proto.sh),
+# so it is deliberately not ignored.

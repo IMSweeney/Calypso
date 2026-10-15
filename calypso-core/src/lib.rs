@@ -7,7 +7,10 @@
 
 #![cfg_attr(not(test), no_std)]
 
+extern crate alloc;
+
 pub mod ble;
+pub mod fixtures;
 pub mod flashlog;
 pub mod pb;
 pub mod rep;
