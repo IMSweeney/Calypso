@@ -263,7 +263,9 @@ so an unsubscribed app simply means the next tick retries from the same
 position (no CCCD bookkeeping). Reps that fell off the ring are reported as
 unavailable rather than streamed. Re-requesting is idempotent.
 
-### 6. App (separate repo, out of scope here)
+### 6. App (`calypso-app/`)
+Planning now lives in [`docs/app/README.md`](../app/README.md): shell options,
+recommendation, crate layout, fixture-based testing, milestones.
 - [ ] Decode sync stream; workout history from summaries
 - [ ] Bar path (displacement) + tilt (quaternion) plots from traces
 - [ ] Later: fault detection (bar dip, forward lean) on the traces
