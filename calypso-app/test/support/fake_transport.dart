@@ -58,7 +58,8 @@ List<TracePoint> tracePoints(int count, {int startMs = 0}) => [
         ),
     ];
 
-/// Splits points into protocol chunks of [perChunk], the way the device does.
+/// Splits points into protocol chunks of [perChunk], the way the device streams
+/// them over BLE: every chunk carries the total, so a client knows which is last.
 List<pb.TraceChunk> chunksFor(int repId, List<TracePoint> points, {int perChunk = 4}) {
   final chunks = <pb.TraceChunk>[];
   for (var start = 0; start < points.length; start += perChunk) {
@@ -67,6 +68,7 @@ List<pb.TraceChunk> chunksFor(int repId, List<TracePoint> points, {int perChunk 
       repId: repId,
       index: chunks.length,
       firstTOffsetMs: slice.first.tOffsetMs,
+      totalChunks: (points.length / perChunk).ceil(),
     )..samples.addAll([
         for (final p in slice)
           pb.TraceSample(

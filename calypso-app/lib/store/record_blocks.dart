@@ -67,6 +67,9 @@ Future<Map<int, Uint8List>> recordBlocksFrom(RepTransport transport) async {
             repId: summary.repId,
             index: start ~/ pbTraceChunkSamples,
             firstTOffsetMs: slice.first.tOffsetMs,
+            // Stored records leave this 0: the summary's chunkCount describes
+            // the trace, and this is not a stream.
+            totalChunks: 0,
             samples: [
               for (final p in slice)
                 pb.TraceSample(

@@ -60,7 +60,7 @@ fn summary_round_trips() {
 fn trace_chunk_round_trips() {
     let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES).map(|i| sample_point(i, 500)).collect();
     let mut buf = [0u8; 2048];
-    let n = pb::encode_trace_chunk(7, 2, 500, &points, &mut buf).unwrap();
+    let n = pb::encode_trace_chunk(7, 2, 500, 9, &points, &mut buf).unwrap();
 
     match pb::decode_record(&buf[..n]).unwrap() {
         Record::Trace(chunk) => {
@@ -68,6 +68,7 @@ fn trace_chunk_round_trips() {
             assert_eq!(chunk.index, 2);
             assert_eq!(chunk.first_t_offset_ms, 0);
             assert_eq!(chunk.samples.len(), TRACE_CHUNK_SAMPLES);
+            assert_eq!(chunk.total_chunks, 9, "the stream total survives the wire");
             for (i, s) in chunk.samples.iter().enumerate() {
                 let back = pb::trace_point_from_message(s);
                 let want = &points[i];
@@ -106,7 +107,7 @@ fn full_chunk_fits_one_flash_sector() {
     };
     let points = vec![worst; TRACE_CHUNK_SAMPLES];
     let mut buf = [0u8; 4096];
-    let n = pb::encode_trace_chunk(1, 0, 0, &points, &mut buf).unwrap();
+    let n = pb::encode_trace_chunk(1, 0, 0, 0, &points, &mut buf).unwrap();
     // flashlog::max_payload for a 4 KB sector: 4096 - 8 (sector header)
     // - 8 (record header) - 4 (trailer) = 4076.
     assert!(n <= 4076, "chunk encoded to {n} bytes, over the record limit");
@@ -123,7 +124,7 @@ fn undersized_buffer_is_reported() {
     let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES).map(|i| sample_point(i, 0)).collect();
     let mut tiny = [0u8; 8];
     assert_eq!(
-        pb::encode_trace_chunk(1, 0, 0, &points, &mut tiny),
+        pb::encode_trace_chunk(1, 0, 0, 0, &points, &mut tiny),
         Err(pb::Error::BufferTooSmall)
     );
 }

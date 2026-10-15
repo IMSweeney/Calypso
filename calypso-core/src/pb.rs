@@ -112,10 +112,15 @@ pub fn trace_point_from_message(s: &msg::TraceSample) -> TracePoint {
 
 /// Build a chunk message from trace points (at most [`TRACE_CHUNK_SAMPLES`]
 /// are taken), timestamps relative to `t0_ms`.
+///
+/// `total_chunks` is the number of chunks in the stream this record belongs to,
+/// or 0 for a record being stored in the log (see the field's comment in
+/// `proto/calypso.proto`).
 pub fn chunk_message(
     rep_id: u32,
     index: u32,
     t0_ms: u32,
+    total_chunks: u32,
     points: &[TracePoint],
 ) -> msg::TraceChunk {
     let mut chunk = msg::TraceChunk {
@@ -125,6 +130,7 @@ pub fn chunk_message(
             .first()
             .map(|p| p.t_ms.saturating_sub(t0_ms))
             .unwrap_or(0),
+        total_chunks,
         samples: heapless::Vec::new(),
     };
     for p in points.iter().take(TRACE_CHUNK_SAMPLES) {
@@ -153,11 +159,12 @@ pub fn encode_trace_chunk(
     rep_id: u32,
     index: u32,
     t0_ms: u32,
+    total_chunks: u32,
     points: &[TracePoint],
     out: &mut [u8],
 ) -> Result<usize, Error> {
     record(
-        msg::RepRecord_::Body::Trace(chunk_message(rep_id, index, t0_ms, points)),
+        msg::RepRecord_::Body::Trace(chunk_message(rep_id, index, t0_ms, total_chunks, points)),
         out,
     )
 }

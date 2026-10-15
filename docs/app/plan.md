@@ -185,8 +185,8 @@ Connection/permission UX, empty and error states, sync progress, the
 - [x] Scripted fake transport + tests (`test/sync_client_test.dart`,
       `test/trace_reassembly_test.dart`)
 
-**Found while building this (device-side change needed for phase 5):** a streamed
-trace has **no end-of-stream signal**. In the log, chunks hold 48 points and the
+**Found here, since fixed on the device side:** a streamed trace had **no
+end-of-stream signal**. In the log, chunks hold 48 points and the
 summary's `chunk_count` describes them, but over BLE the device re-chunks to
 ~4 points per notification, so `chunk_count` no longer matches the number of
 chunks the client should expect, and the client cannot tell "chunks still
@@ -263,8 +263,9 @@ Two things this fixed beyond the tests:
   73px. It is a `Wrap` now, so five stats reflow on a phone instead of clipping.
 
 ### 5. BLE transport
-- [ ] Protocol: end-of-stream signal for a streamed trace (`TraceChunk.total_chunks`
-      or a status message) — see the note in phase 2
+- [x] Protocol: end-of-stream signal for a streamed trace — `TraceChunk.total_chunks`
+      is set on every streamed chunk (0 in stored records); landed on the device
+      side first, with Rust and Dart regenerated from `proto/calypso.proto`
 - [ ] Scan/connect/permission flow
 - [ ] Subscribe to `0xca21`, write `0xca22`, collect `0xca23`
 - [ ] Reconnect + re-sync behaviour, connection state in the UI

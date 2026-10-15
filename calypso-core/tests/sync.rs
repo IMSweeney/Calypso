@@ -1,7 +1,7 @@
 //! Host tests for the BLE sync streaming logic: BLE-sized trace chunks, the
 //! summary cursor, and request decoding. No radio involved.
 
-use calypso_core::pb::{self, msg};
+use calypso_core::pb::{self, msg, Record};
 use calypso_core::rep::TracePoint;
 use calypso_core::sync::{
     decode_trace_request, encode_summary_message, SummaryCursor, TraceStreamer, BLE_CHUNK_SAMPLES,
@@ -55,6 +55,41 @@ fn trace_streams_in_ble_sized_chunks() {
         assert_eq!(got.accel, want.accel);
         assert_eq!(got.quat, want.quat);
         assert!((got.pos[0] - want.pos[0]).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn every_streamed_chunk_carries_the_stream_total() {
+    // What the client uses to know it has the whole trace: it cannot derive the
+    // count from the summary, because the device re-chunks to fit the MTU
+    // (4 points here, 48 in the log).
+    let points = trace(10);
+    let mut streamer = TraceStreamer::all(3, points[0].t_ms, &points);
+    let mut buf = [0u8; 512];
+    let mut seen = 0;
+    while let Some(n) = streamer.next_message(&mut buf) {
+        let message = pb::decode_sync(&buf[..n]).unwrap();
+        match message.body {
+            Some(msg::SyncMessage_::Body::Trace(chunk)) => {
+                assert_eq!(chunk.total_chunks, 3, "10 points / 4 per chunk");
+                seen += 1;
+            }
+            other => panic!("expected a trace chunk, got {other:?}"),
+        }
+    }
+    assert_eq!(seen, 3);
+}
+
+#[test]
+fn stored_records_leave_the_stream_total_unset() {
+    // A record written to the log must not claim to be part of a stream: there,
+    // the summary's chunk_count is what describes the trace.
+    let points = trace(4);
+    let mut rec_buf = [0u8; 512];
+    let n = pb::encode_trace_chunk(1, 0, points[0].t_ms, 0, &points, &mut rec_buf).unwrap();
+    match pb::decode_record(&rec_buf[..n]).unwrap() {
+        Record::Trace(chunk) => assert_eq!(chunk.total_chunks, 0),
+        other => panic!("expected a trace chunk, got {other:?}"),
     }
 }
 

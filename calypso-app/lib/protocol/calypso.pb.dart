@@ -573,12 +573,14 @@ class TraceChunk extends $pb.GeneratedMessage {
     $core.int? index,
     $core.int? firstTOffsetMs,
     $core.Iterable<TraceSample>? samples,
+    $core.int? totalChunks,
   }) {
     final result = TraceChunk._();
     if (repId != null) result.repId = repId;
     if (index != null) result.index = index;
     if (firstTOffsetMs != null) result.firstTOffsetMs = firstTOffsetMs;
     if (samples != null) result.samples.addAll(samples);
+    if (totalChunks != null) result.totalChunks = totalChunks;
     return result;
   }
 
@@ -601,6 +603,8 @@ class TraceChunk extends $pb.GeneratedMessage {
         fieldType: $pb.PbFieldType.OU3)
     ..pPM<TraceSample>(4, _omitFieldNames ? '' : 'samples',
         subBuilder: TraceSample.$_createMessage)
+    ..aI(5, _omitFieldNames ? '' : 'totalChunks',
+        fieldType: $pb.PbFieldType.OU3)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -652,6 +656,21 @@ class TraceChunk extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(4)
   $pb.PbList<TraceSample> get samples => $_getList(3);
+
+  /// Chunks in the stream this record belongs to. Set only when a trace is being
+  /// streamed over BLE; a record stored in the log leaves it 0, because there the
+  /// summary's chunk_count already describes the trace and the device re-chunks
+  /// to fit the MTU when streaming. Without this the client cannot tell "more
+  /// chunks are coming" from "the device has forgotten this rep and will stay
+  /// silent".
+  @$pb.TagNumber(5)
+  $core.int get totalChunks => $_getIZ(4);
+  @$pb.TagNumber(5)
+  set totalChunks($core.int value) => $_setUnsignedInt32(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasTotalChunks() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearTotalChunks() => $_clearField(5);
 }
 
 enum RepRecord_Body { summary, trace, notSet }

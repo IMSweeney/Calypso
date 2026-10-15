@@ -135,7 +135,8 @@ pub fn push_rep(
     let t0_ms = trace.first().map(|p| p.t_ms).unwrap_or(0);
     let mut written = 1;
     for (index, chunk) in trace.chunks(pb::TRACE_CHUNK_SAMPLES).enumerate() {
-        let n = pb::encode_trace_chunk(rep_id, index as u32, t0_ms, chunk, rec_buf)?;
+        // Fixtures are stored records, not a stream: total_chunks stays 0.
+        let n = pb::encode_trace_chunk(rep_id, index as u32, t0_ms, 0, chunk, rec_buf)?;
         push_record(dump, &rec_buf[..n]);
         written += 1;
     }

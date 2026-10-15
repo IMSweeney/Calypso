@@ -72,6 +72,13 @@ message TraceChunk {
   uint32 index = 2;              // 0-based chunk index
   uint32 first_t_offset_ms = 3;  // t_offset_ms of the first sample
   repeated TraceSample samples = 4;
+  // Chunks in the stream this record belongs to. Set only when a trace is being
+  // streamed over BLE; a record stored in the log leaves it 0, because there the
+  // summary's chunk_count already describes the trace and the device re-chunks
+  // to fit the MTU when streaming. Without this the client cannot tell "more
+  // chunks are coming" from "the device has forgotten this rep and will stay
+  // silent".
+  uint32 total_chunks = 5;
 }
 
 // One log record: a rep summary or one of its trace chunks. Keeping both

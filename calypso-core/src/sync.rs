@@ -74,7 +74,15 @@ impl<'a> TraceStreamer<'a> {
             return None;
         }
         let end = (start + BLE_CHUNK_SAMPLES).min(self.points.len());
-        let chunk = pb::chunk_message(self.rep_id, self.next_index, self.t0_ms, &self.points[start..end]);
+        // Every chunk carries the stream's total, so the app knows which one is
+        // the last and can stop waiting for more.
+        let chunk = pb::chunk_message(
+            self.rep_id,
+            self.next_index,
+            self.t0_ms,
+            Self::chunk_count(self.points.len()),
+            &self.points[start..end],
+        );
         let n = pb::encode_sync(msg::SyncMessage_::Body::Trace(chunk), out).ok()?;
         self.next_index += 1;
         if self.only.is_some() {

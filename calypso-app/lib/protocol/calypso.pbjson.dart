@@ -110,6 +110,7 @@ const TraceChunk$json = {
       '6': '.calypso.TraceSample',
       '10': 'samples'
     },
+    {'1': 'total_chunks', '3': 5, '4': 1, '5': 13, '10': 'totalChunks'},
   ],
 };
 
@@ -117,7 +118,8 @@ const TraceChunk$json = {
 final $typed_data.Uint8List traceChunkDescriptor = $convert.base64Decode(
     'CgpUcmFjZUNodW5rEhUKBnJlcF9pZBgBIAEoDVIFcmVwSWQSFAoFaW5kZXgYAiABKA1SBWluZG'
     'V4EikKEWZpcnN0X3Rfb2Zmc2V0X21zGAMgASgNUg5maXJzdFRPZmZzZXRNcxIuCgdzYW1wbGVz'
-    'GAQgAygLMhQuY2FseXBzby5UcmFjZVNhbXBsZVIHc2FtcGxlcw==');
+    'GAQgAygLMhQuY2FseXBzby5UcmFjZVNhbXBsZVIHc2FtcGxlcxIhCgx0b3RhbF9jaHVua3MYBS'
+    'ABKA1SC3RvdGFsQ2h1bmtz');
 
 @$core.Deprecated('Use repRecordDescriptor instead')
 const RepRecord$json = {
