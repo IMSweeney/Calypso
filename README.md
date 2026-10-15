@@ -9,6 +9,17 @@
 - `cargo install espflash`
 - probe-rs?
 
+## Editor setup
+
+Open the repo in VS Code: `.vscode/extensions.json` recommends the extensions
+that cover every language here — `rust-analyzer` (Rust), `Dart-Code.dart-code`
+(Dart/Flutter in `calypso-app/`) and `zxh404.vscode-proto3` (`.proto`).
+`.vscode/settings.json` wires up formatting and excludes build output.
+
+Note: `calypso-esp32` targets Xtensa, so rust-analyzer needs the esp toolchain
+(`source ~/export-esp.sh`) before that crate analyses cleanly; the other crates
+work out of the box.
+
 ## Layout
 - `calypso-esp32/` — ESP32 (Xtensa) firmware
 - `calypso-core/` — platform-independent logic, unit-tested on the host

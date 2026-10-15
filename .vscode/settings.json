@@ -1,0 +1,41 @@
+{
+  // Rust (calypso-core, calypso-esp32)
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.files.excludeDirs": ["calypso-esp32/target"],
+  "[rust]": {
+    "editor.formatOnSave": true,
+    "editor.rulers": [100]
+  },
+
+  // Dart / Flutter (calypso-app)
+  "[dart]": {
+    "editor.formatOnSave": true,
+    "editor.rulers": [80],
+    "editor.insertSpaces": true,
+    "editor.tabSize": 2
+  },
+  "dart.lineLength": 80,
+
+  // Protocol Buffers (proto/calypso.proto)
+  "[proto3]": {
+    "editor.insertSpaces": true,
+    "editor.tabSize": 2,
+    "editor.formatOnSave": false
+  },
+
+  // Don't index build output or generated platform files.
+  "search.exclude": {
+    "**/target": true,
+    "**/build": true,
+    "**/.dart_tool": true,
+    "**/Pods": true,
+    "**/.webpack-bionic": true
+  },
+
+  // calypso-esp32 targets Xtensa and needs the esp toolchain on PATH
+  // (`source ~/export-esp.sh`) plus `cargo build` with build-std; rust-analyzer
+  // will report errors in that crate until the environment is set up. The
+  // firmware still builds fine from the terminal.
+  "rust-analyzer.cargo.extraEnv": {}
+}
+// (see README "Editor setup")
