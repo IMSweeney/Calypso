@@ -4,13 +4,13 @@ publish_to: none
 version: 0.1.0
 
 environment:
-  sdk: ^3.5.0
+  sdk: ^3.10.0
 
 dependencies:
   flutter:
     sdk: flutter
   # Wire format, generated from proto/calypso.proto (see tool/gen_proto.sh).
-  protobuf: ^4.0.0
+  protobuf: ^6.1.0
   # BLE: BSD-3, Philips Hue, federated over a platform interface so tests can
   # fake it. (flutter_blue_plus is nicer but needs a paid licence for
   # for-profit use since 2.0, including development.)
