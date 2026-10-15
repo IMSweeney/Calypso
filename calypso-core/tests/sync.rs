@@ -71,13 +71,13 @@ fn every_streamed_chunk_carries_the_stream_total() {
         let message = pb::decode_sync(&buf[..n]).unwrap();
         match message.body {
             Some(msg::SyncMessage_::Body::Trace(chunk)) => {
-                assert_eq!(chunk.total_chunks, 3, "10 points / 4 per chunk");
+                assert_eq!(chunk.total_chunks, 4, "10 points / 3 per chunk");
                 seen += 1;
             }
             other => panic!("expected a trace chunk, got {other:?}"),
         }
     }
-    assert_eq!(seen, 3);
+    assert_eq!(seen, 4);
 }
 
 #[test]

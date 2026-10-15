@@ -16,9 +16,16 @@ use crate::rep::TracePoint;
 /// commonly negotiate): MTU - 3 bytes of ATT header.
 pub const BLE_NOTIFY_BYTES: usize = 244;
 
-/// Trace points per notification. Sized so a worst-case point encoding
-/// (~42 bytes) still fits [`BLE_NOTIFY_BYTES`] with the message wrapper.
-pub const BLE_CHUNK_SAMPLES: usize = 4;
+/// Trace points per notification.
+///
+/// Three, not four, deliberately: Apple platforms manage the ATT MTU themselves
+/// and historically negotiated ~185 bytes (182-byte payload), where four samples
+/// (~200 bytes with the wrapper) would not fit. Three stays inside that with
+/// room to spare. The right long-term fix is for the *peripheral* to size chunks
+/// to the MTU it actually negotiated — it learns that per connection, and
+/// `TraceChunk.total_chunks` means the client copes with any chunk size — but
+/// until the device does that, the conservative number is the correct one.
+pub const BLE_CHUNK_SAMPLES: usize = 3;
 
 /// Streams a rep's trace to the app, one `SyncMessage` at a time.
 pub struct TraceStreamer<'a> {
