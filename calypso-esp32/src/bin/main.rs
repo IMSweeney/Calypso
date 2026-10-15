@@ -30,6 +30,7 @@ use embedded_storage::nor_flash::NorFlash;
 
 use bno055::{BNO055OperationMode, BNO055Calibration, BNO055_CALIB_SIZE};
 use bno055::Bno055;
+use calypso_core::rep::{compute_rep, Detector, TraceBuf, TracePoint, MARGIN_MS};
 use calypso_core::sampler::{quantize, Sample, SampleRing, QUAT_SCALE, SAMPLE_RATE_HZ};
 use calypso_core::DEVICE_NAME_MAX;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -63,10 +64,16 @@ static GRAVITY_X_BITS: AtomicU32 = AtomicU32::new(0);
 const SAMPLE_RING_LEN: usize = 30 * SAMPLE_RATE_HZ as usize;
 
 /// The sampler's sample window. Lives on the heap (leaked at startup): 60 KB
-/// is too much for the DRAM static region, but fits the ~160 KB heap. Only
-/// the sampler task touches it today; Phase 3/4 will hand it to the detector
-/// and BLE task behind a mutex.
+/// is too much for the DRAM static region, but fits the ~160 KB heap. The
+/// sampler task both fills it and runs the rep detector over it; Phase 4/5
+/// will additionally read it from the BLE task (behind a mutex).
 type SampleWindow = RefCell<SampleRing<SAMPLE_RING_LEN>>;
+
+/// Window handed to the detector when a rep closes: `MAX_REP_MS` plus the
+/// ZUPT margins (9 s at 100 Hz).
+const REP_WINDOW_SAMPLES: usize = 900;
+/// Trace points kept per rep; longer reps are decimated uniformly.
+const TRACE_POINTS: usize = 512;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -143,6 +150,17 @@ async fn main(spawner: Spawner) -> ! {
 
     // 30 s of samples on the heap, alive for the program's lifetime.
     let samples: &'static SampleWindow = Box::leak(Box::new(RefCell::new(SampleRing::new())));
+    // Rep-detector scratch, also on the heap (too big for the static region,
+    // and built with `vec!` so no large temporary hits the stack).
+    let mut window_vec = alloc::vec::Vec::new();
+    window_vec.resize(REP_WINDOW_SAMPLES, Sample::ZERO);
+    let rep_window: &'static mut [Sample] = Box::leak(window_vec.into_boxed_slice());
+    let mut trace_vec = alloc::vec::Vec::new();
+    trace_vec.resize(TRACE_POINTS, TracePoint::ZERO);
+    let rep_trace_storage: &'static mut [TracePoint] =
+        Box::leak(trace_vec.into_boxed_slice());
+    let mut rep_trace = TraceBuf::new(rep_trace_storage);
+    info!("Rep detector ready, heap free {} B", esp_alloc::HEAP.free());
 
     let stack = trouble_host::new(ble_controller, &mut resources)
         .set_random_address(Address::random([0xca, 0xa7, 0x19, 0x50, 0xe4, 0xff]));
@@ -277,6 +295,10 @@ async fn main(spawner: Spawner) -> ! {
         async {
             let start = Instant::now();
             let mut ticker = Ticker::every(Duration::from_hz(SAMPLE_RATE_HZ as u64));
+            // The detector runs inline at 100 Hz: it's a few comparisons per
+            // sample, and a closed rep does one trace computation.
+            let mut detector = Detector::new();
+            let mut reps: u32 = 0;
             let mut n: u32 = 0;
             loop {
                 ticker.next().await;
@@ -301,6 +323,42 @@ async fn main(spawner: Spawner) -> ! {
                 };
                 samples.borrow_mut().push(sample);
 
+                // Detect reps; on close, slice the window out of the ring and
+                // compute the ZUPT-anchored trace + summary. Storing the
+                // record in the flash log lands in Phase 4.
+                if let Some(span) = detector.update(&sample) {
+                    let copied = samples.borrow().copy_window(
+                        span.start_ms,
+                        span.end_ms,
+                        MARGIN_MS,
+                        MARGIN_MS,
+                        rep_window,
+                    );
+                    if copied == 0 {
+                        warn!("rep window unavailable (ring too short)");
+                    } else {
+                        reps += 1;
+                        let sum = compute_rep(&rep_window[..copied], &mut rep_trace);
+                        info!(
+                            "rep {}: {}..{} ms ({} ms), {} trace pts{}, rom {=f32} m, peak v {=f32} m/s, mean v {=f32} m/s, peak a {=f32} m/s^2, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
+                            reps,
+                            span.start_ms,
+                            span.end_ms,
+                            sum.duration_ms,
+                            sum.trace_len,
+                            if sum.decimated { " (decimated)" } else { "" },
+                            sum.rom,
+                            sum.peak_velocity,
+                            sum.mean_velocity,
+                            sum.peak_accel,
+                            sum.roll_min_deg,
+                            sum.roll_max_deg,
+                            sum.pitch_min_deg,
+                            sum.pitch_max_deg,
+                        );
+                    }
+                }
+
                 n += 1;
                 // Gravity-x: update at 10 Hz (BLE pushes it at 1 Hz).
                 if n % 10 == 0 {
@@ -317,11 +375,12 @@ async fn main(spawner: Spawner) -> ! {
                         (r.len(), r.pushed())
                     };
                     info!(
-                        "sampler: {} Hz, ring {}/{} samples, {} pushed, heap free {} B",
+                        "sampler: {} Hz, ring {}/{} samples, {} pushed, {} reps, heap free {} B",
                         SAMPLE_RATE_HZ,
                         len,
                         SAMPLE_RING_LEN,
                         pushed,
+                        reps,
                         esp_alloc::HEAP.free()
                     );
                 }

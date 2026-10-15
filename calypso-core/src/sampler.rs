@@ -133,6 +133,49 @@ impl<const N: usize> SampleRing<N> {
         self.get(self.len.checked_sub(1)?)
     }
 
+    /// Index of the first live sample at or after `t_ms`.
+    pub fn index_at_or_after(&self, t_ms: u32) -> Option<usize> {
+        for i in 0..self.len {
+            if self.get(i)?.t_ms >= t_ms {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Copy the samples in `[from_ms - before_ms, to_ms + after_ms]` into
+    /// `out`, oldest first. Returns how many were copied (clipped to
+    /// `out.len()` and to the live window).
+    ///
+    /// This is how a detected rep's window is handed to `rep::compute_rep`,
+    /// which needs a contiguous slice (the ring isn't contiguous once it has
+    /// wrapped).
+    pub fn copy_window(
+        &self,
+        from_ms: u32,
+        to_ms: u32,
+        before_ms: u32,
+        after_ms: u32,
+        out: &mut [Sample],
+    ) -> usize {
+        let start_ms = from_ms.saturating_sub(before_ms);
+        let end_ms = to_ms.saturating_add(after_ms);
+        let Some(mut i) = self.index_at_or_after(start_ms) else {
+            return 0;
+        };
+        let mut n = 0;
+        while n < out.len() && i < self.len {
+            let Some(s) = self.get(i) else { break };
+            if s.t_ms > end_ms {
+                break;
+            }
+            out[n] = *s;
+            n += 1;
+            i += 1;
+        }
+        n
+    }
+
     /// Iterate live samples, oldest first.
     pub fn for_each(&self, mut f: impl FnMut(usize, &Sample)) {
         for i in 0..self.len {

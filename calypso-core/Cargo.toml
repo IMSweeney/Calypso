@@ -11,3 +11,9 @@ description  = "Platform-independent logic for the Calypso firmware; unit-testab
 trouble-host = { version = "0.5.0", features = ["gatt"] }
 embassy-sync = "0.7.2"
 embedded-storage = "0.3.1"
+# no_std math (sqrt/atan2/asin) for the rep trace integration.
+libm = "0.2"
+
+[dev-dependencies]
+# used by the synthetic fixture generators in tests/
+libm = "0.2"

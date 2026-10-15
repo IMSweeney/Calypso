@@ -210,13 +210,22 @@ Two tiers:
       to a 10 Hz update, BLE still notifies at 1 Hz)
 
 ### 3. Rep detector (`calypso-core`, host-testable)
-- [ ] State machine: IDLE → MOVING → SETTLE → ZUPT → close rep
-- [ ] World-frame trace: rotate accel by quaternion, ZUPT-anchored
-      integration → displacement(t)
-- [ ] Summary stats: duration, ROM, peak/mean velocity, peak accel,
+- [x] State machine: IDLE → MOVING → SETTLE → ZUPT → close rep
+      (`rep::Detector`; thresholds are constants in `calypso-core/src/rep.rs`)
+- [x] World-frame trace: rotate accel by quaternion, ZUPT-anchored
+      integration → displacement(t) (`rep::compute_rep`; three passes, no
+      scratch buffers)
+- [x] Summary stats: duration, ROM, peak/mean velocity, peak accel,
       roll/pitch min/max
-- [ ] Host tests: synthetic rep fixtures (cadences, noise, rests), known
-      quaternion × known accel rotations, ZUPT accuracy
+- [x] Host tests: synthetic rep fixtures (cadences, noise, rests), known
+      quaternion × known accel rotations, ZUPT accuracy (constant bias is
+      rejected exactly), decimation, plus a detect→ring-slice→compute test
+- [x] Device pipeline: the sampler task runs the detector and logs each rep's
+      summary (record storage lands in §4)
+
+Tunables live in `calypso-core/src/rep.rs`: on/rest accel thresholds
+(0.60/0.25 m/s², hysteresis), debounce (100 ms on / 250 ms rest), rep length
+bounds (0.4–8 s), and a 200 ms ZUPT margin each side of the stored trace.
 
 ### 4. Data format (`calypso-core` + app)
 - [ ] Write the real `.proto` (`Sample`, `Rep`, `RepSummary`, `TraceRequest`,

@@ -73,6 +73,37 @@ fn sample_clamps_out_of_range() {
 }
 
 #[test]
+fn copy_window_slices_by_time_with_margins() {
+    let mut ring = SampleRing::<8>::new();
+    // Samples every 10 ms starting at 0, but push more than capacity so the
+    // window is also exercised after the ring has wrapped.
+    for i in 0..10u32 {
+        ring.push(sample(i * 10));
+    }
+    // Live: 2,3,4,5,6,7,8,9 (t = 20..90).
+    assert_eq!(ring.index_at_or_after(20).unwrap(), 0);
+    assert_eq!(ring.index_at_or_after(95), None);
+
+    let mut out = [Sample::ZERO; 16];
+    let n = ring.copy_window(50, 70, 10, 10, &mut out);
+    assert_eq!(n, 5); // 40, 50, 60, 70, 80
+    let times: Vec<u32> = out[..n].iter().map(|s| s.t_ms).collect();
+    assert_eq!(times, vec![40, 50, 60, 70, 80]);
+
+    // Clipped by the output buffer.
+    let mut small = [Sample::ZERO; 2];
+    let n = ring.copy_window(50, 70, 10, 10, &mut small);
+    assert_eq!(n, 2);
+    assert_eq!(small[0].t_ms, 40);
+
+    // Clipped by the ring's oldest sample.
+    let mut out = [Sample::ZERO; 16];
+    let n = ring.copy_window(20, 80, 200, 200, &mut out);
+    assert_eq!(n, 8);
+    assert_eq!(out[0].t_ms, 20);
+}
+
+#[test]
 fn sample_is_18_bytes() {
     assert_eq!(core::mem::size_of::<Sample>(), Sample::BYTE_SIZE);
 }
