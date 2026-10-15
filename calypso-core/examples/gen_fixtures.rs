@@ -148,7 +148,24 @@ fn main() -> std::io::Result<()> {
         write(&dir, "truncated.pblog", &full[..cut])?;
     }
 
-    // 7. An empty dump: no reps at all (fresh device, or a wrap that erased
+    // 7. A squat where the bar dips to one side: the vertical travel is the
+    //    same, but the path bows, which is what the 3D plot is for.
+    {
+        let (samples, _) = fixtures::dipped_squat_set(2, 0.35);
+        let reps = fixtures::detect_and_trace(&samples, 512);
+        assert_eq!(reps.len(), 2, "the dip should not stop the detector");
+        let mut dump = Vec::new();
+        for (i, (summary, trace)) in reps.iter().enumerate() {
+            let xs: Vec<f32> = trace.iter().map(|p| p.pos[0]).collect();
+            let range = xs.iter().cloned().fold(f32::MIN, f32::max)
+                - xs.iter().cloned().fold(f32::MAX, f32::min);
+            assert!(range > 0.05, "the dipped path should bow sideways: {range} m");
+            push_rep(&mut dump, &mut rec_buf, (i + 1) as u32, summary, trace).unwrap();
+        }
+        write(&dir, "dip-left.pblog", &dump)?;
+    }
+
+    // 8. An empty dump: no reps at all (fresh device, or a wrap that erased
     //    everything). The list and plot must handle it.
     write(&dir, "empty.pblog", &[])?;
 

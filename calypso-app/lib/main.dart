@@ -1,10 +1,11 @@
 // Calypso client — entry point.
 //
-// Placeholder while the data layer is built: the plot and the rep list arrive
-// with their phases (see docs/app/plan.md). Phase 1 only needs the app to
-// build and the fixture decoding to be tested.
+// Phase 3: a fixture-driven screen that plots one rep in 3D. The rep list,
+// sessions and BLE live in later phases (see docs/app/plan.md).
 
 import 'package:flutter/material.dart';
+
+import 'ui/plot_screen.dart';
 
 void main() => runApp(const CalypsoApp());
 
@@ -15,17 +16,6 @@ class CalypsoApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
         title: 'Calypso',
         theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
-        home: const Scaffold(
-          body: Center(
-            child: Padding(
-              padding: EdgeInsets.all(24),
-              child: Text(
-                'Calypso\n\nData layer in progress: rep summaries and the 3D bar '
-                'path plot are the next phases.',
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ),
-        ),
+        home: const PlotScreen(),
       );
 }

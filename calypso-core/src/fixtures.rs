@@ -175,3 +175,23 @@ pub fn read_dump(dump: &[u8]) -> (Vec<&[u8]>, bool) {
     let truncated = pos != dump.len();
     (records, truncated)
 }
+
+/// A squat set where the bar drifts to one side on the way down — the case the
+/// 3D plot exists to show.
+///
+/// Built by tilting the lateral acceleration on a normal squat set, so the path
+/// bows: the vertical travel is unchanged (so the detector and the summary are
+/// unaffected) but the trace visibly leaves the vertical plane.
+pub fn dipped_squat_set(reps: usize, lateral_fraction: f32) -> (Vec<Sample>, Vec<RepSpan>) {
+    let (mut samples, spans) = squat_set(reps, 1500, 800, 0.4);
+    for s in samples.iter_mut() {
+        // Lateral push proportional to the *magnitude* of the vertical
+        // acceleration, so it always pushes the same way: the bar drifts left
+        // through the whole rep instead of returning to centre. That leaves the
+        // descent and the ascent as two distinct paths — a bow you can see —
+        // rather than one straight line traversed twice.
+        let lateral = (f32::from(s.accel[2].abs()) * lateral_fraction) as i16;
+        s.accel[0] = lateral;
+    }
+    (samples, spans)
+}
