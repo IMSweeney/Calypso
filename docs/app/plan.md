@@ -1,7 +1,7 @@
 # Plan: Calypso iOS App (client)
 
-Status: **in progress** — phase 1 done (scaffold, fixtures, decoding);
-phase 2 (protocol and sync client) is next.
+Status: **in progress** — phases 1 and 2 done (scaffold, fixtures, decoding,
+sync client); phase 3 (plot model and 3D renderer) is next.
 
 Design lives in [`README.md`](README.md) (architecture). Device side and the
 wire protocol: [`docs/rep-tracking/README.md`](../rep-tracking/README.md).
@@ -171,11 +171,29 @@ Connection/permission UX, empty and error states, sync progress, the
       deliberately checked in; fixtures are checked in (they are test data)
 
 ### 2. Protocol and sync client
-- [ ] Record + chunk decoding into `TracePoint` / `RepSummary`
-- [ ] Trace reassembly by chunk index (idempotent, out-of-order tolerant)
-- [ ] Summary cursor + incremental sync, wrap re-sync by oldest id
-- [ ] Trace request with timeout -> "trace unavailable" state
-- [ ] Fake transport + scripted tests for all of the above
+- [x] Record + chunk decoding into `TracePoint` / `RepSummary`
+      (`lib/model/rep.dart`, `lib/protocol/pblog.dart`)
+- [x] Trace reassembly by chunk index, idempotent and out-of-order tolerant
+      (`lib/sync/trace_reassembly.dart`, with `missingIndices()` so a gap can be
+      re-requested)
+- [x] Summary merge by rep id + incremental sync, wrap-safe: the client is the
+      archive of record and keeps reps the device has forgotten
+      (`lib/sync/sync_client.dart`)
+- [x] Trace request with timeout -> `TraceResult.unavailable` (a forgotten trace
+      is an expected outcome after a wrap, not a failure)
+- [x] `FixtureTransport` over a `.pblog`, with paced replay for the streaming UI
+- [x] Scripted fake transport + tests (`test/sync_client_test.dart`,
+      `test/trace_reassembly_test.dart`)
+
+**Found while building this (device-side change needed for phase 5):** a streamed
+trace has **no end-of-stream signal**. In the log, chunks hold 48 points and the
+summary's `chunk_count` describes them, but over BLE the device re-chunks to
+~4 points per notification, so `chunk_count` no longer matches the number of
+chunks the client should expect, and the client cannot tell "chunks still
+coming" from "the device has forgotten this rep and will stay silent". The fix
+is a protocol addition — either `uint32 total_chunks` on `TraceChunk` (set only
+when streaming) or a status message sent when a stream starts/ends. Until then
+the BLE transport has to guess from `trace_len` and the known BLE chunk size.
 
 ### 3. Plot model and 3D renderer
 - [ ] Axis fit to a minimum-size cube
@@ -193,6 +211,8 @@ Connection/permission UX, empty and error states, sync progress, the
 - [ ] Widget tests driven by `FixtureTransport`
 
 ### 5. BLE transport
+- [ ] Protocol: end-of-stream signal for a streamed trace (`TraceChunk.total_chunks`
+      or a status message) — see the note in phase 2
 - [ ] Scan/connect/permission flow
 - [ ] Subscribe to `0xca21`, write `0xca22`, collect `0xca23`
 - [ ] Reconnect + re-sync behaviour, connection state in the UI

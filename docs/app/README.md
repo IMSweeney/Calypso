@@ -75,8 +75,9 @@ Two rules hold the testability story together:
 calypso-app/
   lib/
     main.dart
+    model/          domain types (RepSummary, TracePoint) converted from protobuf
     protocol/       generated message classes + record/chunk decoding
-    sync/           summary cursor, trace reassembly, session grouping
+    sync/           sync client, trace reassembly, session grouping
     transport/      RepTransport + fixture / ble / recording implementations
     plot/           plot model (pure) + CustomPainter renderer + interactions
     state/          change notifiers: rep list, selection, connection
@@ -152,8 +153,9 @@ Plot model (pure Dart):
   size, so a small rep is not stretched into a misleading shape.
 - **Decimation** — a trace can be up to 512 points; the model picks a stride
   that keeps rendering cheap on low-end devices without hiding the shape.
-- **Colour mapping** — velocity magnitude → colour ramp, so slow (grinding) and
-  fast (snappy) parts of the rep read differently.
+- **Colour mapping** — speed → colour ramp, so slow (grinding) and fast (snappy)
+  parts of the rep read differently. Derived client-side from consecutive
+  positions: the trace carries no velocity field.
 - **Camera** — orbit (azimuth, elevation, distance) plus a "fit" command that
   frames the path's bounding box; projection to 2D and back, so hit-testing a
   scrubbed position is testable without a canvas.

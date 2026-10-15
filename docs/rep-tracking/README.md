@@ -253,6 +253,13 @@ encoded record always fits one 4 KB erase sector (the log's record limit is
 - [x] On-demand `TraceRequest{rep_id, all_chunks, chunk_index}` → chunked
       `TraceChunk` notify stream
 
+**Known gap (found while writing the client's sync layer):** a streamed trace
+has no end-of-stream signal. In the log, chunks hold 48 points and the summary's
+`chunk_count` describes them, but BLE re-chunks to ~4 points per notification,
+so the client can't tell "more chunks coming" from "this rep is gone and the
+device will stay silent". Needs either `uint32 total_chunks` on `TraceChunk`
+(set only when streaming) or a status message at stream start/end.
+
 Flow control: notifications are MTU-bound, so traces are re-chunked on the
 way out at `sync::BLE_CHUNK_SAMPLES` (4) points per notification (~200 bytes,
 inside a 247-byte MTU's 244-byte payload). The app reassembles by `index`;
