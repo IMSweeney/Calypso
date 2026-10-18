@@ -25,6 +25,7 @@ import '../transport/ble_link.dart';
 import '../transport/ble_transport.dart';
 import '../transport/fixture_transport.dart';
 import '../transport/transport.dart';
+import '../widgets/calibration_hint.dart';
 import '../widgets/connection_status.dart';
 import 'plot_screen.dart';
 
@@ -192,36 +193,49 @@ class _RepListScreenState extends State<RepListScreen> {
           const SizedBox(width: 8),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : archive == null || archive.reps.isEmpty
-              ? Center(child: Text(_error ?? 'No reps yet'))
-              : ListView.separated(
-                  itemCount: archive.reps.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    // Newest first: the rep you just did is the interesting one.
-                    final stored = archive.reps[archive.reps.length - 1 - index];
-                    final s = stored.summary;
-                    return ListTile(
-                      title: Text('Rep ${uuidShort(s.uuid)} · ${_formatTime(stored.receivedAt)}'),
-                      subtitle: Text(
-                        '${(s.durationMs / 1000).toStringAsFixed(1)} s · '
-                        'ROM ${s.rom.toStringAsFixed(2)} m · '
-                        'peak ${s.peakVelocity.toStringAsFixed(2)} m/s · '
-                        'tilt ${s.rollRangeDeg.toStringAsFixed(1)}° / '
-                        '${s.pitchRangeDeg.toStringAsFixed(1)}°'
-                        '${s.decimated ? ' · decimated' : ''}',
+      // The hint sits above the list, not inside it: an uncalibrated device is
+      // exactly the case where the list is empty, and "No reps yet" on its own
+      // looks like the app is broken rather than waiting for the IMU.
+      body: Column(
+        children: [
+          CalibrationHint(calibration: _ble.calibration, status: _ble.status),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : archive == null || archive.reps.isEmpty
+                    ? Center(child: Text(_error ?? 'No reps yet'))
+                    : ListView.separated(
+                        itemCount: archive.reps.length,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          // Newest first: the rep you just did is the
+                          // interesting one.
+                          final stored = archive.reps[archive.reps.length - 1 - index];
+                          final s = stored.summary;
+                          return ListTile(
+                            title: Text(
+                                'Rep ${uuidShort(s.uuid)} · ${_formatTime(stored.receivedAt)}'),
+                            subtitle: Text(
+                              '${(s.durationMs / 1000).toStringAsFixed(1)} s · '
+                              'ROM ${s.rom.toStringAsFixed(2)} m · '
+                              'peak ${s.peakVelocity.toStringAsFixed(2)} m/s · '
+                              'tilt ${s.rollRangeDeg.toStringAsFixed(1)}° / '
+                              '${s.pitchRangeDeg.toStringAsFixed(1)}°'
+                              '${s.decimated ? ' · decimated' : ''}',
+                            ),
+                            trailing: const Icon(Icons.view_in_ar_outlined),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    PlotScreen(store: archive, repUuid: s.uuid),
+                              ),
+                            ),
+                          );
+                        },
                       ),
-                      trailing: const Icon(Icons.view_in_ar_outlined),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => PlotScreen(store: archive, repUuid: s.uuid),
-                        ),
-                      ),
-                    );
-                  },
-                ),
+          ),
+        ],
+      ),
     );
   }
 }

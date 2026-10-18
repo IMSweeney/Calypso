@@ -102,7 +102,18 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         };
 
         match head {
-            None => log.format()?,
+            // A ring with no valid header anywhere: initialise it in place.
+            //
+            // Deliberately *not* `format()`, which erases all 624 sectors of the
+            // 2.5 MB partition: there is nothing to invalidate (no sector has a
+            // valid header), and `advance_sector` erases each sector as the ring
+            // reaches it, so the rest is erased on demand. Erasing it all here
+            // would be ~19 s of flash traffic in the middle of boot — on a chip
+            // where the other core has to be parked for every sector.
+            None => {
+                log.flash.erase(0, log.sector_size).map_err(Error::Flash)?;
+                log.write_sector_header()?;
+            }
             Some((head, epoch)) => {
                 log.head = head;
                 log.head_epoch = epoch;

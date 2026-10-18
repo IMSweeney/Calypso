@@ -50,8 +50,12 @@ fn rep_survives_the_round_trip_through_flash() {
 
     // Remount (as the device does at boot) and read it all back.
     let mut log = mount(&mut flash);
+    // Scratch the caller owns: the decoded record is ~2 KB, so it is not built
+    // inside the scan (see `pb::decode_record_into`).
+    let mut rec = calypso_core::pb::msg::RepRecord::default();
     let mut summaries_back = Vec::new();
-    store::for_each_summary(&mut log, &mut buf, |s| summaries_back.push(s)).unwrap();
+    store::for_each_summary(&mut log, &mut buf, &mut rec, |s| summaries_back.push(s.clone()))
+        .unwrap();
     assert_eq!(summaries_back.len(), 3, "all three summaries should be in the log");
     for (i, s) in summaries_back.iter().enumerate() {
         let (rep_uuid, want, _) = &stored[i];
@@ -67,7 +71,7 @@ fn rep_survives_the_round_trip_through_flash() {
     for (rep_uuid, _, want_trace) in &stored {
         let mut storage = vec![TracePoint::ZERO; 512];
         let mut out = TraceBuf::new(&mut storage);
-        let n = store::read_trace(&mut log, &mut buf, *rep_uuid, &mut out).unwrap();
+        let n = store::read_trace(&mut log, &mut buf, &mut rec, *rep_uuid, &mut out).unwrap();
         assert_eq!(n, want_trace.len(), "trace length for {rep_uuid:?}");
         for (got, want) in out.iter().zip(want_trace.iter()) {
             // Timestamps are stored relative to the rep's first point.
@@ -82,7 +86,10 @@ fn rep_survives_the_round_trip_through_flash() {
     // A rep that isn't in the log reads back empty.
     let mut storage = vec![TracePoint::ZERO; 512];
     let mut out = TraceBuf::new(&mut storage);
-    assert_eq!(store::read_trace(&mut log, &mut buf, fixture_uuid(99), &mut out).unwrap(), 0);
+    assert_eq!(
+        store::read_trace(&mut log, &mut buf, &mut rec, fixture_uuid(99), &mut out).unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -110,9 +117,10 @@ fn oldest_reps_fall_off_when_the_ring_wraps() {
     }
 
     let mut log = mount(&mut flash);
+    let mut rec = calypso_core::pb::msg::RepRecord::default();
     let mut surviving = Vec::new();
-    store::for_each_summary(&mut log, &mut buf, |s| {
-        surviving.push(calypso_core::pb::summary_uuid(&s).unwrap())
+    store::for_each_summary(&mut log, &mut buf, &mut rec, |s| {
+        surviving.push(calypso_core::pb::summary_uuid(s).unwrap())
     })
     .unwrap();
 

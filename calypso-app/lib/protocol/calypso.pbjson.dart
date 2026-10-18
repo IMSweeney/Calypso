@@ -201,6 +201,15 @@ const SyncMessage$json = {
       '9': 0,
       '10': 'status'
     },
+    {
+      '1': 'calibration',
+      '3': 4,
+      '4': 1,
+      '5': 11,
+      '6': '.calypso.CalibrationStatus',
+      '9': 0,
+      '10': 'calibration'
+    },
   ],
   '8': [
     {'1': 'body'},
@@ -211,7 +220,27 @@ const SyncMessage$json = {
 final $typed_data.Uint8List syncMessageDescriptor = $convert.base64Decode(
     'CgtTeW5jTWVzc2FnZRIvCgdzdW1tYXJ5GAEgASgLMhMuY2FseXBzby5SZXBTdW1tYXJ5SABSB3'
     'N1bW1hcnkSKwoFdHJhY2UYAiABKAsyEy5jYWx5cHNvLlRyYWNlQ2h1bmtIAFIFdHJhY2USLQoG'
-    'c3RhdHVzGAMgASgLMhMuY2FseXBzby5TeW5jU3RhdHVzSABSBnN0YXR1c0IGCgRib2R5');
+    'c3RhdHVzGAMgASgLMhMuY2FseXBzby5TeW5jU3RhdHVzSABSBnN0YXR1cxI+CgtjYWxpYnJhdG'
+    'lvbhgEIAEoCzIaLmNhbHlwc28uQ2FsaWJyYXRpb25TdGF0dXNIAFILY2FsaWJyYXRpb25CBgoE'
+    'Ym9keQ==');
+
+@$core.Deprecated('Use calibrationStatusDescriptor instead')
+const CalibrationStatus$json = {
+  '1': 'CalibrationStatus',
+  '2': [
+    {'1': 'sys', '3': 1, '4': 1, '5': 13, '10': 'sys'},
+    {'1': 'accel', '3': 2, '4': 1, '5': 13, '10': 'accel'},
+    {'1': 'gyro', '3': 3, '4': 1, '5': 13, '10': 'gyro'},
+    {'1': 'mag', '3': 4, '4': 1, '5': 13, '10': 'mag'},
+    {'1': 'ready', '3': 5, '4': 1, '5': 8, '10': 'ready'},
+  ],
+};
+
+/// Descriptor for `CalibrationStatus`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List calibrationStatusDescriptor = $convert.base64Decode(
+    'ChFDYWxpYnJhdGlvblN0YXR1cxIQCgNzeXMYASABKA1SA3N5cxIUCgVhY2NlbBgCIAEoDVIFYW'
+    'NjZWwSEgoEZ3lybxgDIAEoDVIEZ3lybxIQCgNtYWcYBCABKA1SA21hZxIUCgVyZWFkeRgFIAEo'
+    'CFIFcmVhZHk=');
 
 @$core.Deprecated('Use syncStatusDescriptor instead')
 const SyncStatus$json = {

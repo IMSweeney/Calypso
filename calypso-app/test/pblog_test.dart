@@ -10,6 +10,8 @@ import 'dart:typed_data';
 import 'package:calypso/protocol/pblog.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/test_uuid.dart';
+
 Uint8List fixture(String name) =>
     File('assets/fixtures/$name.pblog').readAsBytesSync();
 
@@ -23,17 +25,19 @@ void main() {
 
     for (var i = 0; i < summaries.length; i++) {
       final summary = summaries[i];
-      expect(summary.repId, i + 1, reason: 'rep ids are numbered from 1');
+      // The fixtures carry the generator's deterministic uuids, so each rep in
+      // the set can be named by its index.
+      expect(summaryUuid(summary), u(i), reason: 'rep $i carries its generator uuid');
       expect(summary.decimated, isFalse);
 
       // Each summary is followed by the chunks it promises, in order, holding
       // exactly the trace length it reports.
-      final chunks = traceChunksFor(result.records, summary.repId);
+      final chunks = traceChunksFor(result.records, u(i));
       expect(chunks.length, summary.chunkCount);
       var points = 0;
       for (var c = 0; c < chunks.length; c++) {
         expect(chunks[c].index, c);
-        expect(chunks[c].repId, summary.repId);
+        expect(chunkUuid(chunks[c]), u(i));
         points += chunks[c].samples.length;
       }
       expect(points, summary.traceLen);
@@ -47,7 +51,7 @@ void main() {
     }
 
     // Chunk timestamps are relative to the rep's first trace point.
-    final first = traceChunksFor(result.records, 1).first;
+    final first = traceChunksFor(result.records, u(0)).first;
     expect(first.samples.first.tOffsetMs, 0);
     expect(first.samples.last.tOffsetMs, greaterThan(0));
 
@@ -67,10 +71,11 @@ void main() {
     expect(result.truncated, isFalse);
 
     final summary = summariesOf(result.records).single;
+    expect(summaryUuid(summary), u(1));
     expect(summary.traceLen, 1);
     expect(summary.chunkCount, 1);
 
-    final chunks = traceChunksFor(result.records, summary.repId);
+    final chunks = traceChunksFor(result.records, u(1));
     expect(chunks.single.samples.length, 1);
   });
 
@@ -78,10 +83,11 @@ void main() {
     final result = readDump(fixture('long-decimated'));
     final summary = summariesOf(result.records).single;
 
+    expect(summaryUuid(summary), u(1));
     expect(summary.decimated, isTrue);
     expect(summary.traceLen, 512);
 
-    final chunks = traceChunksFor(result.records, summary.repId);
+    final chunks = traceChunksFor(result.records, u(1));
     final points = chunks.fold<int>(0, (n, c) => n + c.samples.length);
     expect(points, 512);
 
@@ -94,9 +100,9 @@ void main() {
     final result = readDump(fixture('ring-dropped'));
     final summary = summariesOf(result.records).single;
 
-    expect(summary.repId, 7);
+    expect(summaryUuid(summary), u(7));
     expect(summary.chunkCount, 3, reason: 'the device still claims chunks');
-    expect(traceChunksFor(result.records, 7), isEmpty,
+    expect(traceChunksFor(result.records, u(7)), isEmpty,
         reason: 'the app must show "trace unavailable", not crash');
   });
 
@@ -105,11 +111,11 @@ void main() {
     expect(result.truncated, isFalse);
 
     final summary = summariesOf(result.records).single;
-    expect(summary.repId, 99);
+    expect(summaryUuid(summary), u(99));
     expect(summary.traceLen, 4);
     expect(summary.decimated, isTrue);
 
-    final samples = traceChunksFor(result.records, 99).single.samples;
+    final samples = traceChunksFor(result.records, u(99)).single.samples;
     expect(samples.length, 4);
     expect(samples[0].ax, -32768); // i16::MIN survives the sint32 encoding
     expect(samples[0].qw, -32768);
@@ -122,7 +128,7 @@ void main() {
     // The cut fixture is one rep: a summary plus four chunks, with the last
     // frame clipped, so exactly four records survive.
     expect(result.records.length, 4);
-    expect(summariesOf(result.records).single.repId, 1);
+    expect(summaryUuid(summariesOf(result.records).single), u(0));
   });
 
   test('an empty dump is valid and empty', () {

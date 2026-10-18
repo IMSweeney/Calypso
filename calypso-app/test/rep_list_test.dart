@@ -9,6 +9,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:calypso/model/uuid.dart';
 import 'package:calypso/state/ble_status.dart';
 import 'package:calypso/store/memory_archive.dart';
 import 'package:calypso/transport/ble_transport.dart';
@@ -20,7 +21,9 @@ import 'package:calypso/ui/rep_list_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/calibration.dart';
 import 'support/fake_ble_link.dart';
+import 'support/test_uuid.dart';
 
 /// Fixture bytes, read synchronously: no async I/O in the widget path.
 FixtureTransport fixtureTransport(String name) =>
@@ -42,6 +45,7 @@ Future<void> pumpList(
 
 void main() {
   _bleWiring();
+  _calibrationHint();
 
   testWidgets('it archives the source and lists the reps newest first',
       (tester) async {
@@ -51,13 +55,15 @@ void main() {
     expect(find.textContaining('Rep'), findsNWidgets(3));
     expect(find.text('+3 synced'), findsOneWidget);
 
-    // Newest first: rep 3 is the top row and rep 1 the bottom.
+    // Newest first: the fixture's last rep is the top row, its first the bottom.
+    // Rows are labelled with a short uuid (the device's rep identity), not a
+    // rep number.
     final titles = tester
         .widgetList<ListTile>(find.byType(ListTile))
         .map((t) => (t.title as Text).data!)
         .toList();
-    expect(titles.first, startsWith('Rep 3 ·'));
-    expect(titles.last, startsWith('Rep 1 ·'));
+    expect(titles.first, startsWith('Rep ${uuidShort(u(2))} ·'));
+    expect(titles.last, startsWith('Rep ${uuidShort(u(0))} ·'));
 
     // Each row carries the numbers, and a timestamp (receipt time: the device
     // has no clock of its own).
@@ -93,11 +99,11 @@ void main() {
   testWidgets('tapping a rep opens its plot', (tester) async {
     await pumpList(tester, fixture: 'synthetic-squat', archive: MemoryArchive());
 
-    await tester.tap(find.textContaining('Rep 1 ·'));
+    await tester.tap(find.textContaining('Rep ${uuidShort(u(0))} ·'));
     await tester.pumpAndSettle();
 
     expect(find.byType(PlotScreen), findsOneWidget);
-    expect(find.text('Rep 1'), findsOneWidget);
+    expect(find.text('Rep ${uuidShort(u(0))}'), findsOneWidget);
     expect(find.textContaining('peak v'), findsOneWidget);
     expect(find.textContaining('ROM'), findsWidgets);
   });
@@ -106,8 +112,8 @@ void main() {
       (tester) async {
     await pumpList(tester, fixture: 'ring-dropped', archive: MemoryArchive());
 
-    expect(find.textContaining('Rep 7'), findsOneWidget);
-    await tester.tap(find.textContaining('Rep 7 ·'));
+    expect(find.textContaining('Rep ${uuidShort(u(7))}'), findsOneWidget);
+    await tester.tap(find.textContaining('Rep ${uuidShort(u(7))} ·'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('no trace in the archive'), findsOneWidget);
@@ -123,6 +129,83 @@ void main() {
 
     await pumpList(tester, fixture: 'empty', archive: archive, source: fixtureTransport('empty'));
     expect(find.textContaining('Rep'), findsNWidgets(3));
+  });
+}
+
+/// The calibration hint, driven end to end: a notification from the device moves
+/// the UI, and the hint goes away when there is nothing to say.
+void _calibrationHint() {
+  /// Pumps the list screen over a fake link and connects it, as `_bleWiring`
+  /// does. Returns the link, for scripting the device's notifications.
+  Future<FakeBleLink> pumpConnected(WidgetTester tester) async {
+    final link = FakeBleLink();
+    final ble = BleTransport(link, traceTimeout: const Duration(milliseconds: 50));
+
+    await tester.pumpWidget(MaterialApp(
+      home: RepListScreen(archive: MemoryArchive(), ble: ble, fixture: ''),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Connect'));
+    await tester.pump();
+    link.seeDevice('device-1', 'Calypso');
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    expect(find.text('Connected'), findsOneWidget);
+    return link;
+  }
+
+  testWidgets('an uncalibrated device explains itself, then stops', (tester) async {
+    final link = await pumpConnected(tester);
+
+    // Connected, but no reading yet: nothing to say.
+    expect(find.textContaining('IMU not calibrated'), findsNothing);
+
+    link.notify(CalypsoGatt.summary, calibrationMessage(sys: 1, accel: 1, gyro: 2));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('IMU not calibrated'), findsOneWidget);
+    expect(find.textContaining('rep recording is paused'), findsOneWidget);
+    // The words are the point: they say what to do with the bar, and the levels
+    // say which sensor is behind.
+    expect(find.textContaining('still on the rack'), findsOneWidget);
+    expect(find.textContaining('accel 1/3'), findsOneWidget);
+    expect(find.textContaining('mag 0/3'), findsOneWidget);
+
+    // The IMU finishes calibrating: the hint goes away and the list has the
+    // screen to itself again.
+    link.notify(CalypsoGatt.summary, calibrationMessage());
+    await tester.pumpAndSettle();
+    expect(find.textContaining('IMU not calibrated'), findsNothing);
+  });
+
+  testWidgets('a dropped connection takes a stale hint with it', (tester) async {
+    final link = await pumpConnected(tester);
+
+    link.notify(CalypsoGatt.summary, calibrationMessage(sys: 1, accel: 1, gyro: 1));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('IMU not calibrated'), findsOneWidget);
+
+    // The levels describe the connection. Saying "rest the bar still" about a
+    // device we are no longer talking to would be telling the user to fix
+    // something we cannot see.
+    link.dropConnection('out of range');
+    await tester.pumpAndSettle();
+    expect(find.textContaining('IMU not calibrated'), findsNothing);
+  });
+
+  testWidgets('nothing is claimed before connecting', (tester) async {
+    final link = FakeBleLink();
+    final ble = BleTransport(link, traceTimeout: const Duration(milliseconds: 50));
+
+    await tester.pumpWidget(MaterialApp(
+      home: RepListScreen(archive: MemoryArchive(), ble: ble, fixture: ''),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('IMU not calibrated'), findsNothing);
+    expect(find.text('No reps yet'), findsOneWidget);
   });
 }
 

@@ -7,8 +7,40 @@
 //! table is platform-independent.
 
 use calypso_core::ble::{
-    build_gatt_table, BleVec, BuildError, GattTable, GATT_TABLE_MAX, SYNC_MSG_MAX, SYNC_REQUEST_MAX,
+    build_gatt_table, BleVec, BuildError, GattTable, GATT_TABLE_MAX, SYNC_CHUNK_UUID,
+    SYNC_REQUEST_UUID, SYNC_SERVICE_UUID, SYNC_SUMMARY_UUID, GRAVITY_SERVICE_UUID,
+    GRAVITY_X_UUID, SYNC_MSG_MAX, SYNC_REQUEST_MAX,
 };
+
+/// The text a client sees for a GATT UUID: the stored bytes, reversed.
+///
+/// **Reversed**, because that is what CoreBluetooth reported for a known input.
+/// The firmware logs the arrays it uses at boot, and with `00 00 ca 20 …` the
+/// client reported `408813df-…b020ca0000`; with the wire-order array it reports
+/// `0000ca20-…`. Advertising behaves the same way — see `tests/advertising.rs`.
+fn canonical(uuid: &Uuid) -> String {
+    let b = uuid.as_raw();
+    assert_eq!(b.len(), 16, "only the 128-bit UUIDs are checked here");
+    let hex: Vec<String> = b.iter().rev().map(|x| format!("{x:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        hex[0..4].join(""),
+        hex[4..6].join(""),
+        hex[6..8].join(""),
+        hex[8..10].join(""),
+        hex[10..16].join("")
+    )
+}
+
+#[test]
+fn uuids_are_what_a_client_matches_against() {
+    assert_eq!(canonical(&SYNC_SERVICE_UUID), "0000ca20-b0cd-11ec-871f-d45ddf138840");
+    assert_eq!(canonical(&SYNC_SUMMARY_UUID), "0000ca21-b0cd-11ec-871f-d45ddf138840");
+    assert_eq!(canonical(&SYNC_REQUEST_UUID), "0000ca22-b0cd-11ec-871f-d45ddf138840");
+    assert_eq!(canonical(&SYNC_CHUNK_UUID), "0000ca23-b0cd-11ec-871f-d45ddf138840");
+    assert_eq!(canonical(&GRAVITY_SERVICE_UUID), "0000ca10-b0cd-11ec-871f-d45ddf138840");
+    assert_eq!(canonical(&GRAVITY_X_UUID), "0000ca11-b0cd-11ec-871f-d45ddf138840");
+}
 use calypso_core::{decode_device_name, encode_device_name, DEVICE_NAME_MAX};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use trouble_host::prelude::*;

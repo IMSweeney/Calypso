@@ -849,7 +849,7 @@ class TraceRequest extends $pb.GeneratedMessage {
   void clearChunkIndex() => $_clearField(3);
 }
 
-enum SyncMessage_Body { summary, trace, status, notSet }
+enum SyncMessage_Body { summary, trace, status, calibration, notSet }
 
 /// Everything sent device -> app on the sync service.
 class SyncMessage extends $pb.GeneratedMessage {
@@ -857,11 +857,13 @@ class SyncMessage extends $pb.GeneratedMessage {
     RepSummary? summary,
     TraceChunk? trace,
     SyncStatus? status,
+    CalibrationStatus? calibration,
   }) {
     final result = SyncMessage._();
     if (summary != null) result.summary = summary;
     if (trace != null) result.trace = trace;
     if (status != null) result.status = status;
+    if (calibration != null) result.calibration = calibration;
     return result;
   }
 
@@ -878,19 +880,22 @@ class SyncMessage extends $pb.GeneratedMessage {
     1: SyncMessage_Body.summary,
     2: SyncMessage_Body.trace,
     3: SyncMessage_Body.status,
+    4: SyncMessage_Body.calibration,
     0: SyncMessage_Body.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SyncMessage',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
       createEmptyInstance: SyncMessage.$_createMessage)
-    ..oo(0, [1, 2, 3])
+    ..oo(0, [1, 2, 3, 4])
     ..aOM<RepSummary>(1, _omitFieldNames ? '' : 'summary',
         subBuilder: RepSummary.$_createMessage)
     ..aOM<TraceChunk>(2, _omitFieldNames ? '' : 'trace',
         subBuilder: TraceChunk.$_createMessage)
     ..aOM<SyncStatus>(3, _omitFieldNames ? '' : 'status',
         subBuilder: SyncStatus.$_createMessage)
+    ..aOM<CalibrationStatus>(4, _omitFieldNames ? '' : 'calibration',
+        subBuilder: CalibrationStatus.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -918,10 +923,12 @@ class SyncMessage extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
   @$pb.TagNumber(3)
+  @$pb.TagNumber(4)
   SyncMessage_Body whichBody() => _SyncMessage_BodyByTag[$_whichOneof(0)]!;
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
   @$pb.TagNumber(3)
+  @$pb.TagNumber(4)
   void clearBody() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
@@ -956,6 +963,137 @@ class SyncMessage extends $pb.GeneratedMessage {
   void clearStatus() => $_clearField(3);
   @$pb.TagNumber(3)
   SyncStatus ensureStatus() => $_ensure(2);
+
+  @$pb.TagNumber(4)
+  CalibrationStatus get calibration => $_getN(3);
+  @$pb.TagNumber(4)
+  set calibration(CalibrationStatus value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasCalibration() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearCalibration() => $_clearField(4);
+  @$pb.TagNumber(4)
+  CalibrationStatus ensureCalibration() => $_ensure(3);
+}
+
+/// The IMU's calibration state, as the BNO055 reports it in CALIB_STAT (0x35):
+/// one 0..3 level per sensor, 3 meaning fully calibrated.
+///
+/// The device has no display, so this is what the app turns into a hint. **Rep
+/// tracking needs `accel`, `gyro` and `sys` at 3**, and the device will not
+/// record a rep until they are — an uncalibrated IMU reports drift as motion, so
+/// a stored trace would be fiction. In the meantime BLE stays up: the app can
+/// connect, watch the levels climb and tell the user what to do.
+///
+/// `mag` is reported for completeness only. The BNO055 runs in IMU mode (no
+/// magnetometer, which is unreliable next to a barbell), where the magnetometer
+/// never calibrates, so it is never the thing being waited for and the app must
+/// not send the user chasing it.
+class CalibrationStatus extends $pb.GeneratedMessage {
+  factory CalibrationStatus({
+    $core.int? sys,
+    $core.int? accel,
+    $core.int? gyro,
+    $core.int? mag,
+    $core.bool? ready,
+  }) {
+    final result = CalibrationStatus._();
+    if (sys != null) result.sys = sys;
+    if (accel != null) result.accel = accel;
+    if (gyro != null) result.gyro = gyro;
+    if (mag != null) result.mag = mag;
+    if (ready != null) result.ready = ready;
+    return result;
+  }
+
+  CalibrationStatus._();
+
+  factory CalibrationStatus.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      CalibrationStatus()..mergeFromBuffer(data, registry);
+  factory CalibrationStatus.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      CalibrationStatus()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'CalibrationStatus',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
+      createEmptyInstance: CalibrationStatus.$_createMessage)
+    ..aI(1, _omitFieldNames ? '' : 'sys', fieldType: $pb.PbFieldType.OU3)
+    ..aI(2, _omitFieldNames ? '' : 'accel', fieldType: $pb.PbFieldType.OU3)
+    ..aI(3, _omitFieldNames ? '' : 'gyro', fieldType: $pb.PbFieldType.OU3)
+    ..aI(4, _omitFieldNames ? '' : 'mag', fieldType: $pb.PbFieldType.OU3)
+    ..aOB(5, _omitFieldNames ? '' : 'ready')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CalibrationStatus clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CalibrationStatus copyWith(void Function(CalibrationStatus) updates) =>
+      super.copyWith((message) => updates(message as CalibrationStatus))
+          as CalibrationStatus;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use CalibrationStatus() / CalibrationStatus.new instead')
+  static CalibrationStatus create() => CalibrationStatus._();
+  static $pb.GeneratedMessage $_createMessage() => CalibrationStatus._();
+  @$core.override
+  CalibrationStatus createEmptyInstance() => CalibrationStatus._();
+  @$core.pragma('dart2js:noInline')
+  static CalibrationStatus getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<CalibrationStatus>(
+          CalibrationStatus.$_createMessage);
+  static CalibrationStatus? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.int get sys => $_getIZ(0);
+  @$pb.TagNumber(1)
+  set sys($core.int value) => $_setUnsignedInt32(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSys() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSys() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.int get accel => $_getIZ(1);
+  @$pb.TagNumber(2)
+  set accel($core.int value) => $_setUnsignedInt32(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasAccel() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearAccel() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.int get gyro => $_getIZ(2);
+  @$pb.TagNumber(3)
+  set gyro($core.int value) => $_setUnsignedInt32(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasGyro() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearGyro() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.int get mag => $_getIZ(3);
+  @$pb.TagNumber(4)
+  set mag($core.int value) => $_setUnsignedInt32(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasMag() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearMag() => $_clearField(4);
+
+  /// True when the device will record reps. Sent rather than derived so the app
+  /// cannot disagree with the device about whether a rep is being recorded.
+  @$pb.TagNumber(5)
+  $core.bool get ready => $_getBF(4);
+  @$pb.TagNumber(5)
+  set ready($core.bool value) => $_setBool(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasReady() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearReady() => $_clearField(5);
 }
 
 class SyncStatus extends $pb.GeneratedMessage {

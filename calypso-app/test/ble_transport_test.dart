@@ -8,21 +8,25 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:calypso/model/uuid.dart';
 import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:calypso/state/ble_status.dart';
 import 'package:calypso/store/memory_archive.dart';
 import 'package:calypso/store/archive_sync.dart';
+import 'package:calypso/transport/ble_link.dart';
 import 'package:calypso/transport/ble_transport.dart';
 import 'package:calypso/transport/transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/calibration.dart';
 import 'support/fake_ble_link.dart';
+import 'support/test_uuid.dart';
 
-/// A summary as the device reports one.
-pb.RepSummary summaryProto(int repId, {int traceLen = 7}) => pb.RepSummary(
-      repId: repId,
-      tStartMs: repId * 10_000,
-      tEndMs: repId * 10_000 + 1400,
+/// A summary as the device reports one, for the rep with [uuid].
+pb.RepSummary summaryProto(String uuid, {int traceLen = 7}) => pb.RepSummary(
+      repUuid: uuidToBytes(uuid)!,
+      tStartMs: 10_000,
+      tEndMs: 11_400,
       durationMs: 1400,
       rom: 0.41,
       peakVelocity: 0.7,
@@ -36,11 +40,11 @@ pb.RepSummary summaryProto(int repId, {int traceLen = 7}) => pb.RepSummary(
       chunkCount: (traceLen / 3).ceil(),
     );
 
-Uint8List summaryMessage(int repId, {int traceLen = 7}) =>
-    pb.SyncMessage(summary: summaryProto(repId, traceLen: traceLen)).writeToBuffer();
+Uint8List summaryMessage(String uuid, {int traceLen = 7}) =>
+    pb.SyncMessage(summary: summaryProto(uuid, traceLen: traceLen)).writeToBuffer();
 
 /// A trace chunk as the device streams it: three points, and the stream total.
-Uint8List chunkMessage(int repId, int index, int total,
+Uint8List chunkMessage(String uuid, int index, int total,
     {int points = 3, int from = 0, int? totalOverride}) {
   final samples = [
     for (var i = 0; i < points; i++)
@@ -60,7 +64,7 @@ Uint8List chunkMessage(int repId, int index, int total,
   ];
   return pb.SyncMessage(
     trace: pb.TraceChunk(
-      repId: repId,
+      repUuid: uuidToBytes(uuid)!,
       index: index,
       firstTOffsetMs: from * 10,
       totalChunks: totalOverride ?? total,
@@ -94,6 +98,73 @@ void main() {
     expect(transport.status.deviceId, 'device-1');
   });
 
+  test('discovery happens between connecting and subscribing', () async {
+    // iOS and macOS resolve characteristics against the peripheral's discovered
+    // service list, so subscribing first fails as "characteristic not found" for a
+    // UUID that is right. `FakeBleLink` throws in that order too, so this test
+    // fails if the call is ever dropped from `BleTransport.connect`.
+    final link = FakeBleLink();
+    final transport = await connectedTransport(link);
+
+    expect(link.calls, [
+      'connect',
+      'discoverServices',
+      'subscribe:${CalypsoGatt.summary}',
+      'subscribe:${CalypsoGatt.traceChunk}',
+    ]);
+    expect(link.discovered, ['device-1']);
+    expect(transport.status.status, BleStatus.connected);
+    await transport.close();
+  });
+
+  test('a device that does not offer the sync service says so, and what it has',
+      () async {
+    // The plugin reports a missing characteristic as "characteristicNotFound"
+    // naming the UUID we asked for — which is correct, so the message reads as a
+    // device fault and says nothing about the device. This replaces it with what
+    // the device actually offers, which is the only thing that can tell the two
+    // apart. (A device from *older firmware* has its own, more useful message —
+    // see the next test.)
+    final link = FakeBleLink()
+      ..services = const [
+        DiscoveredService('0000fff0-0000-1000-8000-00805f9b34fb', [
+          '0000fff1-0000-1000-8000-00805f9b34fb',
+        ]),
+      ];
+
+    final transport = await connectedTransport(link);
+
+    final error = transport.status.error ?? '';
+    expect(transport.status.status, BleStatus.failed);
+    expect(link.subscribed, isEmpty, reason: 'nothing was subscribed to');
+    expect(error, contains('0000fff0-0000-1000-8000-00805f9b34fb'),
+        reason: 'what the device offers is in the message');
+    expect(error, contains('0000ca21-b0cd-11ec-871f-d45ddf138840'),
+        reason: 'and so is what we were looking for');
+  });
+
+  test('a reversed GATT tree names both causes', () async {
+    // The UUID byte order was got wrong once in the firmware, and a device flashed
+    // before that exposes its services reversed. But a *client* that cached the GATT
+    // database of an older build reports the same thing under the same address, and
+    // that cannot be fixed by reflashing — so the message names both, and the check
+    // for a stale cache comes first because it is the one that survives a reflash.
+    final link = FakeBleLink()
+      ..services = const [
+        DiscoveredService('408813df-5dd4-1f87-ec11-cdb020ca0000', [
+          '408813df-5dd4-1f87-ec11-cdb021ca0000',
+        ]),
+      ];
+
+    final transport = await connectedTransport(link);
+
+    expect(transport.status.status, BleStatus.failed);
+    expect(transport.status.error, contains('reversed'));
+    expect(transport.status.error, contains('reflash'));
+    expect(transport.status.error, contains('cached GATT database'),
+        reason: 'and the cause reflashing cannot fix');
+  });
+
   test('no device found is reported, not thrown', () async {
     final link = FakeBleLink();
     final transport = BleTransport(link, traceTimeout: const Duration(milliseconds: 50));
@@ -118,18 +189,19 @@ void main() {
   test('summaries arrive from notifications and are emitted once each', () async {
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
-    final seen = <int>[];
-    final sub = transport.watchSummaries().listen((s) => seen.add(s.repId));
+    final seen = <String>[];
+    final sub = transport.watchSummaries().listen((s) => seen.add(s.uuid));
 
-    link.notify(CalypsoGatt.summary, summaryMessage(1));
-    link.notify(CalypsoGatt.summary, summaryMessage(2));
+    link.notify(CalypsoGatt.summary, summaryMessage(u(1)));
+    link.notify(CalypsoGatt.summary, summaryMessage(u(2)));
     // A re-send (the device streams everything on each subscribe) is not
     // emitted twice, but is still known.
-    link.notify(CalypsoGatt.summary, summaryMessage(2));
+    link.notify(CalypsoGatt.summary, summaryMessage(u(2)));
     await pumpEventQueue();
 
-    expect(seen, [1, 2]);
-    expect((await transport.summaries()).map((s) => s.repId), [1, 2]);
+    expect(seen, [u(1), u(2)]);
+    // Summaries come back ordered by uuid, and uuids do not sort by rep.
+    expect((await transport.summaries()).map((s) => s.uuid), unorderedEquals([u(1), u(2)]));
     await sub.cancel();
     await transport.close();
   });
@@ -138,22 +210,22 @@ void main() {
       () async {
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
-    link.notify(CalypsoGatt.summary, summaryMessage(1, traceLen: 7));
+    link.notify(CalypsoGatt.summary, summaryMessage(u(1), traceLen: 7));
     await pumpEventQueue();
 
-    final pending = transport.trace(1);
+    final pending = transport.trace(u(1));
     await pumpEventQueue();
 
     // The request is a bare TraceRequest (not wrapped in a SyncMessage).
     final request = pb.TraceRequest.fromBuffer(link.lastWriteTo(CalypsoGatt.traceRequest));
-    expect(request.repId, 1);
+    expect(uuidFromBytes(request.repUuid), u(1));
     expect(request.allChunks, isTrue);
 
     // Chunks arrive out of order, with a duplicate, and totalChunks set.
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(1, 2, 3, points: 1, from: 6));
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(1, 0, 3, from: 0));
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(1, 0, 3, from: 0));
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(1, 1, 3, from: 3));
+    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 2, 3, points: 1, from: 6));
+    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 0, 3, from: 0));
+    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 0, 3, from: 0));
+    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 1, 3, from: 3));
     await pumpEventQueue();
 
     final trace = await pending;
@@ -167,11 +239,11 @@ void main() {
   test('a chunk for another rep is ignored', () async {
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
-    final pending = transport.trace(1);
+    final pending = transport.trace(u(1));
     await pumpEventQueue();
 
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(99, 0, 1, from: 0));
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(1, 0, 1, from: 0));
+    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(99), 0, 1, from: 0));
+    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 0, 1, from: 0));
     await pumpEventQueue();
 
     expect((await pending).length, 3);
@@ -183,10 +255,10 @@ void main() {
     // stream ended by it going quiet.
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
-    final pending = transport.trace(1);
+    final pending = transport.trace(u(1));
     await pumpEventQueue();
 
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(1, 0, 0, totalOverride: 0));
+    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 0, 0, totalOverride: 0));
     await pumpEventQueue();
 
     final trace = await pending;
@@ -199,9 +271,9 @@ void main() {
     final transport = await connectedTransport(link, traceTimeout: const Duration(milliseconds: 30));
 
     await expectLater(
-      transport.trace(7),
+      transport.trace(u(7)),
       throwsA(isA<TraceUnavailableException>()
-          .having((e) => e.repId, 'repId', 7)
+          .having((e) => e.uuid, 'uuid', u(7))
           .having((e) => e.reason, 'reason', contains('did not answer'))),
     );
     await transport.close();
@@ -210,12 +282,12 @@ void main() {
   test('a partial stream that stops times out with what it got', () async {
     final link = FakeBleLink();
     final transport = await connectedTransport(link, traceTimeout: const Duration(milliseconds: 40));
-    final pending = transport.trace(3);
+    final pending = transport.trace(u(3));
     await pumpEventQueue();
 
     // Two of five chunks, then silence: the device no longer has the rest.
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(3, 0, 5, from: 0));
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(3, 1, 5, from: 3));
+    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(3), 0, 5, from: 0));
+    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(3), 1, 5, from: 3));
     await pumpEventQueue();
 
     await expectLater(
@@ -229,7 +301,7 @@ void main() {
   test('a dropped connection fails the in-flight request', () async {
     final link = FakeBleLink();
     final transport = await connectedTransport(link, traceTimeout: const Duration(seconds: 5));
-    final pending = transport.trace(1);
+    final pending = transport.trace(u(1));
     await pumpEventQueue();
 
     // Attach the expectation *before* the drop: otherwise the request completes
@@ -248,16 +320,52 @@ void main() {
   test('a trace already received is not re-fetched', () async {
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
-    final first = transport.trace(1);
+    final first = transport.trace(u(1));
     await pumpEventQueue();
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(1, 0, 1, from: 0));
+    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 0, 1, from: 0));
     await first;
 
     final writesBefore = link.writes.length;
-    final second = await transport.trace(1);
+    final second = await transport.trace(u(1));
     expect(second.length, 3);
     expect(link.writes.length, writesBefore, reason: 'served from cache');
     await transport.close();
+  });
+
+  test('calibration arrives from the device and leaves with the connection', () async {
+    final link = FakeBleLink();
+    final transport = await connectedTransport(link);
+
+    // Connected, but the device has not said anything yet: the hint must not
+    // invent a state it has not been told.
+    expect(transport.calibration.latest, isNull);
+
+    link.notify(CalypsoGatt.summary, calibrationMessage(sys: 1, accel: 1, gyro: 2));
+    await pumpEventQueue();
+
+    final latest = transport.calibration.latest!;
+    expect(latest.accel, 1);
+    expect(latest.gyro, 2);
+    expect(latest.ready, isFalse);
+    expect(latest.action, contains('still on the rack'));
+
+    // The device re-sends once a second; an identical reading is not a change.
+    var notifications = 0;
+    transport.calibration.addListener(() => notifications++);
+    link.notify(CalypsoGatt.summary, calibrationMessage(sys: 1, accel: 1, gyro: 2));
+    await pumpEventQueue();
+    expect(notifications, 0);
+
+    link.notify(CalypsoGatt.summary, calibrationMessage());
+    await pumpEventQueue();
+    expect(notifications, 1);
+    expect(transport.calibration.isReady, isTrue);
+
+    // The levels describe the connection they arrived on, so a drop takes them.
+    link.dropConnection('out of range');
+    await pumpEventQueue();
+    expect(transport.calibration.latest, isNull);
+    expect(transport.calibration.isReady, isFalse);
   });
 
   test('malformed notifications are ignored, not fatal', () async {
@@ -272,9 +380,9 @@ void main() {
     expect(transport.status.status, BleStatus.connected, reason: 'still connected');
 
     // ...and a good message still gets through afterwards.
-    link.notify(CalypsoGatt.summary, summaryMessage(4));
+    link.notify(CalypsoGatt.summary, summaryMessage(u(4)));
     await pumpEventQueue();
-    expect((await transport.summaries()).single.repId, 4);
+    expect((await transport.summaries()).single.uuid, u(4));
     await transport.close();
   });
 
@@ -282,8 +390,8 @@ void main() {
     // The whole chain, on the host: notifications → transport → archive → trace.
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
-    link.notify(CalypsoGatt.summary, summaryMessage(1, traceLen: 7));
-    link.notify(CalypsoGatt.summary, summaryMessage(2, traceLen: 7));
+    link.notify(CalypsoGatt.summary, summaryMessage(u(1), traceLen: 7));
+    link.notify(CalypsoGatt.summary, summaryMessage(u(2), traceLen: 7));
     await pumpEventQueue();
 
     // Play the device: answer each trace request with its chunks.
@@ -293,9 +401,11 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 5));
         if (link.writes.isEmpty) continue;
         final request = pb.TraceRequest.fromBuffer(link.lastWriteTo(CalypsoGatt.traceRequest));
+        final requested = uuidFromBytes(request.repUuid);
+        if (requested == null) continue;
         for (var index = 0; index < 3; index++) {
           link.notify(CalypsoGatt.traceChunk,
-              chunkMessage(request.repId, index, 3, points: index == 2 ? 1 : 3, from: index * 3));
+              chunkMessage(requested, index, 3, points: index == 2 ? 1 : 3, from: index * 3));
         }
       }
     }());
@@ -305,10 +415,10 @@ void main() {
     expect(added, 2);
 
     // The archive is a real .pblog: the trace reads back from it.
-    final trace = await archive.trace(1);
+    final trace = await archive.trace(u(1));
     expect(trace.length, 7);
     expect(trace.last.z, closeTo(-0.06, 1e-6));
-    expect(archive.reps.map((r) => r.summary.repId), [1, 2]);
+    expect(archive.reps.map((r) => r.uuid), unorderedEquals([u(1), u(2)]));
     await transport.close();
   });
 }

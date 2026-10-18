@@ -87,7 +87,8 @@ pub fn detect_and_trace(
     samples: &[Sample],
     trace_capacity: usize,
 ) -> Vec<(RepSummary, Vec<TracePoint>)> {
-    let mut ring: SampleRing<REPLAY_RING> = SampleRing::new();
+    let mut ring_buf = alloc::vec![Sample::ZERO; REPLAY_RING];
+    let mut ring = SampleRing::new(&mut ring_buf);
     let mut det = Detector::new();
     let mut window = alloc::vec![Sample::ZERO; WINDOW_SAMPLES];
     let mut storage = alloc::vec![TracePoint::ZERO; trace_capacity];

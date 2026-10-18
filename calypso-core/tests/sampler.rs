@@ -12,7 +12,8 @@ fn sample(t_ms: u32) -> Sample {
 
 #[test]
 fn ring_holds_samples_oldest_first() {
-    let mut ring = SampleRing::<4>::new();
+    let mut ring_buf = vec![Sample::ZERO; 4];
+    let mut ring = SampleRing::new(&mut ring_buf);
     assert!(ring.is_empty());
     for t in 0..3 {
         ring.push(sample(t * 10));
@@ -28,7 +29,8 @@ fn ring_holds_samples_oldest_first() {
 
 #[test]
 fn ring_evicts_oldest_on_overflow() {
-    let mut ring = SampleRing::<4>::new();
+    let mut ring_buf = vec![Sample::ZERO; 4];
+    let mut ring = SampleRing::new(&mut ring_buf);
     for t in 0..10 {
         ring.push(sample(t));
     }
@@ -43,7 +45,8 @@ fn ring_evicts_oldest_on_overflow() {
 
 #[test]
 fn ring_for_each_visits_in_order() {
-    let mut ring = SampleRing::<8>::new();
+    let mut ring_buf = vec![Sample::ZERO; 8];
+    let mut ring = SampleRing::new(&mut ring_buf);
     for t in 0..12 {
         ring.push(sample(t));
     }
@@ -74,7 +77,8 @@ fn sample_clamps_out_of_range() {
 
 #[test]
 fn copy_window_slices_by_time_with_margins() {
-    let mut ring = SampleRing::<8>::new();
+    let mut ring_buf = vec![Sample::ZERO; 8];
+    let mut ring = SampleRing::new(&mut ring_buf);
     // Samples every 10 ms starting at 0, but push more than capacity so the
     // window is also exercised after the ring has wrapped.
     for i in 0..10u32 {

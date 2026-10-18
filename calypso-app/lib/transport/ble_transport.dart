@@ -11,10 +11,14 @@ library;
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint;
+
+import '../model/calibration.dart';
 import '../model/rep.dart';
 import '../model/uuid.dart';
 import '../protocol/calypso.pb.dart' as pb;
 import '../state/ble_status.dart';
+import '../state/calibration.dart';
 import '../sync/trace_reassembly.dart';
 import 'ble_link.dart';
 import 'transport.dart';
@@ -53,6 +57,10 @@ class BleTransport implements RepTransport {
   /// Connection state, for the UI to observe.
   final BleStatusNotifier status = BleStatusNotifier();
 
+  /// The IMU's calibration levels, as last reported by the device. Empty until
+  /// the device sends one, and cleared when the link drops.
+  final CalibrationNotifier calibration = CalibrationNotifier();
+
   String? _deviceId;
   StreamSubscription<Uint8List>? _summarySub;
   StreamSubscription<Uint8List>? _chunkSub;
@@ -60,6 +68,9 @@ class BleTransport implements RepTransport {
 
   /// Summaries the device has told us about, by rep id.
   final Map<String, pb.RepSummary> _summaries = {};
+
+  /// Messages received, by kind, for the instrumentation line in [_onMessage].
+  final Map<pb.SyncMessage_Body, int> _rxCounts = {};
 
   /// Reassembly per rep in flight.
   final Map<String, TraceAssembler> _assemblers = {};
@@ -107,6 +118,53 @@ class BleTransport implements RepTransport {
     status.set(BleStatus.connecting, deviceId: deviceId);
     try {
       await _link.connect(deviceId);
+      // **Discover before subscribing.** On iOS and macOS the plugin looks the
+      // characteristic up in the peripheral's discovered service list, and
+      // CoreBluetooth leaves that empty until `discoverServices` has run. Skipping
+      // this does not fail as "no services" — it fails as
+      // `characteristicNotFound`, naming a UUID that is perfectly correct, which is
+      // exactly how it read on the first run against real hardware.
+      var services = await _link.discoverServices(deviceId);
+      // Instrumentation, not a test: what the device offers and what we wanted,
+      // every time, successful or not. Two rounds of this link disagreeing about UUID
+      // byte order were settled by exactly this pair of lines, and the firmware logs
+      // its side (`sync service uuid …`) at boot.
+      debugPrint(
+        'calypso: device offers ${_describe(services)}; '
+        'want ${CalypsoGatt.service}[${CalypsoGatt.summary}, ${CalypsoGatt.traceChunk}]',
+      );
+      if (!_offersSync(services)) {
+        // CoreBluetooth's tree can still be filling in when discovery returns, so
+        // give it one more chance before believing the device doesn't have it.
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        services = await _link.discoverServices(deviceId);
+      }
+      if (!_offersSync(services)) {
+        // A device from before the UUID byte order was settled exposes every UUID
+        // reversed. That is worth saying plainly: it is a firmware version, not a
+        // bug in the app, and the fix is to flash the current firmware.
+        if (_offersReversed(services)) {
+          // Two causes, and they need different fixes, so name both. The device's
+          // Bluetooth address is its identity, so a client that cached the old GATT
+          // database keeps seeing it under the *same* identity across reflashes —
+          // which is how "reflash it" turned into a circle.
+          throw StateError(
+            'the device looks like it exposes its UUIDs reversed '
+            '(${_reversed(CalypsoGatt.service)}). Either it is running firmware from '
+            'before the byte order was settled (reflash it), or this device has a '
+            'cached GATT database from an older build — CoreBluetooth caches one per '
+            'peripheral address and the plugin prefers it. Try turning Bluetooth '
+            'off and on before reflashing.',
+          );
+        }
+        // Otherwise say what the device *does* offer. The plugin's own error for
+        // this names the characteristic we asked for, which is correct — so it
+        // reads as a device fault while telling us nothing about the device.
+        throw StateError(
+          'device offers ${_describe(services)}, not ${CalypsoGatt.summary} '
+          'under ${CalypsoGatt.service}',
+        );
+      }
       await _link.subscribe(deviceId, CalypsoGatt.service, CalypsoGatt.summary);
       await _link.subscribe(deviceId, CalypsoGatt.service, CalypsoGatt.traceChunk);
     } catch (e) {
@@ -119,10 +177,50 @@ class BleTransport implements RepTransport {
       if (id != _deviceId) return;
       if (!connected) _onConnectionLost(error);
     });
-    _summarySub = _link.valueStream(deviceId, CalypsoGatt.summary).listen(_onMessage);
-    _chunkSub = _link.valueStream(deviceId, CalypsoGatt.traceChunk).listen(_onMessage);
+    // Inside a guard too: a stream that cannot be opened is a failed connection,
+    // not something to leak into the widget tree as an unhandled error.
+    try {
+      _summarySub = _link.valueStream(deviceId, CalypsoGatt.summary).listen(_onMessage);
+      _chunkSub = _link.valueStream(deviceId, CalypsoGatt.traceChunk).listen(_onMessage);
+    } catch (e) {
+      status.set(BleStatus.failed, deviceId: deviceId, error: '$e');
+      await _teardownConnection();
+      return;
+    }
 
     status.set(BleStatus.connected, deviceId: deviceId);
+  }
+
+  /// Whether a discovered tree holds the sync service and its summary
+  /// characteristic, the minimum needed to talk to a device.
+  static bool _offersSync(List<DiscoveredService> services) => services.any(
+        (service) =>
+            _sameUuid(service.uuid, CalypsoGatt.service) &&
+            service.characteristics.any((c) => _sameUuid(c, CalypsoGatt.summary)),
+      );
+
+  /// UUIDs arrive in whatever case the platform prefers — CoreBluetooth gives
+  /// upper case — and the protocol's identity is the value, not the spelling.
+  static bool _sameUuid(String a, String b) => a.toLowerCase() == b.toLowerCase();
+
+  static String _describe(List<DiscoveredService> services) =>
+      services.isEmpty ? 'no services' : services.join('; ');
+
+  /// Whether the device offers the sync service with its UUID bytes reversed — the
+  /// signature of firmware from before the two byte orders were sorted out (see the
+  /// note in `calypso-core/src/ble.rs`: the same UUID needs one order in the GATT
+  /// tree and the opposite in advertising data, and getting it wrong is silent at
+  /// both ends).
+  static bool _offersReversed(List<DiscoveredService> services) =>
+      services.any((service) => _sameUuid(service.uuid, _reversed(CalypsoGatt.service)));
+
+  /// The same UUID with its 16 bytes in the opposite order.
+  static String _reversed(String uuid) {
+    final clean = uuid.replaceAll('-', '').toLowerCase();
+    final bytes = [for (var i = 0; i < 16; i++) clean.substring(i * 2, i * 2 + 2)];
+    final out = bytes.reversed.join();
+    return '${out.substring(0, 8)}-${out.substring(8, 12)}-${out.substring(12, 16)}'
+        '-${out.substring(16, 20)}-${out.substring(20)}';
   }
 
   Future<void> disconnect() async {
@@ -131,6 +229,8 @@ class BleTransport implements RepTransport {
   }
 
   Future<void> _teardownConnection() async {
+    // The calibration levels belong to a connection, so they go with it.
+    calibration.clear();
     // Fire-and-forget the subscription cancels. Awaiting them can block behind an
     // event-loop turn that may never arrive (a widget test's fake clock, or a
     // wedged platform channel), and nothing here needs confirmation that the
@@ -153,6 +253,7 @@ class BleTransport implements RepTransport {
 
   void _onConnectionLost(String? error) {
     _deviceId = null;
+    calibration.clear();
     status.set(BleStatus.disconnected, error: error);
     _failPending('connection lost');
   }
@@ -264,7 +365,17 @@ class BleTransport implements RepTransport {
       // subscription: the device is a separate writer we don't control.
       return;
     }
-    switch (message.whichBody()) {
+    // Instrumentation: what actually arrives, by kind, with a running count. A
+    // screen that shows nothing has two possible causes — never sent, or sent and
+    // ignored — and the device logs its side of this, so this is the other half.
+    // (Traces arrive dozens of messages to a rep; everything else is rare.)
+    final kind = message.whichBody();
+    final seen = _rxCounts.update(kind, (n) => n + 1, ifAbsent: () => 1);
+    if (kind != pb.SyncMessage_Body.trace || seen % 60 == 0) {
+      debugPrint('calypso: rx #$seen $kind');
+    }
+
+    switch (kind) {
       case pb.SyncMessage_Body.summary:
         final summary = message.summary;
         final uuid = uuidFromBytes(summary.repUuid);
@@ -276,6 +387,8 @@ class BleTransport implements RepTransport {
         _onChunk(message.trace);
       case pb.SyncMessage_Body.status:
         break;
+      case pb.SyncMessage_Body.calibration:
+        calibration.set(CalibrationStatus.fromProto(message.calibration));
       case pb.SyncMessage_Body.notSet:
         break;
     }

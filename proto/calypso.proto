@@ -113,7 +113,31 @@ message SyncMessage {
     RepSummary summary = 1;  // auto-streamed as reps are recorded
     TraceChunk trace = 2;    // on demand, in response to TraceRequest
     SyncStatus status = 3;
+    CalibrationStatus calibration = 4;  // IMU calibration, pushed as it changes
   }
+}
+
+// The IMU's calibration state, as the BNO055 reports it in CALIB_STAT (0x35):
+// one 0..3 level per sensor, 3 meaning fully calibrated.
+//
+// The device has no display, so this is what the app turns into a hint. **Rep
+// tracking needs `accel`, `gyro` and `sys` at 3**, and the device will not
+// record a rep until they are — an uncalibrated IMU reports drift as motion, so
+// a stored trace would be fiction. In the meantime BLE stays up: the app can
+// connect, watch the levels climb and tell the user what to do.
+//
+// `mag` is reported for completeness only. The BNO055 runs in IMU mode (no
+// magnetometer, which is unreliable next to a barbell), where the magnetometer
+// never calibrates, so it is never the thing being waited for and the app must
+// not send the user chasing it.
+message CalibrationStatus {
+  uint32 sys = 1;    // 0..3, the aggregate the fusion uses
+  uint32 accel = 2;  // 0..3
+  uint32 gyro = 3;   // 0..3
+  uint32 mag = 4;    // 0..3, unused in IMU mode
+  // True when the device will record reps. Sent rather than derived so the app
+  // cannot disagree with the device about whether a rep is being recorded.
+  bool ready = 5;
 }
 
 message SyncStatus {

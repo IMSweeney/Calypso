@@ -69,13 +69,21 @@ pub fn append_rep<'a, N: NorFlash>(
 /// Visit every rep summary in the log, oldest first. `buf` must be large
 /// enough for a summary record (a few hundred bytes); larger records are
 /// skipped by the log itself.
+///
+/// `rec` is scratch the caller owns and reuses for decoding — see
+/// [`pb::decode_record_into`] for why it is not built in here. The summary is
+/// borrowed from it, so it is only valid for the duration of the call.
 pub fn for_each_summary<'a, N: NorFlash>(
     log: &mut FlashLog<'a, N>,
     buf: &mut [u8],
-    mut f: impl FnMut(pb::msg::RepSummary),
+    rec: &mut pb::msg::RepRecord,
+    mut f: impl FnMut(&pb::msg::RepSummary),
 ) -> Result<(), Error<N::Error>> {
     log.for_each(buf, |_, payload| {
-        if let Ok(pb::Record::Summary(s)) = pb::decode_record(payload) {
+        if pb::decode_record_into(rec, payload).is_err() {
+            return;
+        }
+        if let Some(pb::msg::RepRecord_::Body::Summary(s)) = &rec.body {
             f(s);
         }
     })?;
@@ -85,18 +93,24 @@ pub fn for_each_summary<'a, N: NorFlash>(
 /// Read one rep's trace back into `out`, in chunk order, oldest point first.
 /// Returns the number of trace points recovered (0 if the rep isn't in the
 /// log any more).
+///
+/// `rec` is caller-owned scratch for decoding, as in [`for_each_summary`].
 pub fn read_trace<'a, N: NorFlash>(
     log: &mut FlashLog<'a, N>,
     buf: &mut [u8],
+    rec: &mut pb::msg::RepRecord,
     rep_uuid: RepUuid,
     out: &mut TraceBuf<'_>,
 ) -> Result<usize, Error<N::Error>> {
     let mut expected_index = 0u32;
     log.for_each(buf, |_, payload| {
-        let Ok(pb::Record::Trace(chunk)) = pb::decode_record(payload) else {
+        if pb::decode_record_into(rec, payload).is_err() {
+            return;
+        }
+        let Some(pb::msg::RepRecord_::Body::Trace(chunk)) = &rec.body else {
             return;
         };
-        if pb::chunk_uuid(&chunk) != Some(rep_uuid) || chunk.index != expected_index {
+        if pb::chunk_uuid(chunk) != Some(rep_uuid) || chunk.index != expected_index {
             return;
         }
         for s in chunk.samples.iter() {

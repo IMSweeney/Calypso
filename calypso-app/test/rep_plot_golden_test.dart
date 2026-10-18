@@ -14,6 +14,8 @@ import 'package:calypso/transport/fixture_transport.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/test_uuid.dart';
+
 /// A squat: down to -[depth] and back, [count] points, 10 ms apart, and a small
 /// sideways drift so the path isn't a flat line in the x axis.
 List<TracePoint> squatTrace({int count = 160, double depth = 0.4, double drift = 0.03}) => [
@@ -108,7 +110,9 @@ void _fixtureEndToEnd() {
     final transport = FixtureTransport.fromBytes(bytes);
     final summaries = await transport.summaries();
     expect(summaries, isNotEmpty);
-    final trace = await transport.trace(summaries.first.repId);
+    // The generator's uuid for the fixture's first rep.
+    expect(summaries.first.uuid, u(1));
+    final trace = await transport.trace(summaries.first.uuid);
     expect(trace.length, greaterThan(50));
 
     await pumpPlot(tester, trace, scrubIndex: trace.length ~/ 2);

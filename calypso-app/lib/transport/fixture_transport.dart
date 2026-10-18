@@ -11,7 +11,6 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../model/rep.dart';
-import '../model/uuid.dart';
 import '../protocol/calypso.pb.dart' as pb;
 import '../protocol/pblog.dart';
 import '../sync/trace_reassembly.dart';

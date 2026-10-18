@@ -9,6 +9,7 @@
 //! Platform-independent, so the whole flow is host-tested (see
 //! `tests/sync.rs`) without a radio.
 
+use crate::calibration::Calibration;
 use crate::pb::{self, msg, TRACE_CHUNK_SAMPLES};
 use crate::rep::TracePoint;
 use crate::uuid::RepUuid;
@@ -151,12 +152,20 @@ pub fn encode_status_message(status: msg::SyncStatus, out: &mut [u8]) -> Option<
     pb::encode_sync(msg::SyncMessage_::Body::Status(status), out).ok()
 }
 
+/// Encode an IMU calibration status message for the summary characteristic.
+pub fn encode_calibration_message(calibration: &Calibration, out: &mut [u8]) -> Option<usize> {
+    pb::encode_sync(
+        msg::SyncMessage_::Body::Calibration(pb::calibration_message(calibration)),
+        out,
+    )
+    .ok()
+}
+
 /// Decode a `TraceRequest` written by the app, rejecting anything absurd.
 pub fn decode_trace_request(bytes: &[u8]) -> Option<msg::TraceRequest> {
     let request = pb::decode_trace_request(bytes).ok()?;
-    if pb::uuid_from_field(&request.rep_uuid).is_none() {
-        return None;
-    }
+    // A short uuid is not an identity.
+    pb::uuid_from_field(&request.rep_uuid)?;
     if !request.all_chunks && request.chunk_index >= 64 {
         return None;
     }

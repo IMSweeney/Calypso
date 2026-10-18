@@ -6,6 +6,7 @@ import 'package:calypso/sync/sync_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fake_transport.dart';
+import 'support/test_uuid.dart';
 
 void main() {
   test('catch-up merges everything the device has, once', () async {
@@ -13,10 +14,10 @@ void main() {
     final client = SyncClient(transport);
 
     expect(await client.syncSummaries(), 3);
-    expect(client.summaries.map((s) => s.repId), [1, 2, 3]);
+    expect(client.summaries.map((s) => s.uuid), [u(1), u(2), u(3)]);
     expect(client.state, SyncState.live);
 
-    // Syncing again changes nothing: summaries are keyed by rep id.
+    // Syncing again changes nothing: summaries are keyed by rep uuid.
     expect(await client.syncSummaries(), 0);
     expect(client.duplicatesIgnored, 3);
     expect(client.summaries.length, 3);
@@ -34,7 +35,7 @@ void main() {
     transport.emit(summary(3));
     await pumpEventQueue();
 
-    expect(client.summaries.map((s) => s.repId), [1, 2, 3]);
+    expect(client.summaries.map((s) => s.uuid), [u(1), u(2), u(3)]);
     expect(client.state, SyncState.live);
 
     // A summary that arrives twice (re-subscribe, or a device re-send) is
@@ -59,7 +60,7 @@ void main() {
 
     // The client keeps what it saw — it is the archive of record — and picks
     // up the new rep.
-    expect(client.summaries.map((s) => s.repId), [1, 2, 3, 4]);
+    expect(client.summaries.map((s) => s.uuid), [u(1), u(2), u(3), u(4)]);
   });
 
   test('a trace still on the device comes back whole', () async {
@@ -67,7 +68,7 @@ void main() {
     final transport = FakeTransport(stored: [summary(1)], tracePoints: {1: points});
     final client = SyncClient(transport);
 
-    final (result, trace) = await client.fetchTrace(1);
+    final (result, trace) = await client.fetchTrace(u(1));
     expect(result, TraceResult.ok);
     expect(trace.length, 10);
     expect(trace.last.z, closeTo(-0.4, 1e-9));
@@ -79,12 +80,12 @@ void main() {
     final client = SyncClient(transport);
 
     // A rep that has no summary at all: the app never knew about it.
-    final (unknown, unknownTrace) = await client.fetchTrace(99);
+    final (unknown, unknownTrace) = await client.fetchTrace(u(99));
     expect(unknown, TraceResult.unavailable);
     expect(unknownTrace, isEmpty);
 
     // A rep the app knows about, whose trace the ring has since erased.
-    final (gone, goneTrace) = await client.fetchTrace(1);
+    final (gone, goneTrace) = await client.fetchTrace(u(1));
     expect(gone, TraceResult.unavailable);
     expect(goneTrace, isEmpty);
     expect(client.state, isNot(SyncState.failed),
@@ -99,7 +100,7 @@ void main() {
     );
     final client = SyncClient(transport, traceTimeout: const Duration(milliseconds: 20));
 
-    final (result, trace) = await client.fetchTrace(1);
+    final (result, trace) = await client.fetchTrace(u(1));
     expect(result, TraceResult.failed);
     expect(trace, isEmpty);
     expect(client.lastError, isA<TimeoutException>());

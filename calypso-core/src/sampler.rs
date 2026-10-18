@@ -66,25 +66,32 @@ pub fn quantize(v: f32, scale: i32) -> i16 {
     }
 }
 
-/// Fixed-capacity ring of samples, oldest dropped on overflow. No
-/// allocation; intended to live in a static.
+/// Fixed-capacity ring of samples, oldest dropped on overflow.
+///
+/// Borrows its buffer rather than owning it, like [`crate::rep::TraceBuf`] does
+/// for traces: a ring that owned a 30 s window would be 54 KB, and building that
+/// as a value means 54 KB on the stack before it can be moved to the heap — more
+/// than twice the firmware's entire task stack. The caller decides where the
+/// storage lives (a `static`, or a leaked heap slice as the firmware does), and
+/// it must not be empty.
 ///
 /// Samples are pushed at a fixed rate, so the timestamp of any element is
 /// `get(i).t_ms`; ordering is oldest-first by index 0..len.
-pub struct SampleRing<const N: usize> {
-    buf: [Sample; N],
+pub struct SampleRing<'a> {
+    buf: &'a mut [Sample],
     /// Next write position.
     write: usize,
-    /// Number of valid samples (<= N).
+    /// Number of valid samples (<= capacity).
     len: usize,
     /// Total samples ever pushed (for detecting drops/overrun).
     pushed: u64,
 }
 
-impl<const N: usize> SampleRing<N> {
-    pub const fn new() -> Self {
+impl<'a> SampleRing<'a> {
+    pub fn new(buf: &'a mut [Sample]) -> Self {
+        debug_assert!(!buf.is_empty(), "a sample ring needs a non-empty buffer");
         SampleRing {
-            buf: [Sample::ZERO; N],
+            buf,
             write: 0,
             len: 0,
             pushed: 0,
@@ -93,9 +100,10 @@ impl<const N: usize> SampleRing<N> {
 
     /// Push a sample, evicting the oldest if full.
     pub fn push(&mut self, s: Sample) {
+        let n = self.buf.len();
         self.buf[self.write] = s;
-        self.write = (self.write + 1) % N;
-        self.len = (self.len + 1).min(N);
+        self.write = (self.write + 1) % n;
+        self.len = (self.len + 1).min(n);
         self.pushed += 1;
     }
 
@@ -109,7 +117,7 @@ impl<const N: usize> SampleRing<N> {
     }
 
     pub fn capacity(&self) -> usize {
-        N
+        self.buf.len()
     }
 
     /// Total samples ever pushed.
@@ -122,10 +130,11 @@ impl<const N: usize> SampleRing<N> {
         if i >= self.len {
             return None;
         }
+        let n = self.buf.len();
         // Oldest live sample sits at `write` once the ring is full; before
         // that it sits at 0.
-        let oldest = if self.len < N { 0 } else { self.write };
-        Some(&self.buf[(oldest + i) % N])
+        let oldest = if self.len < n { 0 } else { self.write };
+        Some(&self.buf[(oldest + i) % n])
     }
 
     /// Most recent sample.
@@ -186,8 +195,4 @@ impl<const N: usize> SampleRing<N> {
     }
 }
 
-impl<const N: usize> Default for SampleRing<N> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+

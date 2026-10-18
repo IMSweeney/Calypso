@@ -304,7 +304,8 @@ fn roll_pitch_range_is_reported_in_summary() {
 fn detect_then_compute_from_the_ring_pipeline() {
     // End-to-end: samples go into the ring, the detector runs over each new
     // sample, and a closed rep is sliced out of the ring and computed.
-    let mut ring = calypso_core::sampler::SampleRing::<1024>::new();
+    let mut ring_buf = vec![calypso_core::sampler::Sample::ZERO; 1024];
+    let mut ring = calypso_core::sampler::SampleRing::new(&mut ring_buf);
     let mut det = Detector::new();
     let mut window = [Sample::ZERO; 600];
     let mut rep = None;

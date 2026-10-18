@@ -11,7 +11,7 @@
 //! ```
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use calypso_core::fixtures::{self, push_rep, push_record, squat_set};
 use calypso_core::pb;
@@ -27,7 +27,7 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn write(dir: &PathBuf, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+fn write(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     let path = dir.join(name);
     fs::write(&path, bytes)?;
     println!("{:<28} {:>7} bytes", name, bytes.len());

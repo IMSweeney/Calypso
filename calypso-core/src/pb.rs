@@ -11,6 +11,7 @@
 //! chunked because a flash log record must fit one 4 KB erase sector (see
 //! [`crate::flashlog`]).
 
+use crate::calibration::Calibration;
 use crate::rep::{RepSummary, TracePoint};
 use crate::uuid::{RepUuid, UUID_LEN};
 use micropb::MessageDecode;
@@ -86,6 +87,21 @@ pub fn summary_uuid(s: &msg::RepSummary) -> Option<RepUuid> {
 /// The UUID of a decoded trace chunk.
 pub fn chunk_uuid(c: &msg::TraceChunk) -> Option<RepUuid> {
     uuid_from_field(&c.rep_uuid)
+}
+
+/// Convert calibration levels into their wire form.
+///
+/// `ready` is the device's own gate (see [`Calibration::is_ready`]) rather than
+/// something the app re-derives, so the two cannot disagree about whether reps
+/// are being recorded.
+pub fn calibration_message(c: &Calibration) -> msg::CalibrationStatus {
+    msg::CalibrationStatus {
+        sys: c.sys as u32,
+        accel: c.accel as u32,
+        gyro: c.gyro as u32,
+        mag: c.mag as u32,
+        ready: c.is_ready(),
+    }
 }
 
 /// Convert a computed summary into its wire form. `chunk_count` is
@@ -221,17 +237,37 @@ fn encode_message<M: micropb::MessageEncode>(message: &M, out: &mut [u8]) -> Res
 
 /// Decode a log record.
 ///
-/// Note: builds the message on the caller's stack (~2 KB for a full trace
-/// chunk). Fine for the app and for occasional device-side reads; the
-/// firmware's write path never decodes.
+/// This builds the message on the caller's stack — ~2 KB, because a full trace
+/// chunk is stored inline — so it is for host code and tests. Firmware should
+/// hold one [`msg::RepRecord`] (on the heap) and call [`decode_record_into`]: a
+/// 2 KB stack frame in an async task ends up inside the task's future, and on a
+/// 4 KB-sector device that is real RAM.
 pub fn decode_record(bytes: &[u8]) -> Result<Record, Error> {
     let mut message = msg::RepRecord::default();
-    message.decode_from_bytes(bytes).map_err(|_| Error::Decode)?;
+    decode_record_into(&mut message, bytes)?;
     match message.body {
         Some(msg::RepRecord_::Body::Summary(s)) => Ok(Record::Summary(s)),
         Some(msg::RepRecord_::Body::Trace(t)) => Ok(Record::Trace(t)),
         None => Err(Error::Empty),
     }
+}
+
+/// Decode a log record into a caller-owned message, which is what makes scanning
+/// a whole log allocate nothing and keep nothing large on the stack.
+///
+/// The buffer is reused as-is: whatever the last record left in it is dropped
+/// first. Returns [`Error::Empty`] if the bytes decoded cleanly but carried no
+/// body, so `is_ok()` still means "there is a record here".
+pub fn decode_record_into(message: &mut msg::RepRecord, bytes: &[u8]) -> Result<(), Error> {
+    // Reset through the oneof rather than `*message = RepRecord::default()`:
+    // the latter builds a whole ~2 KB record as a temporary, which is the very
+    // thing this function exists to avoid.
+    message.body = None;
+    message.decode_from_bytes(bytes).map_err(|_| Error::Decode)?;
+    if message.body.is_none() {
+        return Err(Error::Empty);
+    }
+    Ok(())
 }
 
 /// Encode a trace request (app -> device; used by the app and by tests).

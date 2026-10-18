@@ -2,13 +2,14 @@ import 'package:calypso/sync/trace_reassembly.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fake_transport.dart';
+import 'support/test_uuid.dart';
 
 void main() {
   final points = tracePoints(10); // 3 chunks of 4
-  final chunks = chunksFor(1, points);
+  final chunks = chunksFor(u(1), points);
 
   test('chunks assemble in order', () {
-    final assembler = TraceAssembler(1);
+    final assembler = TraceAssembler(u(1));
     for (final chunk in chunks) {
       expect(assembler.add(chunk), isTrue);
     }
@@ -21,7 +22,7 @@ void main() {
   });
 
   test('chunks assemble out of order', () {
-    final assembler = TraceAssembler(1);
+    final assembler = TraceAssembler(u(1));
     for (final i in [2, 0, 1]) {
       assembler.add(chunks[i]);
     }
@@ -35,7 +36,7 @@ void main() {
   });
 
   test('a repeated chunk is idempotent', () {
-    final assembler = TraceAssembler(1);
+    final assembler = TraceAssembler(u(1));
     assembler.add(chunks[0]);
     assembler.add(chunks[0]);
     assembler.add(chunks[2]);
@@ -46,20 +47,20 @@ void main() {
   });
 
   test('chunks for another rep are ignored', () {
-    final assembler = TraceAssembler(1);
-    expect(assembler.add(chunksFor(2, tracePoints(4)).single), isFalse);
+    final assembler = TraceAssembler(u(1));
+    expect(assembler.add(chunksFor(u(2), tracePoints(4)).single), isFalse);
     expect(assembler.isEmpty, isTrue);
   });
 
   test('missing chunk indices are reported for re-request', () {
-    final assembler = TraceAssembler(1);
+    final assembler = TraceAssembler(u(1));
     assembler.add(chunks[0]);
     assembler.add(chunks[2]);
     expect(assembler.missingIndices(), [1]);
   });
 
   test('an assembled trace matches the input', () {
-    final assembled = FakeTransport.reassemble(1, chunks);
+    final assembled = FakeTransport.reassemble(u(1), chunks);
     expect(assembled.length, points.length);
     for (var i = 0; i < points.length; i++) {
       expect(assembled[i].tOffsetMs, points[i].tOffsetMs);

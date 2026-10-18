@@ -63,8 +63,9 @@ List<TracePoint> tracePoints(int count, {int startMs = 0}) => [
 
 /// Splits points into protocol chunks of [perChunk], the way the device streams
 /// them over BLE: every chunk carries the total, so a client knows which is last.
-List<pb.TraceChunk> chunksFor(int index, List<TracePoint> points, {int perChunk = 4}) {
-  final uuid = testUuid(index);
+///
+/// The chunks carry [uuid], so they belong to the rep a test named.
+List<pb.TraceChunk> chunksFor(String uuid, List<TracePoint> points, {int perChunk = 4}) {
   final chunks = <pb.TraceChunk>[];
   for (var start = 0; start < points.length; start += perChunk) {
     final slice = points.sublist(start, (start + perChunk).clamp(0, points.length));
@@ -164,8 +165,8 @@ class FakeTransport implements RepTransport {
 
   /// Reassembles a trace from protocol chunks, mirroring what the BLE transport
   /// will do with notifications.
-  static List<TracePoint> reassemble(int index, Iterable<pb.TraceChunk> chunks) {
-    final assembler = TraceAssembler(testUuid(index));
+  static List<TracePoint> reassemble(String uuid, Iterable<pb.TraceChunk> chunks) {
+    final assembler = TraceAssembler(uuid);
     for (final chunk in chunks) {
       assembler.add(chunk);
     }

@@ -22,6 +22,28 @@ class FakeBleLink implements BleLink {
   String? connectedDeviceId;
   final List<String> subscribed = [];
 
+  /// Every connection-lifecycle call the transport made, in order — so a test can
+  /// assert that discovery happens *between* connecting and subscribing, which is
+  /// what iOS and macOS require (see [BleLink.discoverServices]).
+  final List<String> calls = [];
+
+  /// Devices whose services were discovered.
+  final List<String> discovered = [];
+
+  /// What [discoverServices] reports. Defaults to a device that offers the sync
+  /// service, because that is what the real one does; a test can replace it to
+  /// stand in for a device that offers something else (or nothing).
+  List<DiscoveredService> services = const [
+    DiscoveredService(
+      '0000ca20-b0cd-11ec-871f-d45ddf138840',
+      [
+        '0000ca21-b0cd-11ec-871f-d45ddf138840',
+        '0000ca22-b0cd-11ec-871f-d45ddf138840',
+        '0000ca23-b0cd-11ec-871f-d45ddf138840',
+      ],
+    ),
+  ];
+
   /// Writes the app made: (characteristicUuid, bytes).
   final List<(String, Uint8List)> writes = [];
 
@@ -47,13 +69,25 @@ class FakeBleLink implements BleLink {
 
   @override
   Future<void> connect(String deviceId, {bool autoConnect = false}) async {
+    calls.add('connect');
     connected = true;
     connectedDeviceId = deviceId;
     _onConnectionChange?.call(deviceId, true, null);
   }
 
   @override
+  Future<List<DiscoveredService>> discoverServices(String deviceId) async {
+    calls.add('discoverServices');
+    if (!connected) {
+      throw StateError('discoverServices before connect');
+    }
+    discovered.add(deviceId);
+    return services;
+  }
+
+  @override
   Future<void> disconnect(String deviceId) async {
+    calls.add('disconnect');
     connected = false;
     _onConnectionChange?.call(deviceId, false, null);
   }
@@ -65,6 +99,12 @@ class FakeBleLink implements BleLink {
 
   @override
   Future<void> subscribe(String deviceId, String serviceUuid, String characteristicUuid) async {
+    calls.add('subscribe:$characteristicUuid');
+    if (!discovered.contains(deviceId)) {
+      // As on iOS and macOS: subscribing to a characteristic of an undiscovered
+      // peripheral is an error, not a no-op.
+      throw StateError('subscribe before discoverServices');
+    }
     subscribed.add(characteristicUuid);
     _values.putIfAbsent(characteristicUuid, () => StreamController<Uint8List>.broadcast());
   }

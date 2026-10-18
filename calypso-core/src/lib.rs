@@ -10,6 +10,7 @@
 extern crate alloc;
 
 pub mod ble;
+pub mod calibration;
 pub mod fixtures;
 pub mod flashlog;
 pub mod pb;

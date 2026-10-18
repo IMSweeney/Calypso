@@ -1,12 +1,13 @@
 //! Host tests for the BLE sync streaming logic: BLE-sized trace chunks, the
 //! summary cursor, and request decoding. No radio involved.
 
+use calypso_core::calibration::Calibration;
 use calypso_core::pb::{self, msg, Record};
 use calypso_core::uuid::fixture_uuid;
 use calypso_core::rep::TracePoint;
 use calypso_core::sync::{
-    decode_trace_request, encode_summary_message, SummaryCursor, TraceStreamer, BLE_CHUNK_SAMPLES,
-    BLE_NOTIFY_BYTES,
+    decode_trace_request, encode_calibration_message, encode_summary_message, SummaryCursor,
+    TraceStreamer, BLE_CHUNK_SAMPLES, BLE_NOTIFY_BYTES,
 };
 
 fn point(i: usize) -> TracePoint {
@@ -184,6 +185,35 @@ fn summary_messages_and_cursor() {
     assert_eq!(cursor.next(), 1);
     cursor.clamp_to(9);
     assert_eq!(cursor.next(), 1);
+}
+
+#[test]
+fn calibration_status_carries_every_sensor() {
+    // The app's hint is only as specific as what it is told: each level has to
+    // survive, including the magnetometer it must *not* send the user chasing.
+    let calibration = Calibration::new(3, 2, 1, 0);
+    let mut buf = [0u8; 128];
+    let n = encode_calibration_message(&calibration, &mut buf).unwrap();
+    assert!(n <= BLE_NOTIFY_BYTES);
+
+    let decoded = pb::decode_sync(&buf[..n]).unwrap();
+    match decoded.body {
+        Some(msg::SyncMessage_::Body::Calibration(c)) => {
+            assert_eq!((c.sys, c.accel, c.gyro, c.mag), (3, 2, 1, 0));
+            assert!(!c.ready, "gyro and accel are short of 3");
+        }
+        other => panic!("expected a calibration status, got {other:?}"),
+    }
+
+    // `ready` is the device's own gate, sent rather than left to the app.
+    let n = encode_calibration_message(&Calibration::new(3, 3, 3, 0), &mut buf).unwrap();
+    match pb::decode_sync(&buf[..n]).unwrap().body {
+        Some(msg::SyncMessage_::Body::Calibration(c)) => {
+            assert!(c.ready, "IMU mode: the magnetometer is not part of readiness");
+            assert_eq!(c.mag, 0);
+        }
+        other => panic!("expected a calibration status, got {other:?}"),
+    }
 }
 
 #[test]

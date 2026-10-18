@@ -32,6 +32,18 @@ abstract class BleLink {
 
   Future<void> connect(String deviceId, {bool autoConnect = false});
 
+  /// Discover the device's services and characteristics.
+  ///
+  /// Required between connecting and subscribing on iOS and macOS: CoreBluetooth
+  /// only populates the peripheral's service list after discovery has run, and the
+  /// plugin resolves characteristics against that list. Without it the lookup
+  /// fails as "characteristic not found" for a UUID that is correct — see
+  /// [BleTransport.connect].
+  ///
+  /// Returns what the device actually offers, so a caller can say *what* is
+  /// missing rather than passing on the plugin's message.
+  Future<List<DiscoveredService>> discoverServices(String deviceId);
+
   Future<void> disconnect(String deviceId);
 
   /// Called on connection changes, including unexpected drops.
@@ -48,6 +60,20 @@ abstract class BleLink {
     String characteristicUuid,
     Uint8List value,
   );
+}
+
+/// A service a device offers, and the characteristics under it.
+///
+/// A plain string list rather than the plugin's own types: the seam exists so that
+/// nothing outside this file depends on `universal_ble`.
+class DiscoveredService {
+  const DiscoveredService(this.uuid, this.characteristics);
+
+  final String uuid;
+  final List<String> characteristics;
+
+  @override
+  String toString() => '$uuid[${characteristics.join(', ')}]';
 }
 
 /// The real implementation, forwarding to `universal_ble`.
@@ -78,6 +104,18 @@ class UniversalBleLink implements BleLink {
   @override
   Future<void> connect(String deviceId, {bool autoConnect = false}) =>
       plugin.UniversalBle.connect(deviceId, autoConnect: autoConnect);
+
+  @override
+  Future<List<DiscoveredService>> discoverServices(String deviceId) async {
+    final services = await plugin.UniversalBle.discoverServices(deviceId);
+    return [
+      for (final service in services)
+        DiscoveredService(
+          service.uuid,
+          [for (final characteristic in service.characteristics) characteristic.uuid],
+        ),
+    ];
+  }
 
   @override
   Future<void> disconnect(String deviceId) => plugin.UniversalBle.disconnect(deviceId);
