@@ -9,15 +9,17 @@ library;
 import 'package:flutter/material.dart';
 
 import '../model/rep.dart';
+import '../model/uuid.dart';
 import '../plot/rep_plot.dart';
 import '../store/rep_archive.dart';
 
 /// One rep from the archive: its summary, its 3D bar path, and a scrubber.
 class PlotScreen extends StatefulWidget {
-  const PlotScreen({super.key, required this.store, required this.repId});
+  const PlotScreen({super.key, required this.store, required this.repUuid});
 
   final RepArchive store;
-  final int repId;
+  /// The rep's UUID, as text.
+  final String repUuid;
 
   @override
   State<PlotScreen> createState() => _PlotScreenState();
@@ -38,16 +40,16 @@ class _PlotScreenState extends State<PlotScreen> {
 
   Future<void> _load() async {
     try {
-      final repId = widget.repId;
-      final stored = widget.store.reps.where((r) => r.summary.repId == repId).firstOrNull;
-      final trace = await widget.store.trace(repId);
+      final repUuid = widget.repUuid;
+      final stored = widget.store.reps.where((r) => r.uuid == repUuid).firstOrNull;
+      final trace = await widget.store.trace(repUuid);
       if (!mounted) return;
       setState(() {
         _summary = stored?.summary;
         _trace = trace;
         _loading = false;
         if (trace.isEmpty) {
-          _error = 'Rep $repId: no trace in the archive '
+          _error = 'Rep ${uuidShort(repUuid)}: no trace in the archive '
               '(${stored?.summary.chunkCount ?? 0} chunks were expected)';
         }
       });
@@ -70,7 +72,7 @@ class _PlotScreenState extends State<PlotScreen> {
     final selected = _selected;
     return Scaffold(
       appBar: AppBar(
-        title: Text(selected == null ? 'Rep ${widget.repId}' : 'Rep ${selected.repId}'),
+        title: Text('Rep ${uuidShort(widget.repUuid)}'),
       ),
       body: Column(
         children: [

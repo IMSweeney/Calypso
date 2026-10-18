@@ -51,7 +51,7 @@ class SyncClient {
   /// so the client must not hang forever.
   final Duration traceTimeout;
 
-  final Map<int, RepSummary> _byId = {};
+  final Map<String, RepSummary> _byUuid = {};
   StreamSubscription<RepSummary>? _subscription;
 
   SyncState _state = SyncState.idle;
@@ -60,11 +60,11 @@ class SyncClient {
   Object? _lastError;
   Object? get lastError => _lastError;
 
-  /// Summaries known to the client, oldest (lowest rep id) first.
-  List<RepSummary> get summaries {
-    final ids = _byId.keys.toList()..sort();
-    return [for (final id in ids) _byId[id]!];
-  }
+  /// Summaries known to the client, in the order they arrived.
+  ///
+  /// UUIDs carry no order, so arrival order is what the list shows — and for a
+  /// device that streams its log oldest-first, that is oldest-first.
+  List<RepSummary> get summaries => _byUuid.values.toList();
 
   /// Counters, mostly for tests and a debug overlay.
   int duplicatesIgnored = 0;
@@ -72,11 +72,11 @@ class SyncClient {
   /// Merges one summary, returning true if it was new. Duplicates are ignored,
   /// which is what makes re-syncing cheap and the ring wrap harmless.
   bool merge(RepSummary summary) {
-    if (_byId.containsKey(summary.repId)) {
+    if (_byUuid.containsKey(summary.uuid)) {
       duplicatesIgnored++;
       return false;
     }
-    _byId[summary.repId] = summary;
+    _byUuid[summary.uuid] = summary;
     return true;
   }
 
@@ -129,10 +129,10 @@ class SyncClient {
   ///
   /// A rep whose summary is known but whose trace is gone is the expected
   /// case after a device-side wrap: `TraceResult.unavailable`, not an error.
-  Future<(TraceResult, List<TracePoint>)> fetchTrace(int repId) async {
+  Future<(TraceResult, List<TracePoint>)> fetchTrace(String uuid) async {
     _state = SyncState.streamingTrace;
     try {
-      final points = await _transport.trace(repId).timeout(traceTimeout);
+      final points = await _transport.trace(uuid).timeout(traceTimeout);
       _state = SyncState.live;
       _lastError = null;
       return (TraceResult.ok, points);

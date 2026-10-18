@@ -12,12 +12,12 @@ import '../model/rep.dart';
 import 'rep_archive.dart';
 
 class MemoryArchive implements RepArchive {
-  MemoryArchive({Map<int, Uint8List>? blocks}) {
+  MemoryArchive({Map<String, Uint8List>? blocks}) {
     if (blocks != null) _bytes.addAll(_concat(blocks.values));
   }
 
   final List<int> _bytes = [];
-  final Map<int, DateTime> _received = {};
+  final Map<String, DateTime> _received = {};
   List<StoredRep> _reps = [];
   bool _truncated = false;
 
@@ -31,7 +31,7 @@ class MemoryArchive implements RepArchive {
   int get sizeBytes => _bytes.length;
 
   @override
-  bool contains(int repId) => _received.containsKey(repId);
+  bool contains(String uuid) => _received.containsKey(uuid);
 
   @override
   Future<void> load() async {
@@ -41,7 +41,7 @@ class MemoryArchive implements RepArchive {
   }
 
   @override
-  Future<int> appendNew(Map<int, Uint8List> recordBlocks, {DateTime? receivedAt}) async {
+  Future<int> appendNew(Map<String, Uint8List> recordBlocks, {DateTime? receivedAt}) async {
     var added = 0;
     for (final entry in recordBlocks.entries) {
       if (_received.containsKey(entry.key)) continue;
@@ -54,11 +54,11 @@ class MemoryArchive implements RepArchive {
   }
 
   @override
-  Future<List<TracePoint>> trace(int repId) async {
+  Future<List<TracePoint>> trace(String uuid) async {
     for (final stored in _reps) {
-      if (stored.summary.repId != repId) continue;
+      if (stored.uuid != uuid) continue;
       final block = Uint8List.fromList(_bytes.sublist(stored.offset, stored.offset + stored.length));
-      return assembleTraceFromBlock(block, repId);
+      return assembleTraceFromBlock(block, uuid);
     }
     return const [];
   }

@@ -2,6 +2,7 @@
 //! flash log's record limit, and error handling.
 
 use calypso_core::pb::{self, msg, Record, TRACE_CHUNK_SAMPLES};
+use calypso_core::uuid::fixture_uuid;
 use calypso_core::rep::{RepSummary, TracePoint};
 
 fn sample_summary() -> RepSummary {
@@ -35,12 +36,12 @@ fn sample_point(i: usize, t0: u32) -> TracePoint {
 fn summary_round_trips() {
     let summary = sample_summary();
     let mut buf = [0u8; 256];
-    let n = pb::encode_summary(7, &summary, 4, &mut buf).unwrap();
+    let n = pb::encode_summary(fixture_uuid(7), &summary, 4, &mut buf).unwrap();
     assert!(n > 0 && n < buf.len());
 
     match pb::decode_record(&buf[..n]).unwrap() {
         Record::Summary(s) => {
-            assert_eq!(s.rep_id, 7);
+            assert_eq!(pb::summary_uuid(&s), Some(fixture_uuid(7)));
             assert_eq!(s.t_start_ms, summary.t_start_ms);
             assert_eq!(s.t_end_ms, summary.t_end_ms);
             assert_eq!(s.duration_ms, summary.duration_ms);
@@ -60,11 +61,11 @@ fn summary_round_trips() {
 fn trace_chunk_round_trips() {
     let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES).map(|i| sample_point(i, 500)).collect();
     let mut buf = [0u8; 2048];
-    let n = pb::encode_trace_chunk(7, 2, 500, 9, &points, &mut buf).unwrap();
+    let n = pb::encode_trace_chunk(fixture_uuid(7), 2, 500, 9, &points, &mut buf).unwrap();
 
     match pb::decode_record(&buf[..n]).unwrap() {
         Record::Trace(chunk) => {
-            assert_eq!(chunk.rep_id, 7);
+            assert_eq!(pb::chunk_uuid(&chunk), Some(fixture_uuid(7)));
             assert_eq!(chunk.index, 2);
             assert_eq!(chunk.first_t_offset_ms, 0);
             assert_eq!(chunk.samples.len(), TRACE_CHUNK_SAMPLES);
@@ -107,7 +108,7 @@ fn full_chunk_fits_one_flash_sector() {
     };
     let points = vec![worst; TRACE_CHUNK_SAMPLES];
     let mut buf = [0u8; 4096];
-    let n = pb::encode_trace_chunk(1, 0, 0, 0, &points, &mut buf).unwrap();
+    let n = pb::encode_trace_chunk(fixture_uuid(1), 0, 0, 0, &points, &mut buf).unwrap();
     // flashlog::max_payload for a 4 KB sector: 4096 - 8 (sector header)
     // - 8 (record header) - 4 (trailer) = 4076.
     assert!(n <= 4076, "chunk encoded to {n} bytes, over the record limit");
@@ -124,7 +125,7 @@ fn undersized_buffer_is_reported() {
     let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES).map(|i| sample_point(i, 0)).collect();
     let mut tiny = [0u8; 8];
     assert_eq!(
-        pb::encode_trace_chunk(1, 0, 0, 0, &points, &mut tiny),
+        pb::encode_trace_chunk(fixture_uuid(1), 0, 0, 0, &points, &mut tiny),
         Err(pb::Error::BufferTooSmall)
     );
 }
@@ -143,7 +144,7 @@ fn corrupt_bytes_do_not_decode() {
 fn trace_request_round_trips() {
     let mut buf = [0u8; 32];
     let request = msg::TraceRequest {
-        rep_id: 42,
+        rep_uuid: pb::uuid_to_field(&fixture_uuid(42)),
         all_chunks: true,
         chunk_index: 0,
     };
@@ -156,15 +157,15 @@ fn trace_request_round_trips() {
     let n = capacity - writer.len();
 
     let decoded = pb::decode_trace_request(&buf[..n]).unwrap();
-    assert_eq!(decoded.rep_id, 42);
+    assert_eq!(pb::uuid_from_field(&decoded.rep_uuid), Some(fixture_uuid(42)));
     assert!(decoded.all_chunks);
 }
 
 #[test]
 fn sync_message_carries_a_summary() {
-    let summary = pb::summary_message(3, &sample_summary(), 2);
+    let summary = pb::summary_message(fixture_uuid(3), &sample_summary(), 2);
     let mut buf = [0u8; 256];
-    let n = pb::encode_sync(msg::SyncMessage_::Body::Summary(summary), &mut buf).unwrap();
+    let n = pb::encode_sync(msg::SyncMessage_::Body::Summary(summary.clone()), &mut buf).unwrap();
     let decoded = pb::decode_sync(&buf[..n]).unwrap();
     match decoded.body {
         Some(msg::SyncMessage_::Body::Summary(s)) => assert_eq!(s, summary),

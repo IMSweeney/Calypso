@@ -129,7 +129,7 @@ fn sync_payloads_round_trip_through_the_table() {
     let mut scratch = [0u8; SYNC_REQUEST_MAX];
     let n = calypso_core::pb::encode_trace_request(
         &calypso_core::pb::msg::TraceRequest {
-            rep_id: 42,
+            rep_uuid: calypso_core::pb::uuid_to_field(&calypso_core::uuid::fixture_uuid(42)),
             all_chunks: true,
             chunk_index: 0,
         },
@@ -141,7 +141,10 @@ fn sync_payloads_round_trip_through_the_table() {
     gatt.table.set(&gatt.trace_request, &request).unwrap();
     let readback: BleVec<SYNC_REQUEST_MAX> = gatt.table.get(&gatt.trace_request).unwrap();
     let decoded = calypso_core::sync::decode_trace_request(&readback).unwrap();
-    assert_eq!(decoded.rep_id, 42);
+    assert_eq!(
+        calypso_core::pb::uuid_from_field(&decoded.rep_uuid),
+        Some(calypso_core::uuid::fixture_uuid(42))
+    );
 
     // A summary notification payload round-trips byte for byte.
     let mut summary_msg: BleVec<SYNC_MSG_MAX> = BleVec::new();

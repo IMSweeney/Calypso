@@ -9,6 +9,7 @@ library;
 import 'dart:typed_data';
 
 import '../model/rep.dart';
+import '../model/uuid.dart';
 import '../protocol/calypso.pb.dart' as pb;
 import '../transport/transport.dart';
 
@@ -36,7 +37,7 @@ Uint8List buildRepBlock(RepSummary summary, List<TracePoint> trace) {
   records.add(frameRecord(
     pb.RepRecord(
       summary: pb.RepSummary(
-        repId: summary.repId,
+        repUuid: uuidToBytes(summary.uuid) ?? Uint8List(0),
         tStartMs: summary.tStartMs,
         tEndMs: summary.tEndMs,
         durationMs: summary.durationMs,
@@ -60,7 +61,7 @@ Uint8List buildRepBlock(RepSummary summary, List<TracePoint> trace) {
     records.add(frameRecord(
       pb.RepRecord(
         trace: pb.TraceChunk(
-          repId: summary.repId,
+          repUuid: uuidToBytes(summary.uuid) ?? Uint8List(0),
           index: start ~/ pbTraceChunkSamples,
           firstTOffsetMs: slice.first.tOffsetMs,
           // Stored records leave this 0: the summary's chunkCount describes the
@@ -94,16 +95,16 @@ Uint8List buildRepBlock(RepSummary summary, List<TracePoint> trace) {
 /// Convenient for small sets (fixtures, tests). A real device sync archives rep
 /// by rep instead — see `archiveFromTransport` — so a long first sync makes
 /// steady progress and can be resumed.
-Future<Map<int, Uint8List>> recordBlocksFrom(RepTransport transport) async {
-  final blocks = <int, Uint8List>{};
+Future<Map<String, Uint8List>> recordBlocksFrom(RepTransport transport) async {
+  final blocks = <String, Uint8List>{};
   for (final summary in await transport.summaries()) {
     List<TracePoint> trace;
     try {
-      trace = await transport.trace(summary.repId);
+      trace = await transport.trace(summary.uuid);
     } on TraceUnavailableException {
       trace = const [];
     }
-    blocks[summary.repId] = buildRepBlock(summary, trace);
+    blocks[summary.uuid] = buildRepBlock(summary, trace);
   }
   return blocks;
 }

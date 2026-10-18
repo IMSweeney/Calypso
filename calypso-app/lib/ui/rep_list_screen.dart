@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
+import '../model/uuid.dart';
 import '../store/archive_sync.dart';
 import '../store/history_store.dart';
 import '../store/rep_archive.dart';
@@ -203,7 +204,7 @@ class _RepListScreenState extends State<RepListScreen> {
                     final stored = archive.reps[archive.reps.length - 1 - index];
                     final s = stored.summary;
                     return ListTile(
-                      title: Text('Rep ${s.repId} · ${_formatTime(stored.receivedAt)}'),
+                      title: Text('Rep ${uuidShort(s.uuid)} · ${_formatTime(stored.receivedAt)}'),
                       subtitle: Text(
                         '${(s.durationMs / 1000).toStringAsFixed(1)} s · '
                         'ROM ${s.rom.toStringAsFixed(2)} m · '
@@ -215,7 +216,7 @@ class _RepListScreenState extends State<RepListScreen> {
                       trailing: const Icon(Icons.view_in_ar_outlined),
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
-                          builder: (_) => PlotScreen(store: archive, repId: s.repId),
+                          builder: (_) => PlotScreen(store: archive, repUuid: s.uuid),
                         ),
                       ),
                     );

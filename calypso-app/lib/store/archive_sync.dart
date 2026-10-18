@@ -26,7 +26,7 @@ Future<int> archiveFromTransport(
   for (var i = 0; i < summaries.length; i++) {
     final summary = summaries[i];
     onProgress?.call(i, summaries.length);
-    if (archive.contains(summary.repId)) continue;
+    if (archive.contains(summary.uuid)) continue;
     added += await archiveRep(archive, source, summary);
   }
   onProgress?.call(summaries.length, summaries.length);
@@ -39,15 +39,15 @@ Future<int> archiveFromTransport(
 /// Used for the incremental case (a summary arriving live, or a rep just
 /// recorded) as well as by [archiveFromTransport].
 Future<int> archiveRep(RepArchive archive, RepTransport source, RepSummary summary) async {
-  if (archive.contains(summary.repId)) return 0;
+  if (archive.contains(summary.uuid)) return 0;
   List<TracePoint> trace;
   try {
-    trace = await source.trace(summary.repId);
+    trace = await source.trace(summary.uuid);
   } on TraceUnavailableException {
     // The device has already forgotten this trace. Archive the summary anyway:
     // it is real data, and the app can say the trace is unavailable rather than
     // inventing one.
     trace = const [];
   }
-  return archive.appendNew({summary.repId: buildRepBlock(summary, trace)});
+  return archive.appendNew({summary.uuid: buildRepBlock(summary, trace)});
 }

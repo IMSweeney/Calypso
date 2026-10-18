@@ -10,6 +10,9 @@ use std::path::Path;
 /// `calypso_core::pb::TRACE_CHUNK_SAMPLES`).
 const TRACE_CHUNK_SAMPLES: usize = 48;
 
+/// Length of a rep's UUID (must equal `calypso_core::uuid::UUID_LEN`).
+const REP_UUID_LEN: usize = 16;
+
 fn main() {
     // protoc needs an include path that is a prefix of the file names it is
     // given, so run from the repo root and pass root-relative paths.
@@ -34,6 +37,12 @@ fn main() {
     // Containers come from heapless (fixed capacity, no allocator); the
     // generated structs stay useful on the device and on the host.
     generator.use_container_heapless();
+    // Rep UUIDs are the only `bytes` fields; bound them so the generated types
+    // stay fixed-capacity (no allocator).
+    generator.configure(
+        ".calypso",
+        micropb_gen::Config::new().max_bytes(REP_UUID_LEN as u32),
+    );
     // Trace chunks are the only repeated field. The capacity must be a
     // compile-time constant here; `pb::TRACE_CHUNK_SAMPLES` declares the same
     // value and a unit test asserts they match.

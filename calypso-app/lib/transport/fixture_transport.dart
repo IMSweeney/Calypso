@@ -11,6 +11,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../model/rep.dart';
+import '../model/uuid.dart';
 import '../protocol/calypso.pb.dart' as pb;
 import '../protocol/pblog.dart';
 import '../sync/trace_reassembly.dart';
@@ -48,23 +49,23 @@ class FixtureTransport implements RepTransport {
   }
 
   @override
-  Future<List<TracePoint>> trace(int repId) async {
-    final chunks = traceChunksFor(_result.records, repId);
+  Future<List<TracePoint>> trace(String uuid) async {
+    final chunks = traceChunksFor(_result.records, uuid);
     if (chunks.isEmpty) {
       throw TraceUnavailableException(
-        repId,
-        _hasSummary(repId) ? 'trace overwritten on the device ring' : 'no such rep',
+        uuid,
+        _hasSummary(uuid) ? 'trace overwritten on the device ring' : 'no such rep',
       );
     }
-    final assembler = TraceAssembler(repId);
+    final assembler = TraceAssembler(uuid);
     for (final chunk in chunks) {
       assembler.add(chunk);
     }
     return assembler.assemble();
   }
 
-  bool _hasSummary(int repId) =>
-      summariesOf(_result.records).any((pb.RepSummary s) => s.repId == repId);
+  bool _hasSummary(String uuid) =>
+      summariesOf(_result.records).any((pb.RepSummary s) => summaryUuid(s) == uuid);
 
   @override
   Future<void> close() async {}

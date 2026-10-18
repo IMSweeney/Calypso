@@ -22,6 +22,7 @@ use esp_hal::{Blocking};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::i2c::master::I2c;
+use esp_hal::rng::Rng;
 use esp_hal::time::Rate;
 use esp_println as _;
 use esp_radio::ble::controller::BleConnector;
@@ -37,6 +38,7 @@ use calypso_core::ble::{BleVec, SYNC_MSG_MAX};
 use calypso_core::flashlog::FlashLog;
 use calypso_core::pb::msg;
 use calypso_core::sync::{self, decode_trace_request, SummaryCursor, TraceStreamer};
+use calypso_core::uuid::{self, RepUuid};
 use calypso_core::rep::{compute_rep, Detector, TraceBuf, TracePoint, MARGIN_MS};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::sampler::{quantize, Sample, SampleRing, QUAT_SCALE, SAMPLE_RATE_HZ};
@@ -335,7 +337,8 @@ async fn main(spawner: Spawner) -> ! {
                                 // back from the log and stream it.
                                 if let Ok(request) = server.table().get(&trace_request_char) {
                                     if let Some(request) = decode_trace_request(&request) {
-                                        info!("trace request: rep {} ", request.rep_id);
+                                        let wanted = calypso_core::pb::uuid_from_field(&request.rep_uuid);
+                                        info!("trace request: rep {}", UuidShort(wanted.as_ref()));
                                         stream_trace(
                                             flash,
                                             sync_rec_buf,
@@ -371,6 +374,10 @@ async fn main(spawner: Spawner) -> ! {
         // gravity-x BLE characteristic is fed off the same samples, decimated.
         async {
             let start = Instant::now();
+            // Rep identities come from the hardware RNG: the device has no RTC and
+            // its uptime resets on every boot, so a counter or a timestamp could
+            // not be unique across boots.
+            let rng = Rng::new();
             let mut ticker = Ticker::every(Duration::from_hz(SAMPLE_RATE_HZ as u64));
             // The detector runs inline at 100 Hz: it's a few comparisons per
             // sample, and a closed rep does one trace computation.
@@ -415,7 +422,10 @@ async fn main(spawner: Spawner) -> ! {
                         warn!("rep window unavailable (ring too short)");
                     } else {
                         reps += 1;
-                        let rep_id = reps;
+                        let rep_uuid = {
+                            let mut rand = || rng.random();
+                            uuid::new_uuid(&mut rand)
+                        };
                         let sum = compute_rep(&rep_window[..copied], &mut rep_trace);
                         // Persist the rep (summary + trace chunks). This
                         // happens right after the rest debounce, i.e. while
@@ -423,15 +433,19 @@ async fn main(spawner: Spawner) -> ! {
                         // takes here can't land in the middle of a rep.
                         let stored = {
                             let mut f = flash.lock().await;
-                            store_rep(&mut f, rec_buf, rep_id, &sum, &rep_trace)
+                            store_rep(&mut f, rec_buf, rep_uuid, &sum, &rep_trace)
                         };
                         match stored {
-                            Ok(n) => info!("rep {} stored as {} log records", rep_id, n),
-                            Err(()) => warn!("rep {} could not be stored", rep_id),
+                            Ok(n) => info!(
+                                "rep {} stored as {} log records",
+                                UuidShort(Some(&rep_uuid)),
+                                n
+                            ),
+                            Err(()) => warn!("rep {} could not be stored", UuidShort(Some(&rep_uuid))),
                         }
                         info!(
                             "rep {}: {}..{} ms ({} ms), {} trace pts{}, rom {=f32} m, peak v {=f32} m/s, mean v {=f32} m/s, peak a {=f32} m/s^2, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
-                            rep_id,
+                            UuidShort(Some(&rep_uuid)),
                             span.start_ms,
                             span.end_ms,
                             sum.duration_ms,
@@ -552,7 +566,8 @@ async fn stream_new_summaries(
     let mut scratch = [0u8; SYNC_MSG_MAX];
     let mut payload: BleVec<SYNC_MSG_MAX> = BleVec::new();
     for summary in batch.iter() {
-        let Some(n) = sync::encode_summary_message(*summary, &mut scratch) else {
+        // A `RepSummary` carries a uuid container now, so it is not `Copy`.
+        let Some(n) = sync::encode_summary_message(summary.clone(), &mut scratch) else {
             return;
         };
         payload.clear();
@@ -576,6 +591,10 @@ async fn stream_trace(
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     request: msg::TraceRequest,
 ) {
+    let Some(rep_uuid) = calypso_core::pb::uuid_from_field(&request.rep_uuid) else {
+        warn!("trace request with a malformed uuid");
+        return;
+    };
     let mut trace = TraceBuf::new(trace_storage);
     {
         let mut guard = flash.lock().await;
@@ -592,11 +611,11 @@ async fn stream_trace(
         let Ok(mut log) = FlashLog::mount(&mut region) else {
             return;
         };
-        if store::read_trace(&mut log, rec_buf, request.rep_id, &mut trace)
+        if store::read_trace(&mut log, rec_buf, rep_uuid, &mut trace)
             .map(|n| n == 0)
             .unwrap_or(true)
         {
-            warn!("trace for rep {} is no longer in the log", request.rep_id);
+            warn!("trace for rep {} is no longer in the log", UuidShort(Some(&rep_uuid)));
             return;
         }
     }
@@ -604,9 +623,9 @@ async fn stream_trace(
     let t0_ms = trace.get(0).map(|p| p.t_ms).unwrap_or(0);
     let points = trace.as_slice();
     let mut streamer = if request.all_chunks {
-        TraceStreamer::all(request.rep_id, t0_ms, points)
+        TraceStreamer::all(rep_uuid, t0_ms, points)
     } else {
-        TraceStreamer::one(request.rep_id, t0_ms, points, request.chunk_index)
+        TraceStreamer::one(rep_uuid, t0_ms, points, request.chunk_index)
     };
 
     let mut scratch = [0u8; sync::SYNC_CHUNK_MAX];
@@ -623,6 +642,21 @@ async fn stream_trace(
     }
 }
 
+/// A rep UUID for logs: its short form, or a placeholder when absent.
+///
+/// Formatted through `defmt` directly rather than to a `&str`, so logging a rep
+/// costs no allocation.
+struct UuidShort<'a>(Option<&'a RepUuid>);
+
+impl defmt::Format for UuidShort<'_> {
+    fn format(&self, f: defmt::Formatter) {
+        match self.0 {
+            Some(uuid) => defmt::write!(f, "{=[u8]:02x}", &uuid::short(uuid)[..]),
+            None => defmt::write!(f, "????????"),
+        }
+    }
+}
+
 /// Append one rep (summary + trace chunks) to the flash log partition.
 ///
 /// Returns the number of log records written. The log is mounted per append:
@@ -631,7 +665,7 @@ async fn stream_trace(
 fn store_rep(
     flash: &mut FlashDevice,
     rec_buf: &mut [u8],
-    rep_id: u32,
+    rep_uuid: RepUuid,
     summary: &calypso_core::rep::RepSummary,
     trace: &TraceBuf<'_>,
 ) -> Result<u32, ()> {
@@ -647,7 +681,7 @@ fn store_rep(
     };
     let mut region = log_partition.as_embedded_storage(flash);
     let mut log = FlashLog::mount(&mut region).map_err(|_| ())?;
-    store::append_rep(&mut log, rec_buf, rep_id, summary, trace.as_slice()).map_err(|_| ())
+    store::append_rep(&mut log, rec_buf, rep_uuid, summary, trace.as_slice()).map_err(|_| ())
 }
 
 /// Load the BLE device name from the NVS partition, falling back to the default.

@@ -57,3 +57,4 @@ For on-device tests, look at [`embedded-test`](https://crates.io/crates/embedded
 - [ ] Detecting reps, calculating rep stats (speed, distance)
 - [ ] Sending a rep's data over BLE
 - [ ] Displaying the rep in 3d
+- [ ] Calibration routine (if un-calibrated, BLE should still be available and calibration hint should display in UI)

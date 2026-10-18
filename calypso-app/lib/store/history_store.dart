@@ -38,7 +38,7 @@ class HistoryStore implements RepArchive {
   final HistoryFiles files;
 
   final List<StoredRep> _reps = [];
-  final Map<int, DateTime> _received = {};
+  final Map<String, DateTime> _received = {};
   int _bytes = 0;
 
   /// Reps in the archive, oldest first.
@@ -91,7 +91,7 @@ class HistoryStore implements RepArchive {
   /// what makes re-syncing — every connection, and every fixture reload — cheap
   /// and idempotent.
   @override
-  Future<int> appendNew(Map<int, Uint8List> recordBlocks, {DateTime? receivedAt}) async {
+  Future<int> appendNew(Map<String, Uint8List> recordBlocks, {DateTime? receivedAt}) async {
     // Repair a torn tail first: appending after a partial record would desync
     // the framing for every future read.
     if (truncated) {
@@ -120,14 +120,14 @@ class HistoryStore implements RepArchive {
 
   /// Whether the archive already holds this rep.
   @override
-  bool contains(int repId) => _received.containsKey(repId);
+  bool contains(String uuid) => _received.containsKey(uuid);
 
   /// Reads one rep's trace out of the archive.
   @override
-  Future<List<TracePoint>> trace(int repId) async {
+  Future<List<TracePoint>> trace(String uuid) async {
     StoredRep? stored;
     for (final r in _reps) {
-      if (r.summary.repId == repId) stored = r;
+      if (r.uuid == uuid) stored = r;
     }
     if (stored == null) return const [];
 
@@ -135,7 +135,7 @@ class HistoryStore implements RepArchive {
     try {
       await handle.setPosition(stored.offset);
       final block = await handle.read(stored.length);
-      return assembleTraceFromBlock(Uint8List.fromList(block), repId);
+      return assembleTraceFromBlock(Uint8List.fromList(block), uuid);
     } finally {
       await handle.close();
     }
@@ -144,11 +144,11 @@ class HistoryStore implements RepArchive {
   Future<void> _loadReceiptTimes() async {
     if (!await files.receiptTimes.exists()) return;
     try {
+      // Keys are rep uuids.
       final json = jsonDecode(await files.receiptTimes.readAsString()) as Map<String, dynamic>;
       json.forEach((key, value) {
-        final id = int.tryParse(key);
         final when = DateTime.tryParse('$value');
-        if (id != null && when != null) _received[id] = when;
+        if (when != null) _received[key] = when;
       });
     } catch (_) {
       // A corrupt receipt-times file costs timestamps, not data.
@@ -157,7 +157,7 @@ class HistoryStore implements RepArchive {
   }
 
   Future<void> _saveReceiptTimes() async {
-    final json = {for (final e in _received.entries) '${e.key}': e.value.toIso8601String()};
+    final json = {for (final e in _received.entries) e.key: e.value.toIso8601String()};
     await files.receiptTimes.writeAsString(jsonEncode(json));
   }
 }

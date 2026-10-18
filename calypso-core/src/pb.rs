@@ -7,11 +7,12 @@
 //! record-level encode/decode into caller-provided byte buffers.
 //!
 //! Log layout: each rep is one `RepSummary` record followed by
-//! `chunk_count` `TraceChunk` records carrying the same `rep_id`. Records are
+//! `chunk_count` `TraceChunk` records carrying the same `rep_uuid`. Records are
 //! chunked because a flash log record must fit one 4 KB erase sector (see
 //! [`crate::flashlog`]).
 
 use crate::rep::{RepSummary, TracePoint};
+use crate::uuid::{RepUuid, UUID_LEN};
 use micropb::MessageDecode;
 
 /// Generated Protobuf types.
@@ -59,11 +60,39 @@ pub fn chunk_count_for(trace_len: usize) -> u32 {
     trace_len.div_ceil(TRACE_CHUNK_SAMPLES) as u32
 }
 
+/// A rep UUID in its wire form: 16 bytes in a fixed-capacity container.
+pub fn uuid_to_field(rep_uuid: &RepUuid) -> heapless::Vec<u8, UUID_LEN> {
+    let mut field = heapless::Vec::new();
+    // Capacity is UUID_LEN, so this cannot fail.
+    let _ = field.extend_from_slice(rep_uuid);
+    field
+}
+
+/// A rep UUID read back off the wire, or `None` if it isn't 16 bytes.
+pub fn uuid_from_field(field: &[u8]) -> Option<RepUuid> {
+    if field.len() != UUID_LEN {
+        return None;
+    }
+    let mut uuid = [0u8; UUID_LEN];
+    uuid.copy_from_slice(field);
+    Some(uuid)
+}
+
+/// The UUID of a decoded summary record.
+pub fn summary_uuid(s: &msg::RepSummary) -> Option<RepUuid> {
+    uuid_from_field(&s.rep_uuid)
+}
+
+/// The UUID of a decoded trace chunk.
+pub fn chunk_uuid(c: &msg::TraceChunk) -> Option<RepUuid> {
+    uuid_from_field(&c.rep_uuid)
+}
+
 /// Convert a computed summary into its wire form. `chunk_count` is
 /// [`chunk_count_for`] of the stored trace length.
-pub fn summary_message(rep_id: u32, s: &RepSummary, chunk_count: u32) -> msg::RepSummary {
+pub fn summary_message(rep_uuid: RepUuid, s: &RepSummary, chunk_count: u32) -> msg::RepSummary {
     msg::RepSummary {
-        rep_id,
+        rep_uuid: uuid_to_field(&rep_uuid),
         t_start_ms: s.t_start_ms,
         t_end_ms: s.t_end_ms,
         duration_ms: s.duration_ms,
@@ -117,14 +146,14 @@ pub fn trace_point_from_message(s: &msg::TraceSample) -> TracePoint {
 /// or 0 for a record being stored in the log (see the field's comment in
 /// `proto/calypso.proto`).
 pub fn chunk_message(
-    rep_id: u32,
+    rep_uuid: RepUuid,
     index: u32,
     t0_ms: u32,
     total_chunks: u32,
     points: &[TracePoint],
 ) -> msg::TraceChunk {
     let mut chunk = msg::TraceChunk {
-        rep_id,
+        rep_uuid: uuid_to_field(&rep_uuid),
         index,
         first_t_offset_ms: points
             .first()
@@ -142,13 +171,13 @@ pub fn chunk_message(
 
 /// Encode a rep summary as a log record. Returns the encoded length.
 pub fn encode_summary(
-    rep_id: u32,
+    rep_uuid: RepUuid,
     s: &RepSummary,
     chunk_count: u32,
     out: &mut [u8],
 ) -> Result<usize, Error> {
     record(msg::RepRecord_::Body::Summary(summary_message(
-        rep_id,
+        rep_uuid,
         s,
         chunk_count,
     )), out)
@@ -156,7 +185,7 @@ pub fn encode_summary(
 
 /// Encode a trace chunk as a log record. Returns the encoded length.
 pub fn encode_trace_chunk(
-    rep_id: u32,
+    rep_uuid: RepUuid,
     index: u32,
     t0_ms: u32,
     total_chunks: u32,
@@ -164,7 +193,7 @@ pub fn encode_trace_chunk(
     out: &mut [u8],
 ) -> Result<usize, Error> {
     record(
-        msg::RepRecord_::Body::Trace(chunk_message(rep_id, index, t0_ms, total_chunks, points)),
+        msg::RepRecord_::Body::Trace(chunk_message(rep_uuid, index, t0_ms, total_chunks, points)),
         out,
     )
 }

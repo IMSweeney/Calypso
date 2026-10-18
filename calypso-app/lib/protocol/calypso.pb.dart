@@ -340,7 +340,7 @@ class TraceSample extends $pb.GeneratedMessage {
 /// Summary statistics for one rep. Angles are degrees, distances metres.
 class RepSummary extends $pb.GeneratedMessage {
   factory RepSummary({
-    $core.int? repId,
+    $core.List<$core.int>? repUuid,
     $core.int? tStartMs,
     $core.int? tEndMs,
     $core.int? durationMs,
@@ -357,7 +357,7 @@ class RepSummary extends $pb.GeneratedMessage {
     $core.bool? decimated,
   }) {
     final result = RepSummary._();
-    if (repId != null) result.repId = repId;
+    if (repUuid != null) result.repUuid = repUuid;
     if (tStartMs != null) result.tStartMs = tStartMs;
     if (tEndMs != null) result.tEndMs = tEndMs;
     if (durationMs != null) result.durationMs = durationMs;
@@ -388,7 +388,8 @@ class RepSummary extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'RepSummary',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
       createEmptyInstance: RepSummary.$_createMessage)
-    ..aI(1, _omitFieldNames ? '' : 'repId', fieldType: $pb.PbFieldType.OU3)
+    ..a<$core.List<$core.int>>(
+        1, _omitFieldNames ? '' : 'repUuid', $pb.PbFieldType.OY)
     ..aI(2, _omitFieldNames ? '' : 'tStartMs', fieldType: $pb.PbFieldType.OU3)
     ..aI(3, _omitFieldNames ? '' : 'tEndMs', fieldType: $pb.PbFieldType.OU3)
     ..aI(4, _omitFieldNames ? '' : 'durationMs', fieldType: $pb.PbFieldType.OU3)
@@ -431,13 +432,13 @@ class RepSummary extends $pb.GeneratedMessage {
   static RepSummary? _defaultInstance;
 
   @$pb.TagNumber(1)
-  $core.int get repId => $_getIZ(0);
+  $core.List<$core.int> get repUuid => $_getN(0);
   @$pb.TagNumber(1)
-  set repId($core.int value) => $_setUnsignedInt32(0, value);
+  set repUuid($core.List<$core.int> value) => $_setBytes(0, value);
   @$pb.TagNumber(1)
-  $core.bool hasRepId() => $_has(0);
+  $core.bool hasRepUuid() => $_has(0);
   @$pb.TagNumber(1)
-  void clearRepId() => $_clearField(1);
+  void clearRepUuid() => $_clearField(1);
 
   @$pb.TagNumber(2)
   $core.int get tStartMs => $_getIZ(1);
@@ -569,14 +570,14 @@ class RepSummary extends $pb.GeneratedMessage {
 /// A slice of a rep's trace: as stored in the log, and as sent over BLE.
 class TraceChunk extends $pb.GeneratedMessage {
   factory TraceChunk({
-    $core.int? repId,
+    $core.List<$core.int>? repUuid,
     $core.int? index,
     $core.int? firstTOffsetMs,
     $core.Iterable<TraceSample>? samples,
     $core.int? totalChunks,
   }) {
     final result = TraceChunk._();
-    if (repId != null) result.repId = repId;
+    if (repUuid != null) result.repUuid = repUuid;
     if (index != null) result.index = index;
     if (firstTOffsetMs != null) result.firstTOffsetMs = firstTOffsetMs;
     if (samples != null) result.samples.addAll(samples);
@@ -597,7 +598,8 @@ class TraceChunk extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'TraceChunk',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
       createEmptyInstance: TraceChunk.$_createMessage)
-    ..aI(1, _omitFieldNames ? '' : 'repId', fieldType: $pb.PbFieldType.OU3)
+    ..a<$core.List<$core.int>>(
+        1, _omitFieldNames ? '' : 'repUuid', $pb.PbFieldType.OY)
     ..aI(2, _omitFieldNames ? '' : 'index', fieldType: $pb.PbFieldType.OU3)
     ..aI(3, _omitFieldNames ? '' : 'firstTOffsetMs',
         fieldType: $pb.PbFieldType.OU3)
@@ -628,13 +630,13 @@ class TraceChunk extends $pb.GeneratedMessage {
   static TraceChunk? _defaultInstance;
 
   @$pb.TagNumber(1)
-  $core.int get repId => $_getIZ(0);
+  $core.List<$core.int> get repUuid => $_getN(0);
   @$pb.TagNumber(1)
-  set repId($core.int value) => $_setUnsignedInt32(0, value);
+  set repUuid($core.List<$core.int> value) => $_setBytes(0, value);
   @$pb.TagNumber(1)
-  $core.bool hasRepId() => $_has(0);
+  $core.bool hasRepUuid() => $_has(0);
   @$pb.TagNumber(1)
-  void clearRepId() => $_clearField(1);
+  void clearRepUuid() => $_clearField(1);
 
   @$pb.TagNumber(2)
   $core.int get index => $_getIZ(1);
@@ -767,12 +769,12 @@ class RepRecord extends $pb.GeneratedMessage {
 /// `all_chunks` is false.
 class TraceRequest extends $pb.GeneratedMessage {
   factory TraceRequest({
-    $core.int? repId,
+    $core.List<$core.int>? repUuid,
     $core.bool? allChunks,
     $core.int? chunkIndex,
   }) {
     final result = TraceRequest._();
-    if (repId != null) result.repId = repId;
+    if (repUuid != null) result.repUuid = repUuid;
     if (allChunks != null) result.allChunks = allChunks;
     if (chunkIndex != null) result.chunkIndex = chunkIndex;
     return result;
@@ -791,7 +793,8 @@ class TraceRequest extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'TraceRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
       createEmptyInstance: TraceRequest.$_createMessage)
-    ..aI(1, _omitFieldNames ? '' : 'repId', fieldType: $pb.PbFieldType.OU3)
+    ..a<$core.List<$core.int>>(
+        1, _omitFieldNames ? '' : 'repUuid', $pb.PbFieldType.OY)
     ..aOB(2, _omitFieldNames ? '' : 'allChunks')
     ..aI(3, _omitFieldNames ? '' : 'chunkIndex', fieldType: $pb.PbFieldType.OU3)
     ..hasRequiredFields = false;
@@ -819,13 +822,13 @@ class TraceRequest extends $pb.GeneratedMessage {
   static TraceRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
-  $core.int get repId => $_getIZ(0);
+  $core.List<$core.int> get repUuid => $_getN(0);
   @$pb.TagNumber(1)
-  set repId($core.int value) => $_setUnsignedInt32(0, value);
+  set repUuid($core.List<$core.int> value) => $_setBytes(0, value);
   @$pb.TagNumber(1)
-  $core.bool hasRepId() => $_has(0);
+  $core.bool hasRepUuid() => $_has(0);
   @$pb.TagNumber(1)
-  void clearRepId() => $_clearField(1);
+  void clearRepUuid() => $_clearField(1);
 
   @$pb.TagNumber(2)
   $core.bool get allChunks => $_getBF(1);
@@ -958,14 +961,14 @@ class SyncMessage extends $pb.GeneratedMessage {
 class SyncStatus extends $pb.GeneratedMessage {
   factory SyncStatus({
     $core.int? repCount,
-    $core.int? oldestRepId,
-    $core.int? newestRepId,
+    $core.List<$core.int>? oldestRepUuid,
+    $core.List<$core.int>? newestRepUuid,
     $core.bool? traceUnavailable,
   }) {
     final result = SyncStatus._();
     if (repCount != null) result.repCount = repCount;
-    if (oldestRepId != null) result.oldestRepId = oldestRepId;
-    if (newestRepId != null) result.newestRepId = newestRepId;
+    if (oldestRepUuid != null) result.oldestRepUuid = oldestRepUuid;
+    if (newestRepUuid != null) result.newestRepUuid = newestRepUuid;
     if (traceUnavailable != null) result.traceUnavailable = traceUnavailable;
     return result;
   }
@@ -984,10 +987,10 @@ class SyncStatus extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
       createEmptyInstance: SyncStatus.$_createMessage)
     ..aI(1, _omitFieldNames ? '' : 'repCount', fieldType: $pb.PbFieldType.OU3)
-    ..aI(2, _omitFieldNames ? '' : 'oldestRepId',
-        fieldType: $pb.PbFieldType.OU3)
-    ..aI(3, _omitFieldNames ? '' : 'newestRepId',
-        fieldType: $pb.PbFieldType.OU3)
+    ..a<$core.List<$core.int>>(
+        2, _omitFieldNames ? '' : 'oldestRepUuid', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        3, _omitFieldNames ? '' : 'newestRepUuid', $pb.PbFieldType.OY)
     ..aOB(4, _omitFieldNames ? '' : 'traceUnavailable')
     ..hasRequiredFields = false;
 
@@ -1021,22 +1024,22 @@ class SyncStatus extends $pb.GeneratedMessage {
   void clearRepCount() => $_clearField(1);
 
   @$pb.TagNumber(2)
-  $core.int get oldestRepId => $_getIZ(1);
+  $core.List<$core.int> get oldestRepUuid => $_getN(1);
   @$pb.TagNumber(2)
-  set oldestRepId($core.int value) => $_setUnsignedInt32(1, value);
+  set oldestRepUuid($core.List<$core.int> value) => $_setBytes(1, value);
   @$pb.TagNumber(2)
-  $core.bool hasOldestRepId() => $_has(1);
+  $core.bool hasOldestRepUuid() => $_has(1);
   @$pb.TagNumber(2)
-  void clearOldestRepId() => $_clearField(2);
+  void clearOldestRepUuid() => $_clearField(2);
 
   @$pb.TagNumber(3)
-  $core.int get newestRepId => $_getIZ(2);
+  $core.List<$core.int> get newestRepUuid => $_getN(2);
   @$pb.TagNumber(3)
-  set newestRepId($core.int value) => $_setUnsignedInt32(2, value);
+  set newestRepUuid($core.List<$core.int> value) => $_setBytes(2, value);
   @$pb.TagNumber(3)
-  $core.bool hasNewestRepId() => $_has(2);
+  $core.bool hasNewestRepUuid() => $_has(2);
   @$pb.TagNumber(3)
-  void clearNewestRepId() => $_clearField(3);
+  void clearNewestRepUuid() => $_clearField(3);
 
   @$pb.TagNumber(4)
   $core.bool get traceUnavailable => $_getBF(3);

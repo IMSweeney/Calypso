@@ -303,11 +303,33 @@ Two real bugs surfaced while testing it, both worth knowing:
   between the request write and the await, completing the request before anything
   listened. The listener is attached before the write now.
 
-### 6. Session identity (device, blocking first real use)
-- [ ] Decide the fix for rep ids colliding across reboots (see open question 1 —
-      this silently drops every rep recorded after the device's first boot)
-- [ ] Implement it on the device
-- [ ] Test it: archive two "boots" and confirm the client keeps both
+### 6. Rep identity — one UUID per rep
+Decided in review: **a v4 UUID per rep**, minted on the device from its hardware
+RNG. Random rather than a counter or a timestamp, because the device has no RTC and
+its uptime resets every boot, so neither could be unique across boots; a counter
+would also need somewhere durable to live. Randomness needs no coordination and no
+persistence, and it makes archives from two devices mergeable later. The price is
+that UUIDs do not sort — ordering comes from the archive's append order.
+
+- [x] Proto: `rep_uuid` (16 bytes) replaces `rep_id` on `RepSummary`,
+      `TraceChunk` and `TraceRequest`; `SyncStatus` carries uuids too
+- [x] Core: `calypso-core::uuid` (`new_uuid` from an injected RNG, `fixture_uuid`
+      for deterministic fixtures, `short()` for logs), threaded through `pb`,
+      `store`, `fixtures` and `sync`
+- [x] Firmware: a UUID minted per rep from `esp_hal::rng::Rng`; trace requests,
+      log lookups and log lines all keyed by uuid
+- [x] Fixtures regenerated (they carry UUIDs now; the generator's are
+      deterministic so fixtures stay diffable)
+- [x] Client: `lib/model/uuid.dart` (canonical text <-> bytes, short form), the
+      model, transports, archive and sync client all keyed by uuid, and the list
+      shows a short uuid with the receipt time rather than "Rep 3"
+- [ ] **Dart tests are mid-migration.** `lib/` compiles and analyzes clean, and
+      the Rust and firmware suites pass, but the client's test files still call
+      the pre-uuid API (`summary.repId`, integer ids). `test/support/` is already
+      converted (tests name reps by index and the helpers mint the matching UUID),
+      so what is left is the call sites and assertions in the six test files.
+      `flutter test` will not compile until that is done — the one knowingly red
+      thing in the tree.
 
 ## Open questions
 

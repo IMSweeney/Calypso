@@ -1,7 +1,7 @@
 //! Storing reps in the flash log and reading them back.
 //!
 //! One rep becomes one `RepSummary` record followed by `chunk_count`
-//! `TraceChunk` records with the same `rep_id` (see `proto/calypso.proto`).
+//! `TraceChunk` records with the same `rep_uuid` (see `proto/calypso.proto`).
 //! Records are chunked because a log record must fit inside one erase sector
 //! (see [`crate::flashlog`]).
 //!
@@ -12,6 +12,7 @@
 use crate::flashlog::{Error as LogError, FlashLog};
 use crate::pb::{self, TRACE_CHUNK_SAMPLES};
 use crate::rep::{RepSummary, TraceBuf, TracePoint};
+use crate::uuid::RepUuid;
 use embedded_storage::nor_flash::NorFlash;
 
 /// Size of the caller's record buffer. A full trace chunk of 48 samples
@@ -45,12 +46,12 @@ impl<E> From<pb::Error> for Error<E> {
 pub fn append_rep<'a, N: NorFlash>(
     log: &mut FlashLog<'a, N>,
     rec_buf: &mut [u8],
-    rep_id: u32,
+    rep_uuid: RepUuid,
     summary: &RepSummary,
     trace: &[TracePoint],
 ) -> Result<u32, Error<N::Error>> {
     let chunk_count = pb::chunk_count_for(trace.len());
-    let n = pb::encode_summary(rep_id, summary, chunk_count, rec_buf)?;
+    let n = pb::encode_summary(rep_uuid, summary, chunk_count, rec_buf)?;
     log.append(&rec_buf[..n])?;
 
     let t0_ms = trace.first().map(|p| p.t_ms).unwrap_or(0);
@@ -58,7 +59,7 @@ pub fn append_rep<'a, N: NorFlash>(
     for (index, chunk) in trace.chunks(TRACE_CHUNK_SAMPLES).enumerate() {
         // Stored records leave total_chunks at 0: the summary's chunk_count
         // describes the trace, and this is not a stream.
-        let n = pb::encode_trace_chunk(rep_id, index as u32, t0_ms, 0, chunk, rec_buf)?;
+        let n = pb::encode_trace_chunk(rep_uuid, index as u32, t0_ms, 0, chunk, rec_buf)?;
         log.append(&rec_buf[..n])?;
         written += 1;
     }
@@ -87,7 +88,7 @@ pub fn for_each_summary<'a, N: NorFlash>(
 pub fn read_trace<'a, N: NorFlash>(
     log: &mut FlashLog<'a, N>,
     buf: &mut [u8],
-    rep_id: u32,
+    rep_uuid: RepUuid,
     out: &mut TraceBuf<'_>,
 ) -> Result<usize, Error<N::Error>> {
     let mut expected_index = 0u32;
@@ -95,7 +96,7 @@ pub fn read_trace<'a, N: NorFlash>(
         let Ok(pb::Record::Trace(chunk)) = pb::decode_record(payload) else {
             return;
         };
-        if chunk.rep_id != rep_id || chunk.index != expected_index {
+        if pb::chunk_uuid(&chunk) != Some(rep_uuid) || chunk.index != expected_index {
             return;
         }
         for s in chunk.samples.iter() {

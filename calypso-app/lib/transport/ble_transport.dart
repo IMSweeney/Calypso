@@ -12,6 +12,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../model/rep.dart';
+import '../model/uuid.dart';
 import '../protocol/calypso.pb.dart' as pb;
 import '../state/ble_status.dart';
 import '../sync/trace_reassembly.dart';
@@ -58,16 +59,16 @@ class BleTransport implements RepTransport {
   final StreamController<RepSummary> _summaryCtrl = StreamController<RepSummary>.broadcast();
 
   /// Summaries the device has told us about, by rep id.
-  final Map<int, pb.RepSummary> _summaries = {};
+  final Map<String, pb.RepSummary> _summaries = {};
 
   /// Reassembly per rep in flight.
-  final Map<int, TraceAssembler> _assemblers = {};
-  final Map<int, int> _expectedChunks = {};
-  final Map<int, Timer> _idleTimers = {};
-  final Map<int, Completer<List<TracePoint>>> _pending = {};
+  final Map<String, TraceAssembler> _assemblers = {};
+  final Map<String, int> _expectedChunks = {};
+  final Map<String, Timer> _idleTimers = {};
+  final Map<String, Completer<List<TracePoint>>> _pending = {};
 
   /// Traces already received whole, so a second request doesn't re-fetch.
-  final Map<int, List<TracePoint>> _completed = {};
+  final Map<String, List<TracePoint>> _completed = {};
 
   bool _closed = false;
 
@@ -181,28 +182,31 @@ class BleTransport implements RepTransport {
   Stream<RepSummary> watchSummaries() => _summaryCtrl.stream;
 
   @override
-  Future<List<TracePoint>> trace(int repId) async {
-    final cached = _completed[repId];
+  Future<List<TracePoint>> trace(String uuid) async {
+    final cached = _completed[uuid];
     if (cached != null) return cached;
 
     final deviceId = _deviceId;
     if (deviceId == null || !status.isConnected) {
-      throw TraceUnavailableException(repId, 'not connected to a device');
+      throw TraceUnavailableException(uuid, 'not connected to a device');
     }
 
     // A fresh attempt: drop anything left from an earlier, partial stream.
-    _assemblers[repId] = TraceAssembler(repId);
-    _expectedChunks.remove(repId);
-    _idleTimers.remove(repId)?.cancel();
+    _assemblers[uuid] = TraceAssembler(uuid);
+    _expectedChunks.remove(uuid);
+    _idleTimers.remove(uuid)?.cancel();
     final completer = Completer<List<TracePoint>>();
-    _pending[repId] = completer;
+    _pending[uuid] = completer;
     // Take the listener *before* sending the request. The connection can drop
     // between the write and the await, and completing a future that nobody is
     // listening to yet surfaces the error as unhandled rather than delivering it
     // to this caller.
     final response = completer.future.timeout(traceTimeout);
 
-    final request = pb.TraceRequest(repId: repId, allChunks: true);
+    final request = pb.TraceRequest(
+      repUuid: uuidToBytes(uuid) ?? Uint8List(0),
+      allChunks: true,
+    );
     try {
       await _link.write(
         deviceId,
@@ -211,28 +215,28 @@ class BleTransport implements RepTransport {
         request.writeToBuffer(),
       );
     } catch (e) {
-      _pending.remove(repId);
-      _assemblers.remove(repId);
+      _pending.remove(uuid);
+      _assemblers.remove(uuid);
       // The response future is abandoned; mark its errors as handled so a
       // completion racing this failure cannot become an unhandled error.
       response.ignore();
-      throw TraceUnavailableException(repId, 'request failed: $e');
+      throw TraceUnavailableException(uuid, 'request failed: $e');
     }
 
     try {
       return await response;
     } on TimeoutException {
-      _pending.remove(repId);
-      final partial = _assemblers.remove(repId)?.chunkCount ?? 0;
+      _pending.remove(uuid);
+      final partial = _assemblers.remove(uuid)?.chunkCount ?? 0;
       throw TraceUnavailableException(
-        repId,
+        uuid,
         partial == 0
             ? 'the device did not answer (it may no longer hold this rep)'
             : 'the stream stopped after $partial chunks',
       );
     } finally {
-      _pending.remove(repId);
-      _idleTimers.remove(repId)?.cancel();
+      _pending.remove(uuid);
+      _idleTimers.remove(uuid)?.cancel();
     }
   }
 
@@ -263,8 +267,10 @@ class BleTransport implements RepTransport {
     switch (message.whichBody()) {
       case pb.SyncMessage_Body.summary:
         final summary = message.summary;
-        final isNew = !_summaries.containsKey(summary.repId);
-        _summaries[summary.repId] = summary;
+        final uuid = uuidFromBytes(summary.repUuid);
+        if (uuid == null) return; // a summary with no identity is not a rep
+        final isNew = !_summaries.containsKey(uuid);
+        _summaries[uuid] = summary;
         if (isNew) _summaryCtrl.add(RepSummary.fromProto(summary));
       case pb.SyncMessage_Body.trace:
         _onChunk(message.trace);
@@ -276,31 +282,33 @@ class BleTransport implements RepTransport {
   }
 
   void _onChunk(pb.TraceChunk chunk) {
-    final assembler = _assemblers.putIfAbsent(chunk.repId, () => TraceAssembler(chunk.repId));
+    final uuid = uuidFromBytes(chunk.repUuid);
+    if (uuid == null) return;
+    final assembler = _assemblers.putIfAbsent(uuid, () => TraceAssembler(uuid));
     assembler.add(chunk);
 
     if (chunk.totalChunks > 0) {
       // The device told us how many chunks this stream has, so completion is
       // exact: every index 0..total-1 arrived.
-      _expectedChunks[chunk.repId] = chunk.totalChunks;
+      _expectedChunks[uuid] = chunk.totalChunks;
       if (assembler.indices.length == chunk.totalChunks && assembler.missingIndices().isEmpty) {
-        _complete(chunk.repId);
+        _complete(uuid);
       }
       return;
     }
 
     // No total (firmware from before that field): a quiet stream is over.
-    _idleTimers[chunk.repId]?.cancel();
-    _idleTimers[chunk.repId] = Timer(chunkIdleTimeout, () => _complete(chunk.repId));
+    _idleTimers[uuid]?.cancel();
+    _idleTimers[uuid] = Timer(chunkIdleTimeout, () => _complete(uuid));
   }
 
-  void _complete(int repId) {
-    _idleTimers.remove(repId)?.cancel();
-    final points = _assemblers.remove(repId)?.assemble() ?? const <TracePoint>[];
-    _expectedChunks.remove(repId);
+  void _complete(String uuid) {
+    _idleTimers.remove(uuid)?.cancel();
+    final points = _assemblers.remove(uuid)?.assemble() ?? const <TracePoint>[];
+    _expectedChunks.remove(uuid);
     if (points.isEmpty) return;
-    _completed[repId] = points;
-    final pending = _pending.remove(repId);
+    _completed[uuid] = points;
+    final pending = _pending.remove(uuid);
     if (pending != null && !pending.isCompleted) pending.complete(points);
   }
 }

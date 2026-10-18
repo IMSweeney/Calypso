@@ -6,6 +6,8 @@ library;
 
 import 'dart:math' as math;
 
+import 'uuid.dart';
+
 import '../protocol/calypso.pb.dart' as pb;
 
 /// Fixed-point scales, mirroring `calypso_core::sampler`.
@@ -18,7 +20,7 @@ const int quatLsbPerUnit = 16384; // 1.0 = 16384 LSB
 /// [tStartMs]/[tEndMs] are only meaningful relative to each other.
 class RepSummary {
   const RepSummary({
-    required this.repId,
+    required this.uuid,
     required this.tStartMs,
     required this.tEndMs,
     required this.durationMs,
@@ -35,7 +37,8 @@ class RepSummary {
     required this.decimated,
   });
 
-  final int repId;
+  /// The rep's identity: a canonical UUID string, keying the archive.
+  final String uuid;
   final int tStartMs;
   final int tEndMs;
   final int durationMs;
@@ -75,7 +78,7 @@ class RepSummary {
   double get pitchRangeDeg => pitchMaxDeg - pitchMinDeg;
 
   factory RepSummary.fromProto(pb.RepSummary p) => RepSummary(
-        repId: p.repId,
+        uuid: uuidFromBytes(p.repUuid) ?? '',
         tStartMs: p.tStartMs,
         tEndMs: p.tEndMs,
         durationMs: p.durationMs,

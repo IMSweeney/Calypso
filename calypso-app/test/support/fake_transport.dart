@@ -8,13 +8,16 @@ library;
 import 'dart:async';
 
 import 'package:calypso/model/rep.dart';
+import 'package:calypso/model/uuid.dart';
+
+import 'test_uuid.dart';
 import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:calypso/sync/trace_reassembly.dart';
 import 'package:calypso/transport/transport.dart';
 
 /// Builds a summary with sensible defaults, so tests only state what matters.
 RepSummary summary(
-  int repId, {
+  int index, {
   int durationMs = 1400,
   double rom = 0.4,
   double peakVelocity = 0.7,
@@ -23,9 +26,9 @@ RepSummary summary(
   bool decimated = false,
 }) =>
     RepSummary(
-      repId: repId,
-      tStartMs: repId * 10_000,
-      tEndMs: repId * 10_000 + durationMs,
+      uuid: testUuid(index),
+      tStartMs: index * 10_000,
+      tEndMs: index * 10_000 + durationMs,
       durationMs: durationMs,
       rom: rom,
       peakVelocity: peakVelocity,
@@ -60,12 +63,13 @@ List<TracePoint> tracePoints(int count, {int startMs = 0}) => [
 
 /// Splits points into protocol chunks of [perChunk], the way the device streams
 /// them over BLE: every chunk carries the total, so a client knows which is last.
-List<pb.TraceChunk> chunksFor(int repId, List<TracePoint> points, {int perChunk = 4}) {
+List<pb.TraceChunk> chunksFor(int index, List<TracePoint> points, {int perChunk = 4}) {
+  final uuid = testUuid(index);
   final chunks = <pb.TraceChunk>[];
   for (var start = 0; start < points.length; start += perChunk) {
     final slice = points.sublist(start, (start + perChunk).clamp(0, points.length));
     chunks.add(pb.TraceChunk(
-      repId: repId,
+      repUuid: uuidToBytes(uuid)!,
       index: chunks.length,
       firstTOffsetMs: slice.first.tOffsetMs,
       totalChunks: (points.length / perChunk).ceil(),
@@ -92,17 +96,26 @@ List<pb.TraceChunk> chunksFor(int repId, List<TracePoint> points, {int perChunk 
 class FakeTransport implements RepTransport {
   FakeTransport({
     List<RepSummary>? stored,
-    this.tracePoints = const {},
-    this.tracesMissing = const {},
+    Map<int, List<TracePoint>>? tracePoints,
+    Set<int>? tracesMissing,
     this.traceDelay = Duration.zero,
     this.failSummaries = false,
-  }) : _stored = stored ?? [];
+  })  : _stored = stored ?? [],
+        _points = {
+          for (final entry in (tracePoints ?? <int, List<TracePoint>>{}).entries)
+            testUuid(entry.key): entry.value,
+        },
+        _missing = {
+          for (final index in tracesMissing ?? <int>{}) testUuid(index),
+        };
 
   List<RepSummary> _stored;
-  final Map<int, List<TracePoint>> tracePoints;
 
-  /// Rep ids whose trace the device no longer has (the ring overwrote them).
-  final Set<int> tracesMissing;
+  /// Traces keyed by the uuid the transport API uses, built from test indices.
+  final Map<String, List<TracePoint>> _points;
+
+  /// Reps whose trace the device no longer has (the ring overwrote them).
+  final Set<String> _missing;
 
   /// Simulates a device that accepts a request and never answers.
   final Duration traceDelay;
@@ -135,14 +148,14 @@ class FakeTransport implements RepTransport {
   Stream<RepSummary> watchSummaries() => _live.stream;
 
   @override
-  Future<List<TracePoint>> trace(int repId) async {
+  Future<List<TracePoint>> trace(String uuid) async {
     traceCalls++;
     if (traceDelay > Duration.zero) await Future<void>.delayed(traceDelay);
-    if (tracesMissing.contains(repId)) {
-      throw TraceUnavailableException(repId, 'trace overwritten on the device ring');
+    if (_missing.contains(uuid)) {
+      throw TraceUnavailableException(uuid, 'trace overwritten on the device ring');
     }
-    final points = tracePoints[repId];
-    if (points == null) throw TraceUnavailableException(repId, 'no such rep');
+    final points = _points[uuid];
+    if (points == null) throw TraceUnavailableException(uuid, 'no such rep');
     return points;
   }
 
@@ -151,8 +164,8 @@ class FakeTransport implements RepTransport {
 
   /// Reassembles a trace from protocol chunks, mirroring what the BLE transport
   /// will do with notifications.
-  static List<TracePoint> reassemble(int repId, Iterable<pb.TraceChunk> chunks) {
-    final assembler = TraceAssembler(repId);
+  static List<TracePoint> reassemble(int index, Iterable<pb.TraceChunk> chunks) {
+    final assembler = TraceAssembler(testUuid(index));
     for (final chunk in chunks) {
       assembler.add(chunk);
     }

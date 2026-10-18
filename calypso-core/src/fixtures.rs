@@ -16,6 +16,7 @@ use crate::pb;
 use crate::rep::{compute_rep, Detector, RepSpan, RepSummary, TraceBuf, TracePoint, MARGIN_MS};
 use crate::sampler::{quantize, Sample, SampleRing, ACCEL_SCALE, QUAT_SCALE};
 use crate::store::RECORD_BUF_BYTES;
+use crate::uuid::{self, RepUuid};
 
 /// Sample interval used by the synthetic fixtures (100 Hz, like the device).
 pub const SAMPLE_DT_MS: u32 = 10;
@@ -124,19 +125,19 @@ pub fn push_record(dump: &mut Vec<u8>, record: &[u8]) {
 pub fn push_rep(
     dump: &mut Vec<u8>,
     rec_buf: &mut [u8],
-    rep_id: u32,
+    rep_uuid: RepUuid,
     summary: &RepSummary,
     trace: &[TracePoint],
 ) -> Result<u32, pb::Error> {
     let chunk_count = pb::chunk_count_for(trace.len());
-    let n = pb::encode_summary(rep_id, summary, chunk_count, rec_buf)?;
+    let n = pb::encode_summary(rep_uuid, summary, chunk_count, rec_buf)?;
     push_record(dump, &rec_buf[..n]);
 
     let t0_ms = trace.first().map(|p| p.t_ms).unwrap_or(0);
     let mut written = 1;
     for (index, chunk) in trace.chunks(pb::TRACE_CHUNK_SAMPLES).enumerate() {
         // Fixtures are stored records, not a stream: total_chunks stays 0.
-        let n = pb::encode_trace_chunk(rep_id, index as u32, t0_ms, 0, chunk, rec_buf)?;
+        let n = pb::encode_trace_chunk(rep_uuid, index as u32, t0_ms, 0, chunk, rec_buf)?;
         push_record(dump, &rec_buf[..n]);
         written += 1;
     }
@@ -151,7 +152,8 @@ pub fn squat_dump(reps: usize, a: f32) -> Vec<u8> {
     let mut rec_buf = [0u8; RECORD_BUF_BYTES];
     let mut dump = Vec::new();
     for (i, (summary, trace)) in reps.iter().enumerate() {
-        push_rep(&mut dump, &mut rec_buf, (i + 1) as u32, summary, trace).unwrap();
+        // Deterministic identities: fixtures are regenerated and compared.
+        push_rep(&mut dump, &mut rec_buf, uuid::fixture_uuid(i as u32), summary, trace).unwrap();
     }
     dump
 }

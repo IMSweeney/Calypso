@@ -17,6 +17,7 @@ use calypso_core::fixtures::{self, push_rep, push_record, squat_set};
 use calypso_core::pb;
 use calypso_core::rep::{compute_rep, RepSummary, TraceBuf, TracePoint};
 use calypso_core::store::RECORD_BUF_BYTES;
+use calypso_core::uuid::fixture_uuid;
 
 fn repo_root() -> PathBuf {
     // <repo>/calypso-core/examples/gen_fixtures.rs -> <repo>
@@ -60,7 +61,7 @@ fn main() -> std::io::Result<()> {
             trace_len: 1,
             ..Default::default()
         };
-        push_rep(&mut dump, &mut rec_buf, 1, &summary, &trace).unwrap();
+        push_rep(&mut dump, &mut rec_buf, fixture_uuid(1), &summary, &trace).unwrap();
         write(&dir, "single-point.pblog", &dump)?;
     }
 
@@ -87,7 +88,7 @@ fn main() -> std::io::Result<()> {
         assert_eq!(summary.trace_len, 512);
 
         let mut dump = Vec::new();
-        push_rep(&mut dump, &mut rec_buf, 1, &summary, trace.as_slice()).unwrap();
+        push_rep(&mut dump, &mut rec_buf, fixture_uuid(1), &summary, trace.as_slice()).unwrap();
         write(&dir, "long-decimated.pblog", &dump)?;
     }
 
@@ -104,7 +105,7 @@ fn main() -> std::io::Result<()> {
             trace_len: 140,
             ..Default::default()
         };
-        let n = pb::encode_summary(7, &summary, 3, &mut rec_buf).unwrap();
+        let n = pb::encode_summary(fixture_uuid(7), &summary, 3, &mut rec_buf).unwrap();
         push_record(&mut dump, &rec_buf[..n]);
         write(&dir, "ring-dropped.pblog", &dump)?;
     }
@@ -136,7 +137,7 @@ fn main() -> std::io::Result<()> {
             trace_len: trace.len(),
             decimated: true,
         };
-        push_rep(&mut dump, &mut rec_buf, 99, &summary, &trace).unwrap();
+        push_rep(&mut dump, &mut rec_buf, fixture_uuid(99), &summary, &trace).unwrap();
         write(&dir, "extreme-values.pblog", &dump)?;
     }
 
@@ -160,7 +161,7 @@ fn main() -> std::io::Result<()> {
             let range = xs.iter().cloned().fold(f32::MIN, f32::max)
                 - xs.iter().cloned().fold(f32::MAX, f32::min);
             assert!(range > 0.05, "the dipped path should bow sideways: {range} m");
-            push_rep(&mut dump, &mut rec_buf, (i + 1) as u32, summary, trace).unwrap();
+            push_rep(&mut dump, &mut rec_buf, fixture_uuid((i + 1) as u32), summary, trace).unwrap();
         }
         write(&dir, "dip-left.pblog", &dump)?;
     }

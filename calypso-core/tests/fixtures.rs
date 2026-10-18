@@ -5,6 +5,7 @@ use calypso_core::fixtures::{self, push_rep, push_record, read_dump, squat_dump,
 use calypso_core::pb::{self, msg, Record};
 use calypso_core::rep::{compute_rep, RepSummary, TraceBuf, TracePoint};
 use calypso_core::store::RECORD_BUF_BYTES;
+use calypso_core::uuid::fixture_uuid;
 
 #[test]
 fn squash_set_is_detected_and_traced() {
@@ -47,8 +48,9 @@ fn dump_round_trips_every_record() {
     // Summaries are numbered from 1 and each rep's chunks carry its id, in
     // order, with the trace length the summary claims.
     for (i, summary) in summaries.iter().enumerate() {
-        assert_eq!(summary.rep_id, (i + 1) as u32);
-        let mine: Vec<&msg::TraceChunk> = chunks.iter().filter(|c| c.rep_id == summary.rep_id).collect();
+        assert_eq!(pb::summary_uuid(summary), Some(fixture_uuid(i as u32)));
+        let mine: Vec<&msg::TraceChunk> =
+            chunks.iter().filter(|c| pb::chunk_uuid(c) == pb::summary_uuid(summary)).collect();
         assert_eq!(mine.len(), summary.chunk_count as usize);
         let points: usize = mine.iter().map(|c| c.samples.len()).sum();
         assert_eq!(points as u32, summary.trace_len);
@@ -91,7 +93,7 @@ fn empty_and_single_point_dumps_are_valid() {
         trace_len: 1,
         ..Default::default()
     };
-    push_rep(&mut dump, &mut rec_buf, 1, &summary, &trace).unwrap();
+    push_rep(&mut dump, &mut rec_buf, fixture_uuid(1), &summary, &trace).unwrap();
 
     let (records, truncated) = read_dump(&dump);
     assert!(!truncated);

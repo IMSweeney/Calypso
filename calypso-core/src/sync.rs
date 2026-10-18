@@ -11,6 +11,7 @@
 
 use crate::pb::{self, msg, TRACE_CHUNK_SAMPLES};
 use crate::rep::TracePoint;
+use crate::uuid::RepUuid;
 
 /// Usable notification payload with a 247-byte ATT MTU (the value BLE stacks
 /// commonly negotiate): MTU - 3 bytes of ATT header.
@@ -29,7 +30,7 @@ pub const BLE_CHUNK_SAMPLES: usize = 3;
 
 /// Streams a rep's trace to the app, one `SyncMessage` at a time.
 pub struct TraceStreamer<'a> {
-    rep_id: u32,
+    rep_uuid: RepUuid,
     t0_ms: u32,
     points: &'a [TracePoint],
     /// Next BLE chunk index to emit.
@@ -40,9 +41,9 @@ pub struct TraceStreamer<'a> {
 
 impl<'a> TraceStreamer<'a> {
     /// Stream every chunk of the trace (a `TraceRequest { all_chunks: true }`).
-    pub fn all(rep_id: u32, t0_ms: u32, points: &'a [TracePoint]) -> Self {
+    pub fn all(rep_uuid: RepUuid, t0_ms: u32, points: &'a [TracePoint]) -> Self {
         TraceStreamer {
-            rep_id,
+            rep_uuid,
             t0_ms,
             points,
             next_index: 0,
@@ -51,9 +52,9 @@ impl<'a> TraceStreamer<'a> {
     }
 
     /// Stream a single chunk (`TraceRequest { all_chunks: false, chunk_index }`).
-    pub fn one(rep_id: u32, t0_ms: u32, points: &'a [TracePoint], index: u32) -> Self {
+    pub fn one(rep_uuid: RepUuid, t0_ms: u32, points: &'a [TracePoint], index: u32) -> Self {
         TraceStreamer {
-            rep_id,
+            rep_uuid,
             t0_ms,
             points,
             next_index: index,
@@ -84,7 +85,7 @@ impl<'a> TraceStreamer<'a> {
         // Every chunk carries the stream's total, so the app knows which one is
         // the last and can stop waiting for more.
         let chunk = pb::chunk_message(
-            self.rep_id,
+            self.rep_uuid,
             self.next_index,
             self.t0_ms,
             Self::chunk_count(self.points.len()),
@@ -153,7 +154,7 @@ pub fn encode_status_message(status: msg::SyncStatus, out: &mut [u8]) -> Option<
 /// Decode a `TraceRequest` written by the app, rejecting anything absurd.
 pub fn decode_trace_request(bytes: &[u8]) -> Option<msg::TraceRequest> {
     let request = pb::decode_trace_request(bytes).ok()?;
-    if request.rep_id == 0 {
+    if pb::uuid_from_field(&request.rep_uuid).is_none() {
         return None;
     }
     if !request.all_chunks && request.chunk_index >= 64 {

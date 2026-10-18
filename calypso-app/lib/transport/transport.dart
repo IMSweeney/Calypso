@@ -12,12 +12,14 @@ import '../model/rep.dart';
 /// The device log is a ring: a rep can be summarised long before its trace is
 /// requested, and by then the trace may have been erased.
 class TraceUnavailableException implements Exception {
-  const TraceUnavailableException(this.repId, [this.reason = 'not in the log']);
-  final int repId;
+  const TraceUnavailableException(this.uuid, [this.reason = 'not in the log']);
+
+  /// The rep's UUID, as text.
+  final String uuid;
   final String reason;
 
   @override
-  String toString() => 'TraceUnavailableException($repId: $reason)';
+  String toString() => 'TraceUnavailableException($uuid: $reason)';
 }
 
 /// A source of rep data: the device over BLE, a recorded fixture, or a
@@ -35,8 +37,9 @@ abstract class RepTransport {
 
   /// One rep's complete trace, reassembled from its chunks.
   ///
-  /// Throws [TraceUnavailableException] if the source doesn't have it.
-  Future<List<TracePoint>> trace(int repId);
+  /// The rep is named by its UUID. Throws [TraceUnavailableException] if the
+  /// source doesn't have it.
+  Future<List<TracePoint>> trace(String uuid);
 
   /// Releases any resources (connection, subscriptions).
   Future<void> close();

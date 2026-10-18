@@ -65,7 +65,7 @@ final $typed_data.Uint8List traceSampleDescriptor = $convert.base64Decode(
 const RepSummary$json = {
   '1': 'RepSummary',
   '2': [
-    {'1': 'rep_id', '3': 1, '4': 1, '5': 13, '10': 'repId'},
+    {'1': 'rep_uuid', '3': 1, '4': 1, '5': 12, '10': 'repUuid'},
     {'1': 't_start_ms', '3': 2, '4': 1, '5': 13, '10': 'tStartMs'},
     {'1': 't_end_ms', '3': 3, '4': 1, '5': 13, '10': 'tEndMs'},
     {'1': 'duration_ms', '3': 4, '4': 1, '5': 13, '10': 'durationMs'},
@@ -85,21 +85,21 @@ const RepSummary$json = {
 
 /// Descriptor for `RepSummary`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List repSummaryDescriptor = $convert.base64Decode(
-    'CgpSZXBTdW1tYXJ5EhUKBnJlcF9pZBgBIAEoDVIFcmVwSWQSHAoKdF9zdGFydF9tcxgCIAEoDV'
-    'IIdFN0YXJ0TXMSGAoIdF9lbmRfbXMYAyABKA1SBnRFbmRNcxIfCgtkdXJhdGlvbl9tcxgEIAEo'
-    'DVIKZHVyYXRpb25NcxIQCgNyb20YBSABKAJSA3JvbRIjCg1wZWFrX3ZlbG9jaXR5GAYgASgCUg'
-    'xwZWFrVmVsb2NpdHkSIwoNbWVhbl92ZWxvY2l0eRgHIAEoAlIMbWVhblZlbG9jaXR5Eh0KCnBl'
-    'YWtfYWNjZWwYCCABKAJSCXBlYWtBY2NlbBIgCgxyb2xsX21pbl9kZWcYCSABKAJSCnJvbGxNaW'
-    '5EZWcSIAoMcm9sbF9tYXhfZGVnGAogASgCUgpyb2xsTWF4RGVnEiIKDXBpdGNoX21pbl9kZWcY'
-    'CyABKAJSC3BpdGNoTWluRGVnEiIKDXBpdGNoX21heF9kZWcYDCABKAJSC3BpdGNoTWF4RGVnEh'
-    'sKCXRyYWNlX2xlbhgNIAEoDVIIdHJhY2VMZW4SHwoLY2h1bmtfY291bnQYDiABKA1SCmNodW5r'
-    'Q291bnQSHAoJZGVjaW1hdGVkGA8gASgIUglkZWNpbWF0ZWQ=');
+    'CgpSZXBTdW1tYXJ5EhkKCHJlcF91dWlkGAEgASgMUgdyZXBVdWlkEhwKCnRfc3RhcnRfbXMYAi'
+    'ABKA1SCHRTdGFydE1zEhgKCHRfZW5kX21zGAMgASgNUgZ0RW5kTXMSHwoLZHVyYXRpb25fbXMY'
+    'BCABKA1SCmR1cmF0aW9uTXMSEAoDcm9tGAUgASgCUgNyb20SIwoNcGVha192ZWxvY2l0eRgGIA'
+    'EoAlIMcGVha1ZlbG9jaXR5EiMKDW1lYW5fdmVsb2NpdHkYByABKAJSDG1lYW5WZWxvY2l0eRId'
+    'CgpwZWFrX2FjY2VsGAggASgCUglwZWFrQWNjZWwSIAoMcm9sbF9taW5fZGVnGAkgASgCUgpyb2'
+    'xsTWluRGVnEiAKDHJvbGxfbWF4X2RlZxgKIAEoAlIKcm9sbE1heERlZxIiCg1waXRjaF9taW5f'
+    'ZGVnGAsgASgCUgtwaXRjaE1pbkRlZxIiCg1waXRjaF9tYXhfZGVnGAwgASgCUgtwaXRjaE1heE'
+    'RlZxIbCgl0cmFjZV9sZW4YDSABKA1SCHRyYWNlTGVuEh8KC2NodW5rX2NvdW50GA4gASgNUgpj'
+    'aHVua0NvdW50EhwKCWRlY2ltYXRlZBgPIAEoCFIJZGVjaW1hdGVk');
 
 @$core.Deprecated('Use traceChunkDescriptor instead')
 const TraceChunk$json = {
   '1': 'TraceChunk',
   '2': [
-    {'1': 'rep_id', '3': 1, '4': 1, '5': 13, '10': 'repId'},
+    {'1': 'rep_uuid', '3': 1, '4': 1, '5': 12, '10': 'repUuid'},
     {'1': 'index', '3': 2, '4': 1, '5': 13, '10': 'index'},
     {'1': 'first_t_offset_ms', '3': 3, '4': 1, '5': 13, '10': 'firstTOffsetMs'},
     {
@@ -116,10 +116,10 @@ const TraceChunk$json = {
 
 /// Descriptor for `TraceChunk`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List traceChunkDescriptor = $convert.base64Decode(
-    'CgpUcmFjZUNodW5rEhUKBnJlcF9pZBgBIAEoDVIFcmVwSWQSFAoFaW5kZXgYAiABKA1SBWluZG'
-    'V4EikKEWZpcnN0X3Rfb2Zmc2V0X21zGAMgASgNUg5maXJzdFRPZmZzZXRNcxIuCgdzYW1wbGVz'
-    'GAQgAygLMhQuY2FseXBzby5UcmFjZVNhbXBsZVIHc2FtcGxlcxIhCgx0b3RhbF9jaHVua3MYBS'
-    'ABKA1SC3RvdGFsQ2h1bmtz');
+    'CgpUcmFjZUNodW5rEhkKCHJlcF91dWlkGAEgASgMUgdyZXBVdWlkEhQKBWluZGV4GAIgASgNUg'
+    'VpbmRleBIpChFmaXJzdF90X29mZnNldF9tcxgDIAEoDVIOZmlyc3RUT2Zmc2V0TXMSLgoHc2Ft'
+    'cGxlcxgEIAMoCzIULmNhbHlwc28uVHJhY2VTYW1wbGVSB3NhbXBsZXMSIQoMdG90YWxfY2h1bm'
+    'tzGAUgASgNUgt0b3RhbENodW5rcw==');
 
 @$core.Deprecated('Use repRecordDescriptor instead')
 const RepRecord$json = {
@@ -159,7 +159,7 @@ final $typed_data.Uint8List repRecordDescriptor = $convert.base64Decode(
 const TraceRequest$json = {
   '1': 'TraceRequest',
   '2': [
-    {'1': 'rep_id', '3': 1, '4': 1, '5': 13, '10': 'repId'},
+    {'1': 'rep_uuid', '3': 1, '4': 1, '5': 12, '10': 'repUuid'},
     {'1': 'all_chunks', '3': 2, '4': 1, '5': 8, '10': 'allChunks'},
     {'1': 'chunk_index', '3': 3, '4': 1, '5': 13, '10': 'chunkIndex'},
   ],
@@ -167,8 +167,8 @@ const TraceRequest$json = {
 
 /// Descriptor for `TraceRequest`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List traceRequestDescriptor = $convert.base64Decode(
-    'CgxUcmFjZVJlcXVlc3QSFQoGcmVwX2lkGAEgASgNUgVyZXBJZBIdCgphbGxfY2h1bmtzGAIgAS'
-    'gIUglhbGxDaHVua3MSHwoLY2h1bmtfaW5kZXgYAyABKA1SCmNodW5rSW5kZXg=');
+    'CgxUcmFjZVJlcXVlc3QSGQoIcmVwX3V1aWQYASABKAxSB3JlcFV1aWQSHQoKYWxsX2NodW5rcx'
+    'gCIAEoCFIJYWxsQ2h1bmtzEh8KC2NodW5rX2luZGV4GAMgASgNUgpjaHVua0luZGV4');
 
 @$core.Deprecated('Use syncMessageDescriptor instead')
 const SyncMessage$json = {
@@ -218,8 +218,8 @@ const SyncStatus$json = {
   '1': 'SyncStatus',
   '2': [
     {'1': 'rep_count', '3': 1, '4': 1, '5': 13, '10': 'repCount'},
-    {'1': 'oldest_rep_id', '3': 2, '4': 1, '5': 13, '10': 'oldestRepId'},
-    {'1': 'newest_rep_id', '3': 3, '4': 1, '5': 13, '10': 'newestRepId'},
+    {'1': 'oldest_rep_uuid', '3': 2, '4': 1, '5': 12, '10': 'oldestRepUuid'},
+    {'1': 'newest_rep_uuid', '3': 3, '4': 1, '5': 12, '10': 'newestRepUuid'},
     {
       '1': 'trace_unavailable',
       '3': 4,
@@ -232,6 +232,7 @@ const SyncStatus$json = {
 
 /// Descriptor for `SyncStatus`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List syncStatusDescriptor = $convert.base64Decode(
-    'CgpTeW5jU3RhdHVzEhsKCXJlcF9jb3VudBgBIAEoDVIIcmVwQ291bnQSIgoNb2xkZXN0X3JlcF'
-    '9pZBgCIAEoDVILb2xkZXN0UmVwSWQSIgoNbmV3ZXN0X3JlcF9pZBgDIAEoDVILbmV3ZXN0UmVw'
-    'SWQSKwoRdHJhY2VfdW5hdmFpbGFibGUYBCABKAhSEHRyYWNlVW5hdmFpbGFibGU=');
+    'CgpTeW5jU3RhdHVzEhsKCXJlcF9jb3VudBgBIAEoDVIIcmVwQ291bnQSJgoPb2xkZXN0X3JlcF'
+    '91dWlkGAIgASgMUg1vbGRlc3RSZXBVdWlkEiYKD25ld2VzdF9yZXBfdXVpZBgDIAEoDFINbmV3'
+    'ZXN0UmVwVXVpZBIrChF0cmFjZV91bmF2YWlsYWJsZRgEIAEoCFIQdHJhY2VVbmF2YWlsYWJsZQ'
+    '==');

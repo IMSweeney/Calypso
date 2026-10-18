@@ -1,11 +1,15 @@
-/// What the UI needs from the archive, and the record-format logic that every
+/// What the UI needs from the archive, and the record-format logic every
 /// implementation shares.
 ///
 /// The interface exists for the same reason [RepTransport] does: the UI depends
-/// on the abstraction, so it can be driven in a widget test with no file I/O.
-/// That matters because widget tests run under a fake clock where real
-/// asynchronous I/O never completes — a screen that reads a file in `initState`
-/// simply hangs there, spinner spinning.
+/// on the abstraction, so a widget test can drive it with no file I/O — which
+/// matters because widget tests run under a fake clock where real asynchronous
+/// I/O never completes.
+///
+/// Reps are keyed by UUID. The device mints a random UUID per rep, so identity
+/// survives reboots, re-flashes and (later) archives from more than one device.
+/// UUIDs do not sort, so the order the UI shows comes from the archive's append
+/// order.
 library;
 
 import 'dart:typed_data';
@@ -36,6 +40,9 @@ class StoredRep {
   /// The device has no RTC, so this is the only absolute time available — and it
   /// is the time of *receipt*, not of the lift.
   final DateTime? receivedAt;
+
+  /// The rep's UUID, as text.
+  String get uuid => summary.uuid;
 }
 
 /// The archive of record: everything the client has ever synced.
@@ -44,7 +51,7 @@ abstract class RepArchive {
   /// summaries, not chunk payloads).
   Future<void> load();
 
-  /// Reps held, oldest first.
+  /// Reps held, in the order their records appear in the file (oldest first).
   List<StoredRep> get reps;
 
   /// True if the records end mid-record (a write that did not finish).
@@ -54,15 +61,15 @@ abstract class RepArchive {
   int get sizeBytes;
 
   /// Whether this rep is already archived.
-  bool contains(int repId);
+  bool contains(String uuid);
 
   /// Adds rep record blocks (summary + chunks, framed) for any rep not already
-  /// held, returning how many were added. Idempotent by rep id, which is what
-  /// makes re-syncing cheap.
-  Future<int> appendNew(Map<int, Uint8List> recordBlocks, {DateTime? receivedAt});
+  /// held, returning how many were added. Idempotent by UUID, which is what makes
+  /// re-syncing cheap.
+  Future<int> appendNew(Map<String, Uint8List> recordBlocks, {DateTime? receivedAt});
 
   /// One rep's trace, empty if it isn't archived.
-  Future<List<TracePoint>> trace(int repId);
+  Future<List<TracePoint>> trace(String uuid);
 }
 
 /// The result of scanning a records stream.
@@ -79,10 +86,10 @@ class BlockScan {
 /// Scans `[u32 LE length][RepRecord]` records into rep blocks.
 ///
 /// A rep's records are contiguous (its summary followed by its chunks), so this
-/// only has to decode summaries and can step over chunk payloads by length. A
-/// rep whose block was cut short is dropped: a summary with a partial trace
-/// would be worse than re-syncing it later.
-BlockScan scanBlocks(Uint8List bytes, Map<int, DateTime> receivedAt) {
+/// only has to decode summaries and can step over chunk payloads by length. A rep
+/// whose block was cut short is dropped: a summary with a partial trace would be
+/// worse than re-syncing it later.
+BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
   final reps = <StoredRep>[];
   var goodBytes = 0;
   var truncated = false;
@@ -90,12 +97,15 @@ BlockScan scanBlocks(Uint8List bytes, Map<int, DateTime> receivedAt) {
   var pos = 0;
   int? blockStart;
   var blockLength = 0;
-  StoredRep? pending;
+  // The rep being accumulated. Its offset and length are only known once the
+  // block ends, so the StoredRep is built then — getting this wrong silently
+  // yields reps whose traces read back empty.
+  (String, RepSummary)? pending;
 
   while (pos + 4 <= bytes.length) {
     final length = ByteData.sublistView(bytes, pos, pos + 4).getUint32(0, Endian.little);
     final start = pos + 4;
-    if (length <= 0 || start + length > bytes.length) {
+    if (length == 0 || start + length > bytes.length) {
       truncated = true;
       break;
     }
@@ -108,19 +118,21 @@ BlockScan scanBlocks(Uint8List bytes, Map<int, DateTime> receivedAt) {
     }
     if (record.hasSummary()) {
       goodBytes = pos;
+      final uuid = summaryUuid(record.summary);
+      if (uuid == null) {
+        // A summary with no usable identity is not a rep.
+        truncated = true;
+        break;
+      }
       if (pending != null) {
         reps.add(StoredRep(
-          summary: pending.summary,
+          summary: pending.$2,
           offset: blockStart!,
           length: blockLength,
-          receivedAt: receivedAt[pending.summary.repId],
+          receivedAt: receivedAt[pending.$1],
         ));
       }
-      pending = StoredRep(
-        summary: RepSummary.fromProto(record.summary),
-        offset: 0,
-        length: 0,
-      );
+      pending = (uuid, RepSummary.fromProto(record.summary));
       blockStart = pos;
       blockLength = 0;
     }
@@ -132,24 +144,24 @@ BlockScan scanBlocks(Uint8List bytes, Map<int, DateTime> receivedAt) {
   if (truncated) {
     // The tail rep's records were cut short. Drop it, and forget its receipt
     // time so the next sync fetches it again.
-    receivedAt.remove(pending.summary.repId);
+    receivedAt.remove(pending.$1);
     return BlockScan(reps, truncated, goodBytes);
   }
   reps.add(StoredRep(
-    summary: pending.summary,
+    summary: pending.$2,
     offset: blockStart!,
     length: blockLength,
-    receivedAt: receivedAt[pending.summary.repId],
+    receivedAt: receivedAt[pending.$1],
   ));
   return BlockScan(reps, truncated, bytes.length);
 }
 
 /// Reassembles one rep's trace out of an archived record block.
-List<TracePoint> assembleTraceFromBlock(Uint8List block, int repId) {
+List<TracePoint> assembleTraceFromBlock(Uint8List block, String uuid) {
   final dump = readDump(block);
-  final chunks = traceChunksFor(dump.records, repId);
+  final chunks = traceChunksFor(dump.records, uuid);
   if (chunks.isEmpty) return const [];
-  final assembler = TraceAssembler(repId);
+  final assembler = TraceAssembler(uuid);
   for (final chunk in chunks) {
     assembler.add(chunk);
   }
