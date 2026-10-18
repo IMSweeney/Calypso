@@ -34,6 +34,18 @@ work out of the box.
 - `cd calypso-esp32 && cargo build`
 - `cargo run`
 
+Three things bite on this board, all written up in
+`docs/rep-tracking/README.md` (firmware constraints):
+
+- **Flash writes and erases need the other core parked** — esp-storage refuses
+them while CPU1 runs, and reads keep working, so it looks like broken flash.
+- **`Detected a write to the stack guard value`** is a stack overflow. The boot
+  log's `stack N B` figures say where, but note the radio's own tasks have small
+  heap stacks too, so it is not always the main one.
+- **A log that just stops is usually the heap, not a hang.** The panic handler
+  prints `*** PANIC: ... ***` now, and the three `heap free N B` figures in the
+  boot log say how much room is left.
+
 ### Testing
 `cargo test` in `calypso-esp32/` does not work: the firmware target
 (`xtensa-esp32-none-elf`) is `no_std`, and Rust's test harness requires `std`.
@@ -57,4 +69,7 @@ For on-device tests, look at [`embedded-test`](https://crates.io/crates/embedded
 - [ ] Detecting reps, calculating rep stats (speed, distance)
 - [ ] Sending a rep's data over BLE
 - [ ] Displaying the rep in 3d
-- [ ] Calibration routine (if un-calibrated, BLE should still be available and calibration hint should display in UI)
+- [X] Calibration routine: an un-calibrated device still gets BLE, and the app
+      shows a hint naming the sensor that is behind. Each sensor's level is read
+      from the BNO055 (accel/gyro/mag/sys) and reps are only recorded once the
+      ones that matter are good — see `docs/calibration/`

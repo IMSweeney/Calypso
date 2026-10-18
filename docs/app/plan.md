@@ -284,6 +284,49 @@ Two things this fixed beyond the tests:
 - [ ] **First real capture** → checked-in fixture. Needs the hardware; the only
       part of this phase that cannot be done on the host
 
+      Worth knowing why that step is not a formality. The first attempt to talk to
+      a real device — one afternoon, several flashes between them — turned up four
+      faults in this pair of programs, none of which a fake could catch:
+
+      1. **The firmware advertised no service UUID** (only flags and the name), so
+         the app's service-filtered scan never saw the device while a generic
+         scanner listed it happily. Fixed by `build_advertising`, which now puts the
+         service in the advertisement with the name after it, pinned by
+         `calypso-core/tests/advertising.rs`.
+      2. **The app subscribed without discovering services first.** On iOS and macOS
+         the plugin resolves a characteristic against the peripheral's discovered
+         list, which CoreBluetooth leaves empty until `discoverServices` runs — and
+         it reports a lookup against that empty list as `characteristicNotFound`,
+         naming a UUID that is *correct*, so the error points at the device for a
+         fault in the app. `BleTransport.connect` now discovers between connecting
+         and subscribing, and `FakeBleLink` throws in that order so the suite fails
+         if the call is dropped.
+      3. **The same UUID needs two byte orders, and I had them backwards.** In the
+         GATT tree a client sees the bytes as the firmware writes them, so those are
+         canonical text; in advertising data a 128-bit UUID goes on air
+         least-significant byte first, so the same UUID must be *reversed* there.
+         Chasing (1) I "fixed" the GATT arrays by reversing them, which is how the
+         device came to expose every service as `408813df-…` while the app looked
+         for `0000ca20-…`. Both directions are now pinned separately
+         (`calypso-core/tests/gatt_table.rs`, `tests/advertising.rs`) with the
+         observation that settled each, and `reverse16` derives one from the other.
+
+      4. **The Mac had cached the device's old GATT database.** With the firmware
+         fixed *and* reflashed, the app still reported the reversed tree: CoreBluetooth
+         caches services and characteristics per peripheral, and universal_ble prefers
+         that cache to asking again. The cache is keyed to the device's **Bluetooth
+         address**, which reflashing does not change — so the firmware now bumps its
+         random address whenever the GATT layout changes, and the app's message names
+         this cause as well as the stale-firmware one, because the first version of
+         that message sent us back to reflash in a circle.
+
+      The thing that actually *found* (3) was making the app report the tree it
+      discovered — `device offers …, not …` — after two rounds of guessing from
+      messages that named a correct UUID and so said nothing about the device. That
+      diagnostic also found (4), by still reporting the old tree after a reflash that
+      should have changed it. Every fault in this list was invisible from both ends
+      until two real devices were made to describe each other.
+
 **An earlier sketch was thrown away.** The previous session's `ble_transport.dart`
 was written against an invented API (`ble.scan(...)`, `conn.subscribe(char,
 callback:)`, `ble.ConnectionState`) with fabricated UUIDs, and its
@@ -323,13 +366,19 @@ that UUIDs do not sort — ordering comes from the archive's append order.
 - [x] Client: `lib/model/uuid.dart` (canonical text <-> bytes, short form), the
       model, transports, archive and sync client all keyed by uuid, and the list
       shows a short uuid with the receipt time rather than "Rep 3"
-- [ ] **Dart tests are mid-migration.** `lib/` compiles and analyzes clean, and
-      the Rust and firmware suites pass, but the client's test files still call
-      the pre-uuid API (`summary.repId`, integer ids). `test/support/` is already
-      converted (tests name reps by index and the helpers mint the matching UUID),
-      so what is left is the call sites and assertions in the six test files.
-      `flutter test` will not compile until that is done — the one knowingly red
-      thing in the tree.
+- [x] **Dart tests migrated to uuids.** Every test file keys reps by uuid now:
+      `summary.repId` and integer rep ids are gone from the tests, chunks and
+      traces are named by uuid, and the list assertions use the short uuid the UI
+      shows. `flutter test` is green (63 tests) and `flutter analyze` is clean.
+
+`test/support/test_uuid.dart` was the one thing the previous session got wrong.
+It claimed to mint the fixture generator's uuids, but it built the UUID bytes one
+SplitMix64 byte at a time instead of the generator's four big-endian 32-bit words
+(and used Dart's arithmetic `>>` where the Rust side shifts a `u64` logically), so
+`u(1)` matched no fixture rep. It is a byte-for-byte port of
+`calypso_core::uuid::fixture_uuid` now — verified against the checked-in fixtures,
+so a test can name a fixture's rep by index (`u(0)` is `synthetic-squat`'s first
+rep) and `pblog_test` can assert the identity off the wire.
 
 ## Open questions
 

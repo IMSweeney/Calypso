@@ -35,7 +35,7 @@ is **not** done on the device; the app analyzes/plots the synced traces.
 BNO055 (IMU mode, 100 Hz)
    │  I2C @ 400 kHz
    ▼
-Sampler task ──► Ring buffer (RAM, ~30 s window: accel + quaternion)
+Sampler task ──► Ring buffer (RAM, ~12 s window: accel + quaternion)
                     │
                     ▼
               Rep detector (state machine, ZUPT at rest)
@@ -62,8 +62,10 @@ Sampler task ──► Ring buffer (RAM, ~30 s window: accel + quaternion)
 
 - Fixed-rate samples ⇒ timestamp implicit except for the base timestamp.
 - Sample format: `{ t_ms: u32, accel: [i16; 3], quat: [i16; 4] }` (scaled
-  fixed-point, 18 B) — 30 s @ 100 Hz ≈ 54 KB of heap. Acceptable; can shrink
-  by dropping `t_ms` (fixed rate) if heap gets tight.
+  fixed-point, 20 B with padding) — 30 s @ 100 Hz was 60 KB of heap, which turned
+  out to be 36 KB more than the device could spare (see the heap note under
+  *firmware constraints*). It is 12 s now: the detector never asks for more than
+  9 s of history.
 - The detector consumes a sliding window; nothing is integrated free-running.
 
 ### 3. Rep detector (in `calypso-core`, host-testable)
@@ -202,10 +204,12 @@ Two tiers:
       land in Phase 4)
 
 ### 2. Sampler & ring buffer (`calypso-esp32`)
-- [x] Switch BNO055 to IMU mode; I2C to 400 kHz (calibration gate relaxed
-      to sys/gyro/accel — the magnetometer never calibrates in IMU mode)
+- [x] Switch BNO055 to IMU mode; I2C to 400 kHz (the calibration gate is
+      sys/gyro/accel — the magnetometer never calibrates in IMU mode — and as of
+      `docs/calibration/` it no longer blocks boot or BLE: reps are simply not
+      recorded until the levels are good, and the app says which one is behind)
 - [x] 100 Hz sampler task: `{ t_ms, accel[i16;3], quat[i16;4] }` into a RAM
-      ring buffer (30 s window; `calypso_core::sampler::{Sample, SampleRing}`)
+      ring buffer (12 s window; `calypso_core::sampler::{Sample, SampleRing}`)
 - [x] Feed existing gravity-x BLE characteristic from the sampler (decimated
       to a 10 Hz update, BLE still notifies at 1 Hz)
 
@@ -271,6 +275,149 @@ inferred from notify success: the cursor only advances on a successful send,
 so an unsubscribed app simply means the next tick retries from the same
 position (no CCCD bookkeeping). Reps that fell off the ring are reported as
 unavailable rather than streamed. Re-requesting is idempotent.
+
+If the boot log says `Rep log unusable`, the firmware now names the cause and, for
+a missing partition, dumps the partition table it actually read. The usual answer
+is a stale table on the device: it must contain the `log` partition from
+`partitions.csv` (`data`/`undefined`, 0x190000, 0x270000), which a plain
+`espflash flash` writes along with the bootloader and the app.
+
+**What a client actually sees**, and the three ways that can be wrong silently:
+
+- **The service UUID is advertised**, in the advertisement packet itself rather than
+  the scan response: a client that scans *filtered by service* only sees
+  advertisements, so a device that does not advertise its service is invisible to the
+  app while a generic scanner lists it anyway. (The advertisement carries the service
+  and the name together — 30 of the 31 bytes for `Calypso`.)
+- **One byte order, both places: wire order, not text order.** Every array in
+  `ble.rs` is written reversed relative to the text it means —
+  `40 88 13 df … 20 ca 00 00` is `0000ca20-b0cd-11ec-871f-d45ddf138840` to a client
+  — and the GATT table and the advertisement use the same array, because a client
+  reverses both. Established from one build's logs rather than from the spec, which
+  got this wrong twice: the firmware logs its arrays at boot, and the app logs the
+  tree it discovered, so the two ends can be compared directly
+  (`calypso: device offers …; want …` against `sync service uuid … (wire), …
+  (as a client sees it)`). Both suites pin the rule per side.
+
+  A stale client cache is what made this hard: CoreBluetooth caches services and
+  characteristics **keyed to the device's Bluetooth address**, so a corrected
+  firmware can look unchanged until the address is bumped (see the note where the
+  address is set in `main.rs`) or the cache is cleared.
+- **A client must discover services before subscribing.** CoreBluetooth's peripheral
+  has no characteristics until `discoverServices` has run, and the plugin reports a
+  lookup against that empty list as `characteristicNotFound` — naming a UUID that is
+  perfectly correct, so it reads as a device fault. See `docs/app/plan.md`.
+### Firmware constraints worth knowing
+
+Three things here cost a session each. All three are about the *board*, not the
+logic, and none of them are visible from the host tests.
+
+#### A flash write or erase needs the other core parked
+
+The device log could not be formatted, and the error looked like broken flash:
+`esp-storage`'s default `MultiCoreStrategy::Error` **refuses every write and erase
+while the second core is running** (`FlashStorageError::OtherCoreRunning`), and on
+this build CPU1 is up from the bootloader onwards. Reads are unaffected, which is
+what makes it so confusing: the NVS reads worked fine (the stored BNO055
+calibration was applied, the device name was read) while every erase — including
+the log partition's first format — failed.
+
+`FlashStorage::new(..).multicore_auto_park()` is not optional here. It parks the
+other core for the duration of each operation and unparks it afterwards.
+
+#### The main stack is a remainder, shared, and invisible to clippy
+
+`main` runs on the linker's stack, which is not a sized buffer: `_stack_end` is
+wherever the RWDATA sections ended and `_stack_start` is the top of that region
+(`esp-hal`'s `ld/sections/stack.x`), so **every static and every heap region
+carved out of DRAM makes the stack smaller.** It was 22,532 bytes, and removing the
+Wi-Fi init (below) made it 41,932 — the same change, twice the stack. It has to
+hold `main`'s frame, plus every future `join3` polls, plus interrupt contexts. Two
+things to know, and one habit:
+
+- **`main` is `#[allow(clippy::large_stack_frames)]`**, so the crate's own lint
+  has never looked at the frame that sits under every task. Anything big in
+  `main` needs a human eye.
+- **`Box::new(v)` builds `v` on the stack first** and then moves it, so a large
+  `v` is large stack. Every big buffer here is therefore allocated through
+  `AllocVec` + `Box::leak`, never as an owned value — `SampleRing` borrows its
+  buffer for the same reason (`rep::TraceBuf` already did).
+
+The current build's frames can be checked without hardware, by reading the `entry
+a1, N` immediate out of the ELF (N × 8 bytes):
+
+```console
+xtensa-esp32-elf-objdump -d target/xtensa-esp32-none-elf/debug/calypso \
+  | grep -oE 'entry\s+a1, [0-9]+' | awk '{print $3}' | sort -n | tail
+```
+
+At the time of writing the largest frame in the firmware is 240 units (1920
+bytes), and nothing allocates stack dynamically (no `movsp`, no manual `a1`
+adjustment) — so no single function here is the problem any more.
+
+The runtime probes, in the order they print:
+
+- `Radio up, heap free N B`, then the setup lines, then **`Stack in use before
+  the tasks: N B`** — `main`'s frame, measured just before `join3` starts.
+- **`BLE connection established (stack N B)`** — depth inside the GATT task.
+- the 1 Hz sampler line, which carries `stack N B` beside the heap figure.
+
+An overflow shows up as esp-hal printing `Detected a write to the stack guard
+value`, and by then the task is dead. If those numbers approach ~20 KB, move a
+buffer to the heap rather than looking for stack to grow into — there isn't any.
+
+#### The heap is 164 KB and it was full
+
+Two `esp_alloc` regions, 98,768 B (reclaimed DRAM) + 64 KB (static), and **the
+buffer set is large**: the sample ring, the 9 s rep window (18 KB), two 512-point
+trace buffers (16 KB each), record scratch, the decode scratch, and the summary
+batch — ~104 KB of it. Measured from a boot log, the radio took another ~54 KB
+(driver buffers plus the Wi-Fi and BLE task stacks) before any of that, which did
+not fit, and the way that showed up was *nothing at all*: the log simply stopped,
+because `Vec::resize` on an exhausted heap calls `handle_alloc_error`, which
+panics, and the panic handler was `loop {}` with no output.
+
+Two things fixed it. The 30 s sample ring was 36 KB more than the device needed
+(the detector never asks for more than 9 s), and Wi-Fi — which this device never
+used — is gone, giving back most of the radio's 54 KB. From a boot log, the
+figures now read: `Radio up` ~109 KB free, `Rep detector ready` ~45 KB (that was
+8,968 B), `Sync buffers ready` ~22 KB. So:
+
+- the panic handler now prints (`*** PANIC: ... ***`), because "the log stops"
+  and "the device hung" looked identical;
+- `Radio up, heap free N B`, `Rep detector ready, heap free N B` and
+  `Sync buffers ready, heap free N B` are the three figures worth watching, and
+  anything under ~8 KB at the third one is a device that will not accept a
+  connection;
+- the `Radio up … free` figure is now the one that says whether the radio came up
+  cheaply or expensively: it dropped by most of Wi-Fi's cost when that went away,
+  and it is the number to compare if a radio dependency is ever added.
+
+#### The radio has its own tasks and stacks
+
+- **The BLE controller runs in its own esp-rtos task with a 4 KB stack by
+default** (`esp_radio::ble::Config::task_stack_size`), allocated from the heap.
+A fault inside it looks *nothing* like a `main` problem: the stack pointer in the
+panic dump points into DRAM (≈`0x3FFD…`), not at the linker stack. This
+firmware doubles it to 8 KB — it has the smallest default stack of anything on the
+board and is the only one we can size from here.
+- **No Wi-Fi controller.** `wifi::new` is not called: this is a BLE-only device,
+and initialising Wi-Fi started a task with its own stack plus driver buffers,
+most of the ~54 KB the radio took. It came from the esp-generate template, which
+wires up both radios. Two things make the removal safe rather than a guess: a
+build without it ran and advertised (the controller and host came up fine), and
+esp-radio's BLE bring-up only needs it when the `coex` feature is enabled —
+
+  ```rust
+  #[cfg(coex)]
+  assert!(crate::wifi::coex_init() == 0, "coex_init failed");
+  ```
+
+  with `coex_init` needing the adapter functions the Wi-Fi controller registers.
+  `coex` is an opt-in esp-radio feature that nothing here enables (checked: the
+  panic string is absent from the binary), so that assert is not compiled in.
+  **If BLE ever stops coming up, call `wifi::new` again first**, and if the board
+  panics with `coex_init failed`, someone turned `coex` on.
 
 ### 6. App (`calypso-app/`)
 Planning now lives in [`docs/app/plan.md`](../app/plan.md) (phases, decisions,

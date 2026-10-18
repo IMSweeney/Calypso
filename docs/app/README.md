@@ -139,7 +139,7 @@ abstract class RepTransport {
 | Implementation | Used by | Notes |
 |---|---|---|
 | `FixtureTransport` | Simulator, macOS dev loop, widget/golden tests | Loads a `.pblog` (see below); `watchSummaries()` replays with configurable pacing so the UI sees a realistic stream. |
-| `BleTransport` | Real device (and the Mac) | `universal_ble` behind a `BleLink` seam, so the protocol logic is testable with a fake and no radio: scan for the service, connect, subscribe `0xca21` and `0xca23`, write `0xca22`, reassemble chunks by index, complete exactly on `totalChunks` (idle timeout as a fallback for older firmware), and surface connection state. |
+| `BleTransport` | Real device (and the Mac) | `universal_ble` behind a `BleLink` seam, so the protocol logic is testable with a fake and no radio: scan for the service, connect, **discover services**, subscribe `0xca21` and `0xca23`, write `0xca22`, reassemble chunks by index, complete exactly on `totalChunks` (idle timeout as a fallback for older firmware), and surface connection state. Discovery is not optional: on iOS and macOS the plugin resolves a characteristic against the peripheral's discovered service list, which CoreBluetooth leaves empty until `discoverServices` runs — and it reports that as `characteristicNotFound`, naming a UUID that is perfectly correct. `FakeBleLink` throws in the same order, so the suite catches a regression. |
 | (capture) | Capturing golden data | Not a transport: a capture is a copy of the archive file, which is already `.pblog` — `cp history.pblog fixtures/capture.pblog`. |
 
 ## Plot model and 3D view
