@@ -35,7 +35,8 @@ use embedded_storage::nor_flash::NorFlash;
 use bno055::{BNO055OperationMode, BNO055Calibration, BNO055_CALIB_SIZE};
 use bno055::Bno055;
 use calypso_core::ble::{BleVec, SYNC_MSG_MAX};
-use calypso_core::flashlog::FlashLog;
+use calypso_core::calibration::Calibration;
+use calypso_core::flashlog::{self, FlashLog};
 use calypso_core::pb::msg;
 use calypso_core::sync::{self, decode_trace_request, SummaryCursor, TraceStreamer};
 use calypso_core::uuid::{self, RepUuid};
@@ -43,12 +44,19 @@ use calypso_core::rep::{compute_rep, Detector, TraceBuf, TracePoint, MARGIN_MS};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::sampler::{quantize, Sample, SampleRing, QUAT_SCALE, SAMPLE_RATE_HZ};
 use calypso_core::DEVICE_NAME_MAX;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use alloc::boxed::Box;
 
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    // Printed, not silent. A panic here used to just stop the log, which reads
+    // exactly like a hang and cost a session to diagnose: the firmware ran out of
+    // heap building its sync buffers and said nothing at all. `esp_println` works
+    // from a panic handler (defmt's formatter does not).
+    esp_println::println!("\n*** PANIC: {} ***", info);
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 extern crate alloc;
@@ -69,15 +77,77 @@ const DEFAULT_DEVICE_NAME: &str = "Calypso";
 /// BLE task as raw f32 bits.
 static GRAVITY_X_BITS: AtomicU32 = AtomicU32::new(0);
 
-/// Ring-buffer window: 30 s at 100 Hz (60 KB). The rep detector (Phase 3)
-/// consumes sliding windows from here; BLE trace sync will read it too.
-const SAMPLE_RING_LEN: usize = 30 * SAMPLE_RATE_HZ as usize;
+/// The IMU's calibration levels (`Calibration::to_bits`), written by the 1 Hz
+/// poll in the sampler task and read by the BLE task to tell the app. Zero (every
+/// level 0) until the first poll, which reads as "not calibrated" — the safe
+/// thing to believe.
+static CALIBRATION_BITS: AtomicU32 = AtomicU32::new(0);
 
-/// The sampler's sample window. Lives on the heap (leaked at startup): 60 KB
-/// is too much for the DRAM static region, but fits the ~160 KB heap. The
-/// sampler task both fills it and runs the rep detector over it; Phase 4/5
-/// will additionally read it from the BLE task (behind a mutex).
-type SampleWindow = RefCell<SampleRing<SAMPLE_RING_LEN>>;
+/// Whether the calibration profile has been written to NVS this boot. Set once,
+/// on the transition to calibrated, so the save (a flash erase and write) does
+/// not repeat on every poll.
+static CALIBRATION_SAVED: AtomicBool = AtomicBool::new(false);
+
+/// Whether a calibration status has ever made it to a subscriber. Set once, so the
+/// first delivery is logged and the rest (one a second) are not.
+static CALIBRATION_DELIVERED: AtomicBool = AtomicBool::new(false);
+
+/// Ring-buffer window: how much history the detector can be asked for, plus
+/// headroom.
+///
+/// The only thing that reads it is [`rep_window`](REP_WINDOW_SAMPLES): when the
+/// detector closes a rep, the sampler copies `[start - margin, end + margin]` out
+/// of the ring. The longest rep the detector can close is 8 s and the margins are
+/// 200 ms each side, so 9 s is the most that is ever needed and 12 s leaves a
+/// third of the ring spare.
+///
+/// It used to be 30 s — 60 KB of a ~164 KB heap that the radio also lives in —
+/// and that was the difference between a device that connects and one that runs
+/// out of memory building its own sync buffers (`heap free 8968 B` before it
+/// needed ~23 KB more). Do not grow this without checking the heap figures in the
+/// boot log; `Radio up, heap free N B` and `Sync buffers ready, heap free N B`
+/// are there to be read.
+const SAMPLE_RING_LEN: usize = REP_WINDOW_SAMPLES + 3 * SAMPLE_RATE_HZ as usize;
+
+/// The sampler's sample window. Lives on the heap (leaked at startup):
+/// [`SAMPLE_RING_LEN`] samples is too much for the DRAM static region, and the
+/// heap is where every big buffer here lives. The sampler task both fills it and
+/// runs the rep detector over it.
+type SampleWindow = RefCell<SampleRing<'static>>;
+
+/// The flash peripheral, and the scratch a partition lookup needs.
+///
+/// The partition table is 3 KB, and reading one into a local is by far the
+/// largest stack frame this firmware would have — the crate denies
+/// `clippy::large_stack_frames` for exactly that reason. Keeping the scratch
+/// here, alongside the peripheral it describes, means it is allocated once with
+/// the other big buffers instead of in every function that touches flash, and it
+/// needs no lock of its own: every use is already inside the mutex that owns
+/// this.
+///
+/// It is behind a pointer rather than an array in the struct: an array would put
+/// those 3 KB in the frame of whoever *builds* the `FlashStore` — `main`, which
+/// shares the linker stack (`_stack_end`, ~42 KB in the current build) with the
+/// BLE stack.
+struct FlashStore {
+    flash: FlashDevice<'static>,
+    pt_mem: &'static mut [u8],
+}
+
+impl FlashStore {
+    /// The peripheral and the partition-table scratch, borrowed apart.
+    ///
+    /// One accessor instead of destructuring the struct at each site: with the
+    /// scratch behind a pointer, `let FlashStore { flash, pt_mem } = store` would
+    /// hand out `&mut &mut [u8]` and every caller would have to deref it.
+    fn split(&mut self) -> (&mut FlashDevice<'static>, &mut [u8]) {
+        (&mut self.flash, &mut self.pt_mem[..])
+    }
+}
+
+/// Summaries collected per pass of the summary stream. Each is ~76 bytes, so the
+/// batch is a heap buffer rather than a local — see [`collect_summaries`].
+const SUMMARY_BATCH: usize = 16;
 
 /// Window handed to the detector when a rep closes: `MAX_REP_MS` plus the
 /// ZUPT margins (9 s at 100 Hz).
@@ -101,7 +171,12 @@ async fn main(spawner: Spawner) -> ! {
     let peripherals = esp_hal::init(config);
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 98768);
-    // COEX needs more RAM - so we've added some more
+    // A second region, because the firmware's own buffers are ~82 KB before the
+    // radio has allocated anything (sample ring 24 KB, rep window 18 KB, two trace
+    // buffers 16 KB each, plus scratch), and the radio's task stacks come from
+    // here too. Both regions are statics, so this one is also 64 KB the linker
+    // stack below does not get — see the heap note in docs/rep-tracking before
+    // changing the split.
     esp_alloc::heap_allocator!(size: 64 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -110,14 +185,36 @@ async fn main(spawner: Spawner) -> ! {
     info!("Embassy initialized!");
 
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
-    let (mut _wifi_controller, _interfaces) =
-        esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
-            .expect("Failed to initialize Wi-Fi controller");
-    // find more examples https://github.com/embassy-rs/trouble/tree/main/examples/esp32
-    let transport = BleConnector::new(&radio_init, peripherals.BT, Default::default()).unwrap();
+    // **No Wi-Fi controller.** This is a BLE-only device, and initialising Wi-Fi
+    // starts a Wi-Fi task with its own stack and driver buffers — most of the
+    // ~54 KB the radio took out of a 164 KB heap, which is what the firmware ran
+    // out of. It came from the esp-generate template, which wires up both radios.
+    //
+    // It is safe to leave out here, and this is the evidence rather than a
+    // reading of the docs: a build without this call ran, printed `advertising`
+    // and kept logging, i.e. the BLE controller and host came up fine. esp-radio
+    // *would* need it if its `coex` feature were enabled — the BLE bring-up has
+    // `#[cfg(coex)] assert!(coex_init() == 0, "coex_init failed")`, and
+    // `coex_init` needs the adapter functions the Wi-Fi controller registers.
+    // `coex` is an opt-in esp-radio feature that nothing enables (checked: the
+    // panic string is not in the binary), so the assert is not compiled in.
+    //
+    // **If BLE ever stops coming up, put this line back first** — and if the
+    // board panics with `coex_init failed`, someone has enabled `coex`.
+    //
+    // More examples: https://github.com/embassy-rs/trouble/tree/main/examples/esp32
+
+    // 8 KB rather than the 4 KB default. A crash that pointed at a task stack in
+    // DRAM (not the linker stack) is what put this here: the controller task has
+    // the smallest default stack of anything on the board and is the only one we
+    // can size from here. A fault inside it looks nothing like a bug in `main`,
+    // which is why the number is written down.
+    let ble_config = esp_radio::ble::Config::default().with_task_stack_size(8 * 1024);
+    let transport = BleConnector::new(&radio_init, peripherals.BT, ble_config).unwrap();
     let ble_controller = ExternalController::<_, 1>::new(transport);
     let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
         HostResources::new();
+    info!("Radio up, heap free {} B", esp_alloc::HEAP.free());
 
     // Everything runs in this task via join3 below; no extra tasks needed.
     let _ = spawner;
@@ -144,22 +241,62 @@ async fn main(spawner: Spawner) -> ! {
     // ZUPT (Phase 3).
     bno055.set_mode(BNO055OperationMode::IMU, &mut delay).unwrap();
 
-    let mut flash = FlashStorage::new(peripherals.FLASH);
+    // `multicore_auto_park` is not optional on this chip: esp-storage's default
+    // strategy *refuses* every write and erase while the second core is running
+    // (`MultiCoreStrategy::Error`), and CPU1 is up in this build. Reads are
+    // unaffected, which is what makes it so confusing — the NVS reads worked
+    // while every erase, including the log partition's first format, came back
+    // as an I/O error.
+    let flash = FlashStorage::new(peripherals.FLASH).multicore_auto_park();
     info!("Flash size = {}", flash.capacity());
-    setup_calibration(&mut bno055, &mut flash);
+    // The peripheral and its partition-table scratch, together (see FlashStore).
+    // The scratch is 3 KB and goes on the heap: as an array inside the struct it
+    // would sit in `main`'s frame, the bottom of the stack the BLE stack shares.
+    let pt_mem: &'static mut [u8] =
+        Box::leak(alloc::vec![0u8; partitions::PARTITION_TABLE_MAX_LEN].into_boxed_slice());
+    let mut store = FlashStore { flash, pt_mem };
+
+    // Apply a stored calibration profile if there is one, but never wait for the
+    // IMU to calibrate: this used to block boot, which left an uncalibrated
+    // device with no BLE, no app and no way to find out why. It now comes up
+    // fully and says what it is waiting for (see docs/calibration).
+    load_calibration(&mut bno055, &mut store);
 
     // Load the persisted BLE device name, falling back to the default.
-    let device_name = load_device_name(&mut flash);
+    let device_name = load_device_name(&mut store);
     info!("BLE device name: {}", device_name.as_str());
 
+    // The UUIDs this build exposes, in both orders, as hex. One line, and it answers
+    // the question that cost several flashes: *which* firmware is on this board, as
+    // seen from the other end of the link. A client reports a mismatch here as
+    // "characteristic not found", naming a UUID that is correct.
+    info!(
+        "sync service uuid {=[u8]:02x} (wire), {=[u8]:02x} (as a client sees it)",
+        calypso_core::ble::SYNC_SERVICE_UUID_BYTES,
+        calypso_core::ble::reverse16(calypso_core::ble::SYNC_SERVICE_UUID_BYTES)
+    );
+
     // Mount the rep-record flash log (see docs/rep-tracking).
-    match mount_rep_log(&mut flash) {
+    match mount_rep_log(&mut store) {
         Ok(sectors) => info!("Rep log mounted: {} sectors", sectors),
-        Err(()) => warn!("Rep log: partition missing or unusable"),
+        // The reason, not just "unusable": the first question is always whether
+        // the flashed partition table has the log partition at all.
+        Err(reason) => warn!("Rep log unusable: {}", reason),
     }
 
-    // 30 s of samples on the heap, alive for the program's lifetime.
-    let samples: &'static SampleWindow = Box::leak(Box::new(RefCell::new(SampleRing::new())));
+    // The sample ring, on the heap and alive for the program's lifetime (see
+    // `SAMPLE_RING_LEN` for why it is this size).
+    //
+    // The buffer is allocated and leaked separately from the ring, and the ring
+    // borrows it. A ring that owned this array would be built as a *value* before
+    // `Box::new` could move it to the heap — 60 KB of stack temporary when it was
+    // a 30 s window, more than twice this task's whole stack, which is how this
+    // used to crash (see docs/rep-tracking, "firmware constraints").
+    let mut ring_vec = AllocVec::new();
+    ring_vec.resize(SAMPLE_RING_LEN, Sample::ZERO);
+    let ring_buf: &'static mut [Sample] = Box::leak(ring_vec.into_boxed_slice());
+    let samples: &'static SampleWindow =
+        Box::leak(Box::new(RefCell::new(SampleRing::new(ring_buf))));
     // Rep-detector scratch, also on the heap (too big for the static region,
     // and built with `vec!` so no large temporary hits the stack).
     let mut window_vec = alloc::vec::Vec::new();
@@ -171,20 +308,34 @@ async fn main(spawner: Spawner) -> ! {
         Box::leak(trace_vec.into_boxed_slice());
     let mut rep_trace = TraceBuf::new(rep_trace_storage);
     // Scratch for encoding one log record at a time (~2 KB).
-    let mut rec_vec = AllocVec::new();
-    rec_vec.resize(RECORD_BUF_BYTES, 0u8);
-    let rec_buf: &'static mut [u8] = Box::leak(rec_vec.into_boxed_slice());
+    let rec_buf: &'static mut [u8] =
+        Box::leak(alloc::vec![0u8; RECORD_BUF_BYTES].into_boxed_slice());
     info!("Rep detector ready, heap free {} B", esp_alloc::HEAP.free());
 
     // The one flash peripheral, shared by the BLE task (device name) and the
     // sampler task (rep log). An async mutex, not a critical section: erasing
     // a sector takes tens of milliseconds and must not block interrupts. All
     // three futures below run in this task, so a no-op raw mutex suffices.
-    let flash: &'static AsyncMutex<NoopRawMutex, FlashDevice> =
-        Box::leak(Box::new(AsyncMutex::new(flash)));
+    let store: &'static AsyncMutex<NoopRawMutex, FlashStore> =
+        Box::leak(Box::new(AsyncMutex::new(store)));
 
+    // **This address is the device's identity to every client**, so it is also the
+    // key a client's cached GATT database lives under. CoreBluetooth caches a
+    // peripheral's services and characteristics, and universal_ble prefers that
+    // cache to asking again (`if let cachedServices = peripheral.services` — see
+    // `UniversalBleAsyncServiceDiscovery`). So a client that cached the *old*
+    // services keeps seeing them however many times this firmware is reflashed: the
+    // cache is keyed to this address, not to the flash contents.
+    //
+    // **Bump it whenever the GATT layout changes.** It was last bumped when the UUID
+    // byte order was settled, having cost several flashes to work out. The
+    // principled alternative is a GATT Service Changed characteristic (0x2A05) with
+    // an indication, which tells clients to drop the cache themselves; this device
+    // has no need for one yet.
+    //
+    // The top two bits are set, as a static random address requires.
     let stack = trouble_host::new(ble_controller, &mut resources)
-        .set_random_address(Address::random([0xca, 0xa7, 0x19, 0x50, 0xe4, 0xff]));
+        .set_random_address(Address::random([0xca, 0xa7, 0x19, 0x50, 0xe4, 0xfd]));
     let Host {
         mut peripheral,
         mut runner,
@@ -221,9 +372,17 @@ async fn main(spawner: Spawner) -> ! {
     let mut trace_vec = AllocVec::new();
     trace_vec.resize(TRACE_POINTS, TracePoint::ZERO);
     let sync_trace_storage: &'static mut [TracePoint] = Box::leak(trace_vec.into_boxed_slice());
-    let mut sync_rec_vec = AllocVec::new();
-    sync_rec_vec.resize(RECORD_BUF_BYTES, 0u8);
-    let sync_rec_buf: &'static mut [u8] = Box::leak(sync_rec_vec.into_boxed_slice());
+    let sync_rec_buf: &'static mut [u8] =
+        Box::leak(alloc::vec![0u8; RECORD_BUF_BYTES].into_boxed_slice());
+    // Reading a record back means decoding it, and a decoded `RepRecord` is ~2 KB
+    // (a full trace chunk is stored inline). One buffer, reused for every record
+    // of every scan, so no decode ever lands on a task's stack — these futures
+    // live on the main task's stack, and a 2 KB frame inside one is 2 KB of it.
+    let sync_rec_msg: &'static mut msg::RepRecord = leak_record_scratch();
+    // ...and the summary batch, for the same reason: `SUMMARY_BATCH` of them is
+    // ~1.2 KB, which has no business sitting in a task's future.
+    let sync_batch: &'static mut AllocVec<msg::RepSummary> =
+        Box::leak(Box::new(AllocVec::with_capacity(SUMMARY_BATCH)));
     info!("Sync buffers ready, heap free {} B", esp_alloc::HEAP.free());
     let server = AttributeServer::<
         NoopRawMutex,
@@ -234,6 +393,11 @@ async fn main(spawner: Spawner) -> ! {
     >::new(gatt.table);
 
     info!("Starting BLE stack");
+    // How much of the stack `main`'s own frame is holding before the tasks start.
+    // This is the number that says whether the setup above is thrifty with the
+    // linker stack or eating it (`_stack_end`; ~42 KB in the current build, and it
+    // moves whenever a static does — measure, do not assume).
+    info!("Stack in use before the tasks: {} B", stack_used());
     join3(
         // HCI runner: must run forever alongside any other BLE tasks.
         async {
@@ -249,23 +413,22 @@ async fn main(spawner: Spawner) -> ! {
             loop {
                 // (Re)advertise with the current name. A name written over GATT
                 // shows up in advertising on the next advertising cycle (i.e.
-                // after the current connection closes).
-                let mut adv_data = [0u8; 31];
-                let adv_len = AdStructure::encode_slice(
-                    &[
-                        AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
-                        AdStructure::CompleteLocalName(name.as_bytes()),
-                    ],
-                    &mut adv_data[..],
-                )
-                .unwrap();
+                // after the current connection closes). The payloads are built in
+                // `calypso-core` so that what a client sees is host-tested — see
+                // `build_advertising` for the layout and why it is that way.
+                let advertising = calypso_core::ble::build_advertising(name.as_str());
+                if advertising.adv_len == 0 {
+                    // An empty advertisement is invisible to every client, so it is
+                    // worth saying out loud rather than debugging on the phone.
+                    warn!("no advertising data to send");
+                }
 
                 let advertiser = match peripheral
                     .advertise(
                         &Default::default(),
                         Advertisement::ConnectableScannableUndirected {
-                            adv_data: &adv_data[..adv_len],
-                            scan_data: &[],
+                            adv_data: &advertising.adv_data[..advertising.adv_len],
+                            scan_data: &advertising.scan_data[..advertising.scan_len],
                         },
                     )
                     .await
@@ -286,7 +449,7 @@ async fn main(spawner: Spawner) -> ! {
                     },
                     Err(_) => continue,
                 };
-                info!("BLE connection established");
+                info!("BLE connection established (stack {} B)", stack_used());
 
                 // Sync state: how many summaries this subscriber has been
                 // sent. Notifications fail while nobody is subscribed, so the
@@ -300,17 +463,22 @@ async fn main(spawner: Spawner) -> ! {
                     let event = match select(conn.next(), Timer::after(Duration::from_secs(1))).await {
                         Either::First(event) => event,
                         Either::Second(()) => {
+                            // Calibration first: it is what tells the app whether
+                            // to expect reps at all, so it should not queue behind
+                            // a burst of summaries.
+                            notify_calibration(&summary_char, &conn).await;
                             let value = f32::from_bits(GRAVITY_X_BITS.load(Ordering::Relaxed));
-                            if let Err(_) = gravity_x_char.notify(&conn, &value).await {
-                                // No subscriber yet; still fine to keep the
-                                // connection (and try again on the next tick).
-                            }
+                            // A failed notify means no subscriber yet; still fine
+                            // to keep the connection (and try again next tick).
+                            let _ = gravity_x_char.notify(&conn, &value).await;
                             // Auto-sync: push any summaries the app hasn't
                             // seen. A failed notify means nobody is
                             // subscribed, so we stop and retry next tick.
                             stream_new_summaries(
-                                flash,
+                                store,
                                 sync_rec_buf,
+                                sync_rec_msg,
+                                sync_batch,
                                 &summary_char,
                                 &conn,
                                 &mut cursor,
@@ -335,33 +503,34 @@ async fn main(spawner: Spawner) -> ! {
                             if wrote_request {
                                 // The app asked for a rep's trace: read it
                                 // back from the log and stream it.
-                                if let Ok(request) = server.table().get(&trace_request_char) {
-                                    if let Some(request) = decode_trace_request(&request) {
-                                        let wanted = calypso_core::pb::uuid_from_field(&request.rep_uuid);
-                                        info!("trace request: rep {}", UuidShort(wanted.as_ref()));
-                                        stream_trace(
-                                            flash,
-                                            sync_rec_buf,
-                                            &mut *sync_trace_storage,
-                                            &trace_chunk_char,
-                                            &conn,
-                                            request,
-                                        )
-                                        .await;
-                                    }
+                                if let Ok(request) = server.table().get(&trace_request_char)
+                                    && let Some(request) = decode_trace_request(&request)
+                                {
+                                    let wanted = calypso_core::pb::uuid_from_field(&request.rep_uuid);
+                                    info!("trace request: rep {}", UuidShort(wanted.as_ref()));
+                                    stream_trace(
+                                        store,
+                                        sync_rec_buf,
+                                        sync_rec_msg,
+                                        &mut *sync_trace_storage,
+                                        &trace_chunk_char,
+                                        &conn,
+                                        request,
+                                    )
+                                    .await;
                                 }
                             }
                             if wrote_name {
                                 // The write has been applied to the attribute
                                 // store by `accept`; read the new name back,
                                 // keep it in memory and persist it to flash.
-                                if let Ok(new_name) = server.table().get(&name_char) {
-                                    if new_name != name {
-                                        name = new_name;
-                                        info!("device name set to {}", name.as_str());
-                                        let mut f = flash.lock().await;
-                                        save_device_name(&mut f, name.as_str());
-                                    }
+                                if let Ok(new_name) = server.table().get(&name_char)
+                                    && new_name != name
+                                {
+                                    name = new_name;
+                                    info!("device name set to {}", name.as_str());
+                                    let mut guard = store.lock().await;
+                                    save_device_name(&mut guard, name.as_str());
                                 }
                             }
                         }
@@ -384,9 +553,33 @@ async fn main(spawner: Spawner) -> ! {
             let mut detector = Detector::new();
             let mut reps: u32 = 0;
             let mut n: u32 = 0;
+            // The IMU's calibration levels, refreshed once a second.
+            let mut calibration = Calibration::default();
+            // For the profile read-back, which the bno055 crate needs a delay for
+            // (it briefly switches the chip to CONFIG mode).
+            let mut delay = Delay;
             loop {
                 ticker.next().await;
                 let t_ms = start.elapsed().as_millis() as u32;
+
+                // 1 Hz: read the calibration levels, publish them for the BLE
+                // task, and save the profile the first time they are good enough.
+                //
+                // Before this tick's sample, for two reasons: the detector's gate
+                // is never a state behind, and the save switches the chip's mode
+                // for ~40 ms, after which the first sample read back can be odd.
+                if n.is_multiple_of(SAMPLE_RATE_HZ) {
+                    let (updated, saved) =
+                        poll_calibration(&mut bno055, &mut delay, store).await;
+                    calibration = updated;
+                    if saved {
+                        // Drop the detector's state so the post-mode-switch sample
+                        // cannot close a rep around itself. It re-arms from the
+                        // next real rest.
+                        detector = Detector::new();
+                    }
+                }
+
                 let Ok(accel) = bno055.linear_acceleration_fixed() else {
                     warn!("BNO055 linear accel read error");
                     continue;
@@ -408,9 +601,20 @@ async fn main(spawner: Spawner) -> ! {
                 samples.borrow_mut().push(sample);
 
                 // Detect reps; on close, slice the window out of the ring and
-                // compute the ZUPT-anchored trace + summary. Storing the
-                // record in the flash log lands in Phase 4.
-                if let Some(span) = detector.update(&sample) {
+                // compute the ZUPT-anchored trace + summary, then persist it.
+                //
+                // Only while the IMU is trustworthy. Uncalibrated, the gyro and
+                // accelerometer report drift as motion: the detector would fire on
+                // it and the stored trace would be fiction rather than a
+                // measurement (see docs/calibration). Not feeding the detector at
+                // all also means it starts from a real rest once calibration
+                // completes.
+                let span = if calibration.is_ready() {
+                    detector.update(&sample)
+                } else {
+                    None
+                };
+                if let Some(span) = span {
                     let copied = samples.borrow().copy_window(
                         span.start_ms,
                         span.end_ms,
@@ -432,8 +636,8 @@ async fn main(spawner: Spawner) -> ! {
                         // the sensor is at rest, so the tens of ms an erase
                         // takes here can't land in the middle of a rep.
                         let stored = {
-                            let mut f = flash.lock().await;
-                            store_rep(&mut f, rec_buf, rep_uuid, &sum, &rep_trace)
+                            let mut guard = store.lock().await;
+                            store_rep(&mut guard, rec_buf, rep_uuid, &sum, &rep_trace)
                         };
                         match stored {
                             Ok(n) => info!(
@@ -465,28 +669,44 @@ async fn main(spawner: Spawner) -> ! {
 
                 n += 1;
                 // Gravity-x: update at 10 Hz (BLE pushes it at 1 Hz).
-                if n % 10 == 0 {
-                    if let Ok(g) = bno055.gravity_fixed() {
-                        let x = g.x as f32 / 100.0;
-                        GRAVITY_X_BITS.store(x.to_bits(), Ordering::Relaxed);
-                    }
+                if n.is_multiple_of(10)
+                    && let Ok(g) = bno055.gravity_fixed()
+                {
+                    let x = g.x as f32 / 100.0;
+                    GRAVITY_X_BITS.store(x.to_bits(), Ordering::Relaxed);
                 }
                 // Level-sense log at 1 Hz, matching the old loop.
-                if n % SAMPLE_RATE_HZ == 0 {
+                if n.is_multiple_of(SAMPLE_RATE_HZ) {
                     get_level_sense(&mut bno055);
                     let (len, pushed) = {
                         let r = samples.borrow();
                         (r.len(), r.pushed())
                     };
-                    info!(
-                        "sampler: {} Hz, ring {}/{} samples, {} pushed, {} reps, heap free {} B",
-                        SAMPLE_RATE_HZ,
-                        len,
-                        SAMPLE_RING_LEN,
-                        pushed,
-                        reps,
-                        esp_alloc::HEAP.free()
-                    );
+                    if calibration.is_ready() {
+                        info!(
+                            "sampler: {} Hz, ring {}/{} samples, {} pushed, {} reps, imu {} (recording), stack {} B, heap free {} B",
+                            SAMPLE_RATE_HZ,
+                            len,
+                            SAMPLE_RING_LEN,
+                            pushed,
+                            reps,
+                            CalibrationLog(calibration),
+                            stack_used(),
+                            esp_alloc::HEAP.free()
+                        );
+                    } else {
+                        // Warn, not info: nothing is being recorded, and the
+                        // levels say which sensor to work on.
+                        warn!(
+                            "sampler: {} Hz, ring {}/{} samples, {} pushed, imu {} — rep recording paused until the IMU is calibrated (stack {} B)",
+                            SAMPLE_RATE_HZ,
+                            len,
+                            SAMPLE_RING_LEN,
+                            pushed,
+                            CalibrationLog(calibration),
+                            stack_used()
+                        );
+                    }
                 }
             }
         },
@@ -494,27 +714,63 @@ async fn main(spawner: Spawner) -> ! {
     .await;
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v~1.0/examples
-    loop {}
+    //
+    // Unreachable: every arm of the join3 above loops forever.
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 /// Mount the rep-record flash log on the `log` data partition (subtype
 /// `undefined`, see partitions.csv). Returns the number of sectors in the
 /// ring. Mounting here formats the partition on first boot; individual reps
 /// are written later by [`store_rep`].
-fn mount_rep_log(flash: &mut FlashStorage) -> Result<u32, ()> {
-    let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
-    let pt = partitions::read_partition_table(flash, &mut pt_mem).map_err(|_| ())?;
+fn mount_rep_log(store: &mut FlashStore) -> Result<u32, &'static str> {
+    let (flash, pt_mem) = store.split();
+    let pt = partitions::read_partition_table(flash, pt_mem)
+        .map_err(|_| "partition table unreadable")?;
     let Some(log_part) = pt
         .find_partition(partitions::PartitionType::Data(
             partitions::DataPartitionSubType::Undefined,
         ))
-        .map_err(|_| ())?
+        .map_err(|_| "partition table unreadable")?
     else {
-        return Err(());
+        // The flashed table has no data/undefined partition. Usually a stale
+        // table on the device rather than a broken log, so say what is actually
+        // there — otherwise the next step is a guess.
+        log_partition_table(&pt);
+        return Err("no data/undefined partition in the flashed table");
     };
     let mut region = log_part.as_embedded_storage(flash);
-    let log = FlashLog::mount(&mut region).map_err(|_| ())?;
+    let log = FlashLog::mount(&mut region).map_err(|e| match e {
+        flashlog::Error::RegionTooSmall => "log partition smaller than two sectors",
+        flashlog::Error::TooLarge => "record too large for a sector",
+        flashlog::Error::Flash(_) => "flash read/write error on the log partition",
+    })?;
     Ok(log.sectors())
+}
+
+/// Log what the flashed partition table contains, entry by entry.
+///
+/// Only on a failed lookup: the answer to "is the table the one this firmware was
+/// built for?" then sits in the log instead of in a guess.
+fn log_partition_table(pt: &partitions::PartitionTable<'_>) {
+    for entry in pt.iter() {
+        let kind = match entry.partition_type() {
+            partitions::PartitionType::App(_) => "app",
+            partitions::PartitionType::Data(_) => "data",
+            partitions::PartitionType::Bootloader(_) => "bootloader",
+            partitions::PartitionType::PartitionTable(_) => "ptable",
+        };
+        info!(
+            "  {}: {} subtype {} at {} len {}",
+            entry.label_as_str(),
+            kind,
+            entry.raw_subtype(),
+            entry.offset(),
+            entry.len()
+        );
+    }
 }
 
 /// Push any log summaries the subscriber hasn't been sent yet, oldest first.
@@ -522,58 +778,42 @@ fn mount_rep_log(flash: &mut FlashStorage) -> Result<u32, ()> {
 /// which is how "nobody is subscribed" shows up — so the next tick picks up
 /// where this one left off.
 async fn stream_new_summaries(
-    flash: &'static AsyncMutex<NoopRawMutex, FlashDevice<'static>>,
+    store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
     rec_buf: &mut [u8],
+    rec: &mut msg::RepRecord,
+    batch: &mut AllocVec<msg::RepSummary>,
     summary_char: &Characteristic<BleVec<SYNC_MSG_MAX>>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     cursor: &mut SummaryCursor,
 ) {
-    const BATCH: usize = 16;
-
-    // Collect the next batch of summaries from the log, then notify them one
-    // at a time (notifications are async, so they can't happen inside the
-    // log's sync iteration).
-    let mut batch: heapless::Vec<msg::RepSummary, BATCH> = heapless::Vec::new();
-    let total;
-    {
-        let mut guard = flash.lock().await;
-        let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
-        let Ok(pt) = partitions::read_partition_table(&mut *guard, &mut pt_mem) else {
-            return;
-        };
-        let Ok(Some(partition)) = pt.find_partition(partitions::PartitionType::Data(
-            partitions::DataPartitionSubType::Undefined,
-        )) else {
-            return;
-        };
-        let mut region = partition.as_embedded_storage(&mut *guard);
-        let Ok(mut log) = FlashLog::mount(&mut region) else {
-            return;
-        };
-        let skip = cursor.next();
-        let mut seen = 0usize;
-        let _ = store::for_each_summary(&mut log, rec_buf, |s| {
-            if seen >= skip && batch.len() < BATCH {
-                let _ = batch.push(s);
-            }
-            seen += 1;
-        });
-        total = seen;
-    }
+    // Collect the next batch, then notify them one at a time: notifications are
+    // async, so they cannot happen inside the log's sync iteration.
+    let total = {
+        let mut guard = store.lock().await;
+        collect_summaries(&mut guard, rec_buf, rec, cursor.next(), batch)
+    };
+    let Some(total) = total else {
+        return;
+    };
     // Reps fall off the ring as it wraps; never point past the end.
     cursor.clamp_to(total);
 
-    let mut scratch = [0u8; SYNC_MSG_MAX];
     let mut payload: BleVec<SYNC_MSG_MAX> = BleVec::new();
     for summary in batch.iter() {
+        // Encoded straight into the notification buffer: one buffer instead of a
+        // scratch and a copy, which matters because this frame is a future. A
+        // summary too large to fit here would not have fitted the characteristic
+        // either, so nothing is lost by failing at the encode.
+        //
         // A `RepSummary` carries a uuid container now, so it is not `Copy`.
-        let Some(n) = sync::encode_summary_message(summary.clone(), &mut scratch) else {
-            return;
-        };
         payload.clear();
-        if payload.extend_from_slice(&scratch[..n]).is_err() {
+        if payload.resize(SYNC_MSG_MAX, 0).is_err() {
             return;
         }
+        let Some(n) = sync::encode_summary_message(summary.clone(), &mut payload[..]) else {
+            return;
+        };
+        payload.truncate(n);
         if summary_char.notify(conn, &payload).await.is_err() {
             return; // nobody subscribed (yet)
         }
@@ -581,11 +821,61 @@ async fn stream_new_summaries(
     }
 }
 
+/// Fill `batch` with the next summaries the subscriber hasn't seen, returning how
+/// many summaries the log holds (or `None` if the log couldn't be read).
+///
+/// Sync on purpose. Everything inlined into an async fn becomes part of its
+/// future, and a future lives on the task's stack for as long as it is suspended:
+/// the flash log is a deep call graph (mount, sector scan, CRC, decode), none of
+/// which needs to be in a task's state while it waits for a notification. Keeping
+/// it behind this boundary is what holds both of those frames to one buffer apiece.
+fn collect_summaries(
+    store: &mut FlashStore,
+    rec_buf: &mut [u8],
+    rec: &mut msg::RepRecord,
+    skip: usize,
+    batch: &mut AllocVec<msg::RepSummary>,
+) -> Option<usize> {
+    let (flash, pt_mem) = store.split();
+    let pt = partitions::read_partition_table(flash, pt_mem).ok()?;
+    let partition = pt
+        .find_partition(partitions::PartitionType::Data(
+            partitions::DataPartitionSubType::Undefined,
+        ))
+        .ok()??;
+    let mut region = partition.as_embedded_storage(flash);
+    let mut log = FlashLog::mount(&mut region).ok()?;
+
+    batch.clear();
+    let mut seen = 0usize;
+    let _ = store::for_each_summary(&mut log, rec_buf, rec, |s| {
+        if seen >= skip && batch.len() < batch.capacity() {
+            batch.push(s.clone());
+        }
+        seen += 1;
+    });
+    Some(seen)
+}
+
 /// Read a requested rep's trace back from the log and notify it to the app in
 /// MTU-sized chunks.
+///
+/// The one frame in this firmware that is knowingly over the crate's
+/// `clippy::large_stack_frames` threshold, hence the exemption. It is 1363 bytes
+/// of which the largest single local is the 193-byte encode scratch
+/// ([`sync::SYNC_CHUNK_MAX`], the worst case for three samples); the rest is the
+/// inlined MIR of the encoder and the log calls. There is no buffer left to move
+/// to the heap — extracting the log work is already done (see
+/// [`read_trace_from_log`]) — and suppressing inlining across `calypso-core` to
+/// satisfy the lint would trade a bounded, once-per-trace cost for a real one.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "1363 B: a 193 B encode scratch plus the inlined encoder/log frames"
+)]
 async fn stream_trace(
-    flash: &'static AsyncMutex<NoopRawMutex, FlashDevice<'static>>,
+    store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
     rec_buf: &mut [u8],
+    rec: &mut msg::RepRecord,
     trace_storage: &mut [TracePoint],
     chunk_char: &Characteristic<BleVec<SYNC_MSG_MAX>>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
@@ -597,24 +887,9 @@ async fn stream_trace(
     };
     let mut trace = TraceBuf::new(trace_storage);
     {
-        let mut guard = flash.lock().await;
-        let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
-        let Ok(pt) = partitions::read_partition_table(&mut *guard, &mut pt_mem) else {
-            return;
-        };
-        let Ok(Some(partition)) = pt.find_partition(partitions::PartitionType::Data(
-            partitions::DataPartitionSubType::Undefined,
-        )) else {
-            return;
-        };
-        let mut region = partition.as_embedded_storage(&mut *guard);
-        let Ok(mut log) = FlashLog::mount(&mut region) else {
-            return;
-        };
-        if store::read_trace(&mut log, rec_buf, rep_uuid, &mut trace)
-            .map(|n| n == 0)
-            .unwrap_or(true)
-        {
+        let mut guard = store.lock().await;
+        // The log work stays out of this future: see `collect_summaries`.
+        if !read_trace_from_log(&mut guard, rec_buf, rec, rep_uuid, &mut trace) {
             warn!("trace for rep {} is no longer in the log", UuidShort(Some(&rep_uuid)));
             return;
         }
@@ -642,6 +917,36 @@ async fn stream_trace(
     }
 }
 
+/// Read one rep's trace out of the log into `trace`, returning whether it was
+/// there at all (a rep the ring has overwritten reads back empty).
+///
+/// Sync, and separate from its caller for the same reason as
+/// [`collect_summaries`].
+fn read_trace_from_log(
+    store: &mut FlashStore,
+    rec_buf: &mut [u8],
+    rec: &mut msg::RepRecord,
+    rep_uuid: RepUuid,
+    trace: &mut TraceBuf<'_>,
+) -> bool {
+    let (flash, pt_mem) = store.split();
+    let Ok(pt) = partitions::read_partition_table(flash, pt_mem) else {
+        return false;
+    };
+    let Ok(Some(partition)) = pt.find_partition(partitions::PartitionType::Data(
+        partitions::DataPartitionSubType::Undefined,
+    )) else {
+        return false;
+    };
+    let mut region = partition.as_embedded_storage(flash);
+    let Ok(mut log) = FlashLog::mount(&mut region) else {
+        return false;
+    };
+    store::read_trace(&mut log, rec_buf, rec, rep_uuid, trace)
+        .map(|n| n > 0)
+        .unwrap_or(false)
+}
+
 /// A rep UUID for logs: its short form, or a placeholder when absent.
 ///
 /// Formatted through `defmt` directly rather than to a `&str`, so logging a rep
@@ -663,14 +968,14 @@ impl defmt::Format for UuidShort<'_> {
 /// mounting is a scan of the sector headers, and appends are rare (once per
 /// rep, at rest), so there's no need to keep it alive between reps.
 fn store_rep(
-    flash: &mut FlashDevice,
+    store: &mut FlashStore,
     rec_buf: &mut [u8],
     rep_uuid: RepUuid,
     summary: &calypso_core::rep::RepSummary,
     trace: &TraceBuf<'_>,
 ) -> Result<u32, ()> {
-    let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
-    let pt = partitions::read_partition_table(flash, &mut pt_mem).map_err(|_| ())?;
+    let (flash, pt_mem) = store.split();
+    let pt = partitions::read_partition_table(flash, pt_mem).map_err(|_| ())?;
     let Some(log_partition) = pt
         .find_partition(partitions::PartitionType::Data(
             partitions::DataPartitionSubType::Undefined,
@@ -688,12 +993,12 @@ fn store_rep(
 ///
 /// Blob layout at [`BLE_DEVICE_NAME_ADDR`]: 1 length byte followed by up to
 /// [`DEVICE_NAME_MAX`] name bytes, padded to a 4-byte boundary.
-fn load_device_name(flash: &mut FlashStorage) -> HeaplessString<DEVICE_NAME_MAX> {
+fn load_device_name(store: &mut FlashStore) -> HeaplessString<DEVICE_NAME_MAX> {
+    let (flash, pt_mem) = store.split();
     let mut fallback: HeaplessString<DEVICE_NAME_MAX> = HeaplessString::new();
     let _ = fallback.push_str(DEFAULT_DEVICE_NAME);
 
-    let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
-    let Ok(pt) = partitions::read_partition_table(flash, &mut pt_mem) else {
+    let Ok(pt) = partitions::read_partition_table(flash, pt_mem) else {
         return fallback;
     };
     let Ok(Some(nvs)) = pt.find_partition(partitions::PartitionType::Data(
@@ -719,9 +1024,9 @@ fn load_device_name(flash: &mut FlashStorage) -> HeaplessString<DEVICE_NAME_MAX>
 /// Persist the BLE device name to the NVS partition. Flash bits only go from
 /// 1 to 0 when writing, so the sector is erased first. The name lives in its
 /// own sector, leaving the calibration blob in the first sector untouched.
-fn save_device_name(flash: &mut FlashStorage, name: &str) {
-    let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
-    let Ok(pt) = partitions::read_partition_table(flash, &mut pt_mem) else {
+fn save_device_name(store: &mut FlashStore, name: &str) {
+    let (flash, pt_mem) = store.split();
+    let Ok(pt) = partitions::read_partition_table(flash, pt_mem) else {
         warn!("NVS: partition table read failed");
         return;
     };
@@ -749,49 +1054,222 @@ fn save_device_name(flash: &mut FlashStorage, name: &str) {
     }
 }
 
-fn setup_calibration(bno055: &mut Bno055<I2c<'_, Blocking>>, flash: &mut FlashStorage) {
-    // Set up nvs to store calibration data
-    let mut pt_mem = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
-    let pt = partitions::read_partition_table(flash, &mut pt_mem).unwrap();
+/// Apply the stored BNO055 calibration profile, if there is a usable one.
+///
+/// Deliberately does **not** wait for the IMU to calibrate. This is the routine
+/// that used to block boot in a loop, which meant an uncalibrated device had no
+/// BLE, no app, and nothing to say about why. The device now boots fully and
+/// tells the app what to do; it just does not record reps until the levels are
+/// good (see `docs/calibration`).
+fn load_calibration(bno055: &mut Bno055<I2c<'_, Blocking>>, store: &mut FlashStore) {
+    let Some(profile) = read_calibration(store) else {
+        info!("No stored IMU calibration; waiting for the sensor to calibrate");
+        return;
+    };
+    let mut delay = Delay;
+    match bno055.set_calibration_profile(profile, &mut delay) {
+        Ok(()) => info!("Stored IMU calibration applied"),
+        Err(_) => warn!("BNO055 rejected the stored calibration profile"),
+    }
+}
 
+/// The calibration profile stored in NVS, or `None` when there isn't a usable
+/// one.
+///
+/// The blob has no checksum — it is the chip's own register dump, written as-is —
+/// so erased flash is recognised by its all-ones pattern. Without that check a
+/// fresh device would apply 22 bytes of `0xFF` as calibration offsets, which is
+/// worse than starting uncalibrated.
+fn read_calibration(store: &mut FlashStore) -> Option<BNO055Calibration> {
+    let (flash, pt_mem) = store.split();
+    let pt = partitions::read_partition_table(flash, pt_mem).ok()?;
     let nvs = pt
         .find_partition(partitions::PartitionType::Data(
             partitions::DataPartitionSubType::Nvs,
         ))
-        .unwrap()
-        .unwrap();
+        .ok()??;
     let mut nvs_partition = nvs.as_embedded_storage(flash);
 
-    let mut bno055_calibration: [u8; BNO055_CALIB_SIZE] = [0; BNO055_CALIB_SIZE];
-    nvs_partition
-        .read(BNO055_CALIBRATION_ADDR, &mut bno055_calibration)
-        .unwrap();
+    let mut blob = [0u8; BNO055_CALIB_SIZE];
+    nvs_partition.read(BNO055_CALIBRATION_ADDR, &mut blob).ok()?;
+    if blob.iter().all(|&b| b == 0xFF) {
+        return None;
+    }
+    Some(BNO055Calibration::from_buf(&blob))
+}
 
-    let mut delay = Delay;
-    // Calibration
-    let mut calib = BNO055Calibration::from_buf(&bno055_calibration);
-    bno055.set_calibration_profile(calib, &mut delay).unwrap();
-    // IMU mode has no magnetometer, so the mag status never reaches 3 (and
-    // `is_fully_calibrated` requires it). Gate on sys/gyro/accel only.
-    let imu_ready = |s: &bno055::BNO055CalibrationStatus| s.sys == 3 && s.gyr == 3 && s.acc == 3;
-    let is_calibrated = bno055
-        .get_calibration_status()
-        .map(|s| imu_ready(&s))
-        .unwrap_or(false);
-    if !is_calibrated {
-        info!("Waiting for BNO055 to calibrate");
-        loop {
-            if let Ok(s) = bno055.get_calibration_status() {
-                if imu_ready(&s) {
-                    break;
-                }
-            }
+/// Persist the IMU's calibration profile, so the next power cycle starts
+/// calibrated instead of putting the user through it again.
+///
+/// Returns whether the write succeeded. The profile lives at offset 0 of the NVS
+/// partition's first sector (the device name is in the second, see
+/// [`BLE_DEVICE_NAME_ADDR`]), and that sector is erased first: NOR flash bits only
+/// go from 1 to 0 when written, so a second save over an older profile would AND
+/// the two together.
+fn save_calibration(store: &mut FlashStore, profile: &BNO055Calibration) -> bool {
+    let (flash, pt_mem) = store.split();
+    let Ok(pt) = partitions::read_partition_table(flash, pt_mem) else {
+        warn!("NVS: partition table read failed");
+        return false;
+    };
+    let Ok(Some(nvs)) = pt.find_partition(partitions::PartitionType::Data(
+        partitions::DataPartitionSubType::Nvs,
+    )) else {
+        warn!("NVS: partition not found");
+        return false;
+    };
+    let mut nvs_partition = nvs.as_embedded_storage(flash);
+
+    if nvs_partition
+        .erase(BNO055_CALIBRATION_ADDR, BNO055_CALIBRATION_ADDR + 0x1000)
+        .is_err()
+    {
+        warn!("NVS: calibration erase failed");
+        return false;
+    }
+    if Storage::write(&mut nvs_partition, BNO055_CALIBRATION_ADDR, profile.as_bytes()).is_err()
+    {
+        warn!("NVS: calibration write failed");
+        return false;
+    }
+    true
+}
+
+/// Read the IMU's calibration levels, publish them for the BLE task, and — the
+/// first time they are good enough to record with — save the profile.
+///
+/// Returns the levels and whether the profile was saved just now. Called at 1 Hz
+/// from the sampler task, which owns the I2C bus.
+///
+/// The read-back and save switch the chip to CONFIG mode and back (~40 ms, during
+/// which it stops fusing), so the caller resets its detector afterwards.
+async fn poll_calibration(
+    bno055: &mut Bno055<I2c<'_, Blocking>>,
+    delay: &mut Delay,
+    store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
+) -> (Calibration, bool) {
+    let calibration = match bno055.get_calibration_status() {
+        Ok(s) => Calibration::new(s.sys, s.acc, s.gyr, s.mag),
+        Err(_) => {
+            // A transient read error must not look like "calibration lost": keep
+            // reporting the levels we last saw.
+            warn!("BNO055 calibration status read error");
+            Calibration::from_bits(CALIBRATION_BITS.load(Ordering::Relaxed))
         }
-        calib = bno055.calibration_profile(&mut delay).unwrap();
-        Storage::write(&mut nvs_partition, BNO055_CALIBRATION_ADDR, &calib.as_bytes()).unwrap();
+    };
+    CALIBRATION_BITS.store(calibration.to_bits(), Ordering::Relaxed);
+
+    if !calibration.is_ready() || CALIBRATION_SAVED.load(Ordering::Relaxed) {
+        return (calibration, false);
     }
 
-    info!("BNO055 calibrated");
+    // Note this is `is_ready`, not `is_fully_calibrated`: the magnetometer is
+    // unused in IMU mode and its level never reaches 3 there.
+    let Ok(profile) = bno055.calibration_profile(delay) else {
+        warn!("could not read the calibration profile back");
+        return (calibration, false);
+    };
+    let saved = {
+        let mut guard = store.lock().await;
+        save_calibration(&mut guard, &profile)
+    };
+    if saved {
+        CALIBRATION_SAVED.store(true, Ordering::Relaxed);
+        info!("IMU calibration saved; reps will be recorded");
+    }
+    (calibration, saved)
+}
+
+/// Tell the app the IMU's calibration state, on the summary characteristic.
+///
+/// The same characteristic summaries stream on: `SyncMessage` exists to
+/// multiplex device -> app messages, and the app is already subscribed to this
+/// one (see `proto/calypso.proto`). Best-effort — a failed notification means
+/// nobody is subscribed, which is how the summary stream reads it too, and the
+/// next tick tries again.
+async fn notify_calibration(
+    summary_char: &Characteristic<BleVec<SYNC_MSG_MAX>>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
+) {
+    let calibration = Calibration::from_bits(CALIBRATION_BITS.load(Ordering::Relaxed));
+    let mut scratch = [0u8; SYNC_MSG_MAX];
+    let Some(n) = sync::encode_calibration_message(&calibration, &mut scratch) else {
+        return;
+    };
+    let mut payload: BleVec<SYNC_MSG_MAX> = BleVec::new();
+    if payload.extend_from_slice(&scratch[..n]).is_err() {
+        return;
+    }
+    // Not `let _ =`: this is sent once a second and the whole point of it is that a
+    // screen somewhere shows it. "The hint never appeared" and "the hint was never
+    // sent" look identical from the app, so the device says which it was.
+    match summary_char.notify(conn, &payload).await {
+        Ok(()) => {
+            if !CALIBRATION_DELIVERED.swap(true, Ordering::Relaxed) {
+                info!("calibration status delivered to the app ({} bytes)", n);
+            }
+        }
+        // One line a second while nobody is subscribed: noisy, but the alternative
+        // is a UI that quietly shows nothing.
+        Err(_) => warn!("calibration notify failed (no subscriber?)"),
+    }
+}
+
+/// A decoded-record scratch on the heap.
+///
+/// In its own function, and never inlined, so the ~2 KB temporary that
+/// `Box::new` needs to build the value lives in *this* frame — which is gone by
+/// the time it returns — rather than in `main`'s, which is the bottom of the
+/// stack the whole BLE stack also runs on.
+///
+/// `Box::new` really does build its argument on the stack first (clippy reports
+/// exactly that: 2152 bytes), and there is no way to allocate a `RepRecord`
+/// without one short of writing its fields through a `MaybeUninit` by hand. That
+/// would trade a bounded, known transient for `unsafe` in the decode path, so the
+/// transient stays — deliberately in a leaf called before the tasks start, which
+/// is what the exemption below records.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "2152 B: the `Box::new` temporary, isolated so it is not in main's frame"
+)]
+#[inline(never)]
+fn leak_record_scratch() -> &'static mut msg::RepRecord {
+    Box::leak(Box::new(msg::RepRecord::default()))
+}
+
+/// Bytes of stack used so far, from the bottom of the main stack.
+///
+/// Taken from the address of a local, so it is the depth we are really at. On a
+/// device with no debugger this is how the stack getting full tells you — nothing
+/// else does until the guard word is written and the CPU faults. The total is
+/// whatever the linker script left below `_stack_start`.
+fn stack_used() -> usize {
+    let probe = 0u8;
+    let here = core::ptr::addr_of!(probe) as usize;
+    // Defined by the linker script (`esp-hal`'s `ld/sections/stack.x`): the
+    // lowest address the stack can grow to.
+    unsafe extern "C" {
+        static _stack_end: u8;
+    }
+    let bottom = core::ptr::addr_of!(_stack_end) as usize;
+    here.saturating_sub(bottom)
+}
+
+/// Calibration levels for logs, so a serial console alone says what to work on:
+/// `acc:1 gyro:3 mag:0 sys:1`.
+struct CalibrationLog(Calibration);
+
+impl defmt::Format for CalibrationLog {
+    fn format(&self, f: defmt::Formatter) {
+        defmt::write!(
+            f,
+            "acc:{} gyro:{} mag:{} sys:{}",
+            self.0.accel,
+            self.0.gyro,
+            self.0.mag,
+            self.0.sys
+        )
+    }
 }
 
 fn get_level_sense(bno055: &mut Bno055<I2c<'_, Blocking>>) -> f32 {
@@ -803,11 +1281,11 @@ fn get_level_sense(bno055: &mut Bno055<I2c<'_, Blocking>>) -> f32 {
             } else {
                 info!("Sensor is not level: X-grav={}", grav.x);
             }
-            return grav.x;
-        },
+            grav.x
+        }
         Err(_e) => {
             warn!("BNO055 gravity read error");
-            return 0.0;
+            0.0
         }
     }
 }
