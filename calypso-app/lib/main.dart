@@ -1,7 +1,8 @@
 // Calypso client — entry point.
 //
-// Phase 4: the rep list over the local archive, with the 3D plot behind it.
-// BLE transport is phase 5 (see docs/app/plan.md).
+// The rep list over the local archive, with the 3D plot behind it. The BLE
+// transport connects to the device; with none, a fixture seeds the archive so
+// the app is usable (and testable) with no hardware.
 
 import 'package:flutter/material.dart';
 

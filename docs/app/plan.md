@@ -263,41 +263,91 @@ Two things this fixed beyond the tests:
   73px. It is a `Wrap` now, so five stats reflow on a phone instead of clipping.
 
 ### 5. BLE transport
-- [x] Protocol: end-of-stream signal for a streamed trace — `TraceChunk.total_chunks`
-      is set on every streamed chunk (0 in stored records); landed on the device
-      side first, with Rust and Dart regenerated from `proto/calypso.proto`
-- [ ] Scan/connect/permission flow (and confirm the Mac can see the device)
-- [ ] Decide chunk sizing against the negotiated MTU: Apple platforms manage the
-      MTU themselves and historically negotiated ~185 bytes, where our 4-sample
-      (~200 byte) chunk would not fit. The peripheral knows the connection's MTU,
-      so the device can size chunks to it (safe now that `total_chunks` tells the
-      client how many to expect); a 3-sample fallback is the cheap interim.
-- [ ] Subscribe to `0xca21`, write `0xca22`, collect `0xca23`
-- [ ] Reconnect + re-sync behaviour, connection state in the UI
-- [ ] First real capture -> checked-in fixture (via `RecordingTransport`)
+- [x] macOS entitlement (`com.apple.security.device.bluetooth`), so the BLE path
+      runs on the Mac at all
+- [x] Chunk sizing decided: Apple platforms manage the ATT MTU and historically
+      negotiated ~185 bytes, so the device streams 3 points per notification
+      (`sync::BLE_CHUNK_SAMPLES`) until it can size to the connection's own MTU
+- [x] End-of-stream signal: `TraceChunk.total_chunks`, set on every streamed chunk
+- [x] Scan/connect/permission flow with connection state in the UI
+      (`BleTransport.connect`, `BleStatusNotifier`, `ConnectionStatusBadge`)
+- [x] Subscribe `0xca21`, write `0xca22`, collect `0xca23`, reassembling by chunk
+      index and completing exactly on `totalChunks` (with an idle-timeout
+      fallback for firmware that predates the field)
+- [x] Reconnect + re-sync: in-flight trace requests are failed, not left hanging,
+      and archiving skips reps the archive already holds
+- [x] Tests without hardware: the plugin sits behind `BleLink`/`UniversalBleLink`
+      and a `FakeBleLink` stands in, covering scanning, subscribing, out-of-order
+      and duplicate chunks, a stream without `totalChunks`, a silent device, a
+      partial stream, a dropped connection, malformed notifications, and the
+      whole chain from notifications to a trace read back out of the archive
+- [ ] **First real capture** → checked-in fixture. Needs the hardware; the only
+      part of this phase that cannot be done on the host
 
-### 6. Polish and install
-- [ ] Empty/error/loading states, sync progress
-- [ ] Axis-mapping setting once real captures exist
-- [ ] `Info.plist` privacy string, icon, splash
-- [ ] Install: personal builds vs $99/yr TestFlight/App Store
+**An earlier sketch was thrown away.** The previous session's `ble_transport.dart`
+was written against an invented API (`ble.scan(...)`, `conn.subscribe(char,
+callback:)`, `ble.ConnectionState`) with fabricated UUIDs, and its
+`RecordingTransport` wrote bare `RepSummary` messages rather than `RepRecord`
+wrappers — an invalid `.pblog` that could not carry traces either. It is gone;
+`BleTransport` is built on the real `universal_ble` API (checked against the
+installed package), and a capture is now just a copy of the archive, which is
+already `.pblog`.
+
+Two real bugs surfaced while testing it, both worth knowing:
+
+- **Disconnecting could hang.** `_teardownConnection` awaited the notification
+  subscription cancels, and a cancel can block behind an event-loop turn that a
+  fake clock never delivers (nor a wedged platform channel). The cancels are now
+  fire-and-forget, with listeners nulled and straggling messages dropped.
+- **A trace request could fail as an unhandled error.** The connection can drop
+  between the request write and the await, completing the request before anything
+  listened. The listener is attached before the write now.
+
+### 6. Session identity (device, blocking first real use)
+- [ ] Decide the fix for rep ids colliding across reboots (see open question 1 —
+      this silently drops every rep recorded after the device's first boot)
+- [ ] Implement it on the device
+- [ ] Test it: archive two "boots" and confirm the client keeps both
 
 ## Open questions
 
-1. **Axis mapping**: which of the device's world axes is "up" for a squat? Needs
-   real captures before the plot can label anything honestly (M5/M2 data).
-2. **Rep-line overlay in v1?** A reference line alongside the measured path is
-   what makes dip/lean obvious, and it is cheap given the axis fit — but it is a
+1. **Device rep ids collide across reboots** — found while wiring the BLE sync, and
+   the most consequential thing left. The firmware's counter is in RAM
+   (`let mut reps: u32 = 0` in the sampler task), while the client keys its archive
+   on rep id. After a reboot the device's new rep 1 collides with the archived
+   rep 1: `archive.contains(1)` is true, so the new rep is **silently skipped** and
+   a later trace request returns the *old* rep's trace. Every rep recorded after
+   the device's first boot would be lost. Options, cheapest first:
+   - persist the counter in NVS so ids keep climbing across reboots (small
+     firmware change, client stays simple);
+   - give the device a session/boot id and key the client on `(session, rep_id)`;
+   - seed the counter from wall-clock time at boot (no NVS write, but two devices
+     could collide).
+   Worth settling before the first real capture, since a capture is what would
+   expose it. Tracked as phase 6.
+2. **Axis mapping**: which of the device's world axes is "up" for a squat? Needs a
+   real capture before the plot can label anything honestly.
+3. **Rep-line overlay in v1?** A reference line alongside the measured path is what
+   makes dip/lean obvious, and it is cheap given the axis fit — but it is a
    judgement call about what "plot one rep" means.
-3. **Session grouping**: gap-based only, or should sets be user-labelled
-   (implying editing and richer storage)?
-4. **Wall-clock time**: device timestamps are uptime ms. Stamp summaries on
-   receipt (simple, wrong if the app is backgrounded mid-set) or infer set start
-   times from the first rep's receipt?
-5. **Storage**: append-only `.pblog` + index (proposed) or SQLite? Worth
-   deciding in phase 4, when dedupe and querying needs are concrete.
-6. **Android**: in or out? Nothing in the design blocks it; Flutter makes it
-   nearly free, iOS-first stays the plan until asked otherwise.
-7. **A web viewer**: Flutter compiles to web, so the same plot could be served
-   as a page (fixtures now, maybe device WiFi later). Scope creep, or cheap
-   future win?
+4. **Android**: in or out? Nothing in the design blocks it — Flutter, and
+   `universal_ble` already supports it.
+5. **A web viewer**: Flutter compiles to web, so the same plot could be served as
+   a page (against fixtures, or against device WiFi later). Scope creep, or a
+   cheap future win?
+6. **SQLite**: the archive is an append-only `.pblog` and that is enough for a
+   list and a plot. Worth revisiting only if querying grows (search across
+   sessions, aggregates over months).
+
+## Decisions settled in review
+
+- **Session grouping: skipped.** The device's log is undifferentiated and
+  grouping into sets is a judgement about training structure better made with real
+  data on screen. The list is flat, with timestamps.
+- **Wall-clock time: stamped on receipt.** The device has no RTC, so the client
+  records when it took each summary. Known flaw: wrong if the client is closed
+  mid-set.
+- **Storage: append-only `.pblog`.** The archive, a capture and a fixture are one
+  format, so a fixture is a copy of somebody's history.
+- **Client is the archive of record.** The device's log is a ring that erases its
+  oldest sectors.

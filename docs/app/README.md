@@ -139,8 +139,8 @@ abstract class RepTransport {
 | Implementation | Used by | Notes |
 |---|---|---|
 | `FixtureTransport` | Simulator, macOS dev loop, widget/golden tests | Loads a `.pblog` (see below); `watchSummaries()` replays with configurable pacing so the UI sees a realistic stream. |
-| `BleTransport` | Real device | `flutter_reactive_ble`: scan for the service UUID, connect, subscribe `0xca21`, write `0xca22`, collect `0xca23`; reassembles chunks by index; surfaces connection state for the UI. |
-| `RecordingTransport` | Capturing golden data | Wraps another transport and appends every received message to a `.pblog`. This is how real device logs get captured and checked in. |
+| `BleTransport` | Real device (and the Mac) | `universal_ble` behind a `BleLink` seam, so the protocol logic is testable with a fake and no radio: scan for the service, connect, subscribe `0xca21` and `0xca23`, write `0xca22`, reassemble chunks by index, complete exactly on `totalChunks` (idle timeout as a fallback for older firmware), and surface connection state. |
+| (capture) | Capturing golden data | Not a transport: a capture is a copy of the archive file, which is already `.pblog` — `cp history.pblog fixtures/capture.pblog`. |
 
 ## Plot model and 3D view
 
@@ -172,6 +172,25 @@ world frame, whose *up* axis depends on how the sensor is mounted. Until real
 captures exist, the plot draws that frame as-is and labels axes generically;
 an axis-mapping setting is planned once we have looked at real squats (see the
 plan's open question 1).
+
+## The device's GATT, as the client sees it
+
+| UUID | Direction | What it carries |
+|---|---|---|
+| `0000ca20-b0cd-11ec-871f-d45ddf138840` | service | advertised, so the scan can filter on it |
+| `0000ca21-…` | notify | `SyncMessage` with a `summary` body (auto-streamed) |
+| `0000ca22-…` | write | a bare `TraceRequest` (see the note below) |
+| `0000ca23-…` | notify | `SyncMessage` with a `trace` body (on demand) |
+
+Note the asymmetry: both notification characteristics carry `SyncMessage`
+envelopes, while the write on `0xca22` is a **bare** `TraceRequest` (the firmware
+decodes it directly). Trace chunks complete on `totalChunks`; the client also
+tolerates a device that predates that field by treating a quiet stream as ended.
+
+Chunk size is the device's choice, dictated by the ATT MTU it negotiated: Apple
+platforms manage the MTU themselves and historically negotiated ~185 bytes, so the
+device streams three trace points per notification. The client does not care how
+many arrive per chunk — that is what `totalChunks` is for.
 
 ## Sessions and history
 

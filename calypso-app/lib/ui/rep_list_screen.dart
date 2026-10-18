@@ -1,9 +1,14 @@
 /// The rep list: what the archive holds, newest first, with a timestamp each.
 ///
-/// Deliberately no session grouping yet (see the plan's open questions): the
-/// device writes an undifferentiated log, and grouping it into sets is a
-/// judgement call about training structure that is better made once there is
-/// real data on screen. For now this is a flat list of reps with their times.
+/// Deliberately no session grouping: the device writes an undifferentiated log,
+/// and grouping into sets is a judgement about training structure better made
+/// with real data on screen.
+///
+/// The screen takes its archive and its sources by injection. That is not just
+/// for tests: a widget test runs under a fake clock where real asynchronous I/O
+/// never completes, so a screen that reads a file in `initState` hangs with the
+/// spinner running. The app builds the file-backed archive itself; tests pass an
+/// in-memory one.
 library;
 
 import 'dart:io';
@@ -12,17 +17,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
+import '../store/archive_sync.dart';
 import '../store/history_store.dart';
-import '../store/record_blocks.dart';
 import '../store/rep_archive.dart';
+import '../transport/ble_link.dart';
+import '../transport/ble_transport.dart';
 import '../transport/fixture_transport.dart';
 import '../transport/transport.dart';
+import '../widgets/connection_status.dart';
 import 'plot_screen.dart';
 
-/// Fixture to load on start-up, so the app has something to show with no device.
-/// Override with `--dart-define=FIXTURE=name`, or empty to skip.
-const String seedFixture =
-    String.fromEnvironment('FIXTURE', defaultValue: 'synthetic-squat');
+/// Fixture to seed the archive with when there is no device, so the app has
+/// something to show. Override with `--dart-define=FIXTURE=name`, or empty to
+/// skip.
+const String seedFixture = String.fromEnvironment('FIXTURE', defaultValue: 'synthetic-squat');
 
 class RepListScreen extends StatefulWidget {
   const RepListScreen({
@@ -30,6 +38,7 @@ class RepListScreen extends StatefulWidget {
     this.historyDirectory,
     this.archive,
     this.source,
+    this.ble,
     this.fixture = seedFixture,
   });
 
@@ -37,15 +46,18 @@ class RepListScreen extends StatefulWidget {
   /// uses the platform's application support directory.
   final Directory? historyDirectory;
 
-  /// The archive to show. Injected by tests (an in-memory archive), because
-  /// widget tests run under a fake clock where real file I/O never completes.
+  /// The archive to show. Injected by tests (an in-memory archive).
   final RepArchive? archive;
 
-  /// Where to sync from. Injected by tests; the app uses a fixture asset (and a
-  /// BLE transport once phase 5 lands).
+  /// Where to sync from when there is no device. Injected by tests; the app
+  /// uses a fixture asset.
   final RepTransport? source;
 
-  /// Fixture asset to archive on start-up when no [source] is given, or empty.
+  /// The BLE transport. Injected by tests (with a fake link); the app builds one
+  /// over `universal_ble`, which does nothing until `connect()` is called.
+  final BleTransport? ble;
+
+  /// Fixture asset to seed from when no [source] is given, or empty.
   final String fixture;
 
   @override
@@ -53,27 +65,38 @@ class RepListScreen extends StatefulWidget {
 }
 
 class _RepListScreenState extends State<RepListScreen> {
-  RepArchive? _store;
+  RepArchive? _archive;
+  late final BleTransport _ble;
   String? _error;
   bool _loading = true;
   int _synced = 0;
+  int _syncDone = 0;
+  int _syncTotal = 0;
 
   @override
   void initState() {
     super.initState();
+    _ble = widget.ble ?? BleTransport(UniversalBleLink());
     _load();
+  }
+
+  @override
+  void dispose() {
+    // Only tear down a transport we own; an injected one belongs to the test.
+    if (widget.ble == null) _ble.close();
+    super.dispose();
   }
 
   Future<void> _load() async {
     try {
-      final store = widget.archive ??
-          HistoryStore(HistoryFiles(
-              widget.historyDirectory ?? await getApplicationSupportDirectory()));
-      await store.load();
+      final archive = widget.archive ??
+          HistoryStore(
+              HistoryFiles(widget.historyDirectory ?? await getApplicationSupportDirectory()));
+      await archive.load();
 
-      // Bring the archive up to date from whatever source we have. With no
-      // device wired up yet, that is a fixture: the archive is the same either
-      // way, which is the point of one record format.
+      // Seed from a fixture when there is no device, so the app is usable on a
+      // simulator (which has no Bluetooth at all) and in tests. Whatever the
+      // source, the archive is the same, which is the point of one format.
       var synced = 0;
       var source = widget.source;
       if (source == null && widget.fixture.isNotEmpty) {
@@ -81,12 +104,12 @@ class _RepListScreenState extends State<RepListScreen> {
         source = FixtureTransport.fromBytes(data.buffer.asUint8List());
       }
       if (source != null) {
-        synced = await store.appendNew(await recordBlocksFrom(source));
+        synced = await archiveFromTransport(archive, source);
       }
 
       if (!mounted) return;
       setState(() {
-        _store = store;
+        _archive = archive;
         _synced = synced;
         _loading = false;
       });
@@ -99,6 +122,40 @@ class _RepListScreenState extends State<RepListScreen> {
     }
   }
 
+  /// Connects to the device and brings the archive up to date from it.
+  ///
+  /// Progress is shown because a first sync costs one trace round trip per rep:
+  /// a 1.4 s rep is ~47 notifications at three points each.
+  Future<void> _connect() async {
+    final archive = _archive;
+    if (archive == null) return;
+    await _ble.connect();
+    if (!_ble.status.isConnected) return; // the badge says why not
+
+    final added = await archiveFromTransport(
+      archive,
+      _ble,
+      onProgress: (done, total) {
+        if (mounted) {
+          setState(() {
+            _syncDone = done;
+            _syncTotal = total;
+          });
+        }
+      },
+    );
+    if (!mounted) return;
+    setState(() {
+      _synced += added;
+      _syncDone = 0;
+      _syncTotal = 0;
+    });
+  }
+
+  Future<void> _disconnect() async {
+    await _ble.disconnect();
+  }
+
   String _formatTime(DateTime? when) {
     if (when == null) return '—';
     final local = when.toLocal();
@@ -107,30 +164,43 @@ class _RepListScreenState extends State<RepListScreen> {
         '${two(local.hour)}:${two(local.minute)}';
   }
 
+  String get _statusLine {
+    if (_syncTotal > 0) return 'syncing $_syncDone/$_syncTotal';
+    if (_synced > 0) return '+$_synced synced';
+    return '';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final store = _store;
+    final archive = _archive;
+    final statusLine = _statusLine;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Calypso'),
         actions: [
-          if (_synced > 0)
+          if (statusLine.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Center(child: Text('+$_synced synced')),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Center(child: Text(statusLine)),
             ),
+          ConnectionStatusBadge(
+            status: _ble.status,
+            onConnect: _connect,
+            onDisconnect: _disconnect,
+          ),
+          const SizedBox(width: 8),
         ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : store == null || store.reps.isEmpty
+          : archive == null || archive.reps.isEmpty
               ? Center(child: Text(_error ?? 'No reps yet'))
               : ListView.separated(
-                  itemCount: store.reps.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemCount: archive.reps.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
                   itemBuilder: (context, index) {
                     // Newest first: the rep you just did is the interesting one.
-                    final stored = store.reps[store.reps.length - 1 - index];
+                    final stored = archive.reps[archive.reps.length - 1 - index];
                     final s = stored.summary;
                     return ListTile(
                       title: Text('Rep ${s.repId} · ${_formatTime(stored.receivedAt)}'),
@@ -145,7 +215,7 @@ class _RepListScreenState extends State<RepListScreen> {
                       trailing: const Icon(Icons.view_in_ar_outlined),
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
-                          builder: (_) => PlotScreen(store: store, repId: s.repId),
+                          builder: (_) => PlotScreen(store: archive, repId: s.repId),
                         ),
                       ),
                     );

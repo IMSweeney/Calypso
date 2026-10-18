@@ -44,9 +44,11 @@ fn trace_streams_in_ble_sized_chunks() {
         }
     }
 
-    // 10 points -> ceil(10/4) = 3 chunks, numbered 0,1,2.
-    assert_eq!(TraceStreamer::chunk_count(10), 3);
-    assert_eq!(indices, vec![0, 1, 2]);
+    // Derived from the constant, not hardcoded: this assertion used to spell out
+    // four-sample arithmetic and broke the moment the chunk size changed.
+    let expected_chunks = 10usize.div_ceil(BLE_CHUNK_SAMPLES) as u32;
+    assert_eq!(TraceStreamer::chunk_count(10), expected_chunks);
+    assert_eq!(indices, (0..expected_chunks).collect::<Vec<_>>());
     // Reassembled in index order, the trace is identical (timestamps are
     // relative to the rep's first point).
     assert_eq!(seen.len(), points.len());

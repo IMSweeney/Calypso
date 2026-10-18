@@ -9,7 +9,9 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:calypso/state/ble_status.dart';
 import 'package:calypso/store/memory_archive.dart';
+import 'package:calypso/transport/ble_transport.dart';
 import 'package:calypso/store/rep_archive.dart';
 import 'package:calypso/transport/fixture_transport.dart';
 import 'package:calypso/transport/transport.dart';
@@ -17,6 +19,8 @@ import 'package:calypso/ui/plot_screen.dart';
 import 'package:calypso/ui/rep_list_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/fake_ble_link.dart';
 
 /// Fixture bytes, read synchronously: no async I/O in the widget path.
 FixtureTransport fixtureTransport(String name) =>
@@ -37,6 +41,8 @@ Future<void> pumpList(
 }
 
 void main() {
+  _bleWiring();
+
   testWidgets('it archives the source and lists the reps newest first',
       (tester) async {
     final archive = MemoryArchive();
@@ -117,5 +123,49 @@ void main() {
 
     await pumpList(tester, fixture: 'empty', archive: archive, source: fixtureTransport('empty'));
     expect(find.textContaining('Rep'), findsNWidgets(3));
+  });
+}
+
+/// The BLE wiring, with a fake link: the Connect action drives the transport,
+/// the badge follows its state, and no plugin is touched.
+void _bleWiring() {
+  testWidgets('connecting updates the badge and subscribes, with no hardware',
+      (tester) async {
+    final link = FakeBleLink();
+    final ble = BleTransport(link, traceTimeout: const Duration(milliseconds: 50));
+
+    await tester.pumpWidget(MaterialApp(
+      home: RepListScreen(archive: MemoryArchive(), ble: ble, fixture: ''),
+    ));
+    await tester.pumpAndSettle();
+
+    // Nothing to show yet, and no device.
+    expect(find.text('No reps yet'), findsOneWidget);
+    expect(find.text('No device'), findsOneWidget);
+
+    await tester.tap(find.text('Connect'));
+    await tester.pump();
+    expect(find.text('Scanning…'), findsOneWidget);
+
+    // The device answers the scan, so the transport connects and subscribes.
+    link.seeDevice('device-1', 'Calypso');
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+
+    expect(find.text('Connected'), findsOneWidget);
+    expect(link.scans.single, [CalypsoGatt.service]);
+    expect(link.subscribed, [CalypsoGatt.summary, CalypsoGatt.traceChunk]);
+    expect(find.text('Disconnect'), findsOneWidget);
+
+    // Disconnecting is reflected too.
+    await tester.tap(find.text('Disconnect'));
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    // Diagnostic: is the transport disconnected, the badge label, or the rebuild?
+    expect(ble.status.status, BleStatus.disconnected);
+    expect(find.text('Disconnected'), findsOneWidget);
+    expect(find.text('Disconnected'), findsOneWidget);
   });
 }
