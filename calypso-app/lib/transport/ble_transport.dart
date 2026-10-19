@@ -44,14 +44,24 @@ enum _Direction { rx, tx }
 class BleTransport implements RepTransport {
   BleTransport(
     this._link, {
-    this.traceTimeout = const Duration(seconds: 10),
+    this.traceTimeout = const Duration(seconds: 30),
     this.chunkIdleTimeout = const Duration(milliseconds: 700),
   });
 
   final BleLink _link;
 
-  /// How long to wait for a requested trace before giving up. The device answers
-  /// by notifying chunks, and stays silent if it no longer holds the rep.
+  /// How long a requested trace may go **without a chunk** before it is given up on.
+  ///
+  /// An idle timeout, not a budget for the whole stream, and every chunk resets it —
+  /// what matters is whether chunks are still coming. A whole-stream budget cannot
+  /// work at this size: a real trace is ~150 notifications, and the device may take
+  /// tens of seconds to send the first one while it finishes the previous rep's trace
+  /// and its flash work. The log has exactly that: a request whose first chunk arrived
+  /// 22 s later, after the app had given up and while the device was streaming it
+  /// perfectly well.
+  ///
+  /// The device stays silent *for ever* if it no longer holds the rep, so this is also
+  /// what makes a forgotten trace fail rather than hang.
   final Duration traceTimeout;
 
   /// Completion fallback for a device that doesn't send `totalChunks` (anything
@@ -80,6 +90,10 @@ class BleTransport implements RepTransport {
   final Map<String, TraceAssembler> _assemblers = {};
   final Map<String, int> _expectedChunks = {};
   final Map<String, Timer> _idleTimers = {};
+
+  /// The silence timer per rep in flight: reset by every chunk that arrives, and what
+  /// gives up on a request the device never answers ([`_timeoutRequest`]).
+  final Map<String, Timer> _requestTimers = {};
   final Map<String, Completer<List<TracePoint>>> _pending = {};
 
   /// Traces already received whole, so a second request doesn't re-fetch.
@@ -300,6 +314,12 @@ class BleTransport implements RepTransport {
       timer.cancel();
     }
     _idleTimers.clear();
+    // Including the silence timers: this *is* the failure they would report, and a
+    // stale one firing later would describe a dropped link as a quiet device.
+    for (final timer in _requestTimers.values) {
+      timer.cancel();
+    }
+    _requestTimers.clear();
   }
 
   // ── RepTransport ────────────────────────────────────────────────────────
@@ -329,11 +349,13 @@ class BleTransport implements RepTransport {
     _idleTimers.remove(uuid)?.cancel();
     final completer = Completer<List<TracePoint>>();
     _pending[uuid] = completer;
-    // Take the listener *before* sending the request. The connection can drop
-    // between the write and the await, and completing a future that nobody is
-    // listening to yet surfaces the error as unhandled rather than delivering it
-    // to this caller.
-    final response = completer.future.timeout(traceTimeout);
+    // The listener is attached below, before the write — so a connection that drops
+    // between the write and the await completes a future somebody is listening to.
+    final response = completer.future;
+    // An idle timeout, armed now and reset by every chunk (`_onChunk`). See the field's
+    // doc for why this is not a whole-stream budget.
+    _requestTimers.remove(uuid)?.cancel();
+    _requestTimers[uuid] = Timer(traceTimeout, () => _timeoutRequest(uuid));
 
     final request = pb.TraceRequest(
       repUuid: uuidToBytes(uuid) ?? Uint8List(0),
@@ -357,24 +379,46 @@ class BleTransport implements RepTransport {
       // The response future is abandoned; mark its errors as handled so a
       // completion racing this failure cannot become an unhandled error.
       response.ignore();
+      bleLog.warning('trace $uuid: request failed: $e');
       throw TraceUnavailableException(uuid, 'request failed: $e');
     }
 
     try {
-      return await response;
-    } on TimeoutException {
-      _pending.remove(uuid);
-      final partial = _assemblers.remove(uuid)?.chunkCount ?? 0;
-      throw TraceUnavailableException(
-        uuid,
-        partial == 0
-            ? 'the device did not answer (it may no longer hold this rep)'
-            : 'the stream stopped after $partial chunks',
-      );
+      final points = await response;
+      // The outcome, not just the request: `tx` above says a request went out, and
+      // this says what came back. Without it a file holding one and not the other is
+      // an argument rather than a diagnosis.
+      bleLog.info('trace $uuid: ${points.length} points');
+      return points;
     } finally {
       _pending.remove(uuid);
       _idleTimers.remove(uuid)?.cancel();
+      _requestTimers.remove(uuid)?.cancel();
     }
+  }
+
+  /// Nothing has arrived for [uuid] for `traceTimeout`: give the caller up rather than
+  /// hang, and say which shape it was.
+  void _timeoutRequest(String uuid) {
+    _requestTimers.remove(uuid);
+    final pending = _pending.remove(uuid);
+    if (pending == null || pending.isCompleted) return;
+    final partial = _assemblers.remove(uuid)?.chunkCount ?? 0;
+    // Nothing at all arriving (the request never reached the device, or the device
+    // chose not to answer), or a stream that stopped part-way (the chunks stopped
+    // coming). A link that died under it is `_failPending`'s, not this. The `rx` lines
+    // above say how far it got.
+    bleLog.warning(
+      partial == 0
+          ? 'trace $uuid: no answer within ${traceTimeout.inSeconds}s'
+          : 'trace $uuid: stream stopped after $partial chunks',
+    );
+    pending.completeError(TraceUnavailableException(
+      uuid,
+      partial == 0
+          ? 'the device did not answer (it may no longer hold this rep)'
+          : 'the stream stopped after $partial chunks',
+    ));
   }
 
   @override
@@ -448,6 +492,13 @@ class BleTransport implements RepTransport {
   void _onChunk(pb.TraceChunk chunk) {
     final uuid = uuidFromBytes(chunk.repUuid);
     if (uuid == null) return;
+    // Any chunk is progress, so it resets that request's silence timer: the timeout is
+    // "nothing is coming", not "the whole trace is taking a while" (see `traceTimeout`).
+    final waiting = _requestTimers[uuid];
+    if (waiting != null) {
+      waiting.cancel();
+      _requestTimers[uuid] = Timer(traceTimeout, () => _timeoutRequest(uuid));
+    }
     final assembler = _assemblers.putIfAbsent(uuid, () => TraceAssembler(uuid));
     assembler.add(chunk);
 

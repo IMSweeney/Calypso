@@ -11,6 +11,7 @@
 /// in-memory one.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -19,6 +20,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../logging/rotating_file_appender.dart';
 import '../logging/setup.dart';
+import '../model/rep.dart';
 import '../model/uuid.dart';
 import '../store/archive_sync.dart';
 import '../store/history_store.dart';
@@ -81,6 +83,22 @@ class _RepListScreenState extends State<RepListScreen> {
   int _syncDone = 0;
   int _syncTotal = 0;
 
+  /// Summaries as the device reports them, for as long as this screen lives.
+  ///
+  /// Subscribed once rather than per connection: the transport's stream outlives a
+  /// link, and summaries arrive on it only while one is up. Every one of them is
+  /// written to the log and the list is rebuilt from the log, so a rep that closes
+  /// while the app is connected appears without another Connect.
+  StreamSubscription<RepSummary>? _live;
+
+  /// Archive writes, chained so they never interleave.
+  ///
+  /// A summary can arrive while the catch-up is still fetching traces, and two
+  /// writers racing on the same rep would each find it absent and append it twice.
+  /// The log is the source of truth, so it must not be the place that collects
+  /// mistakes.
+  Future<void> _writes = Future<void>.value();
+
   @override
   void initState() {
     super.initState();
@@ -97,17 +115,50 @@ class _RepListScreenState extends State<RepListScreen> {
       _logging = startFileLogging(getApplicationSupportDirectory);
       _ble = BleTransport(UniversalBleLink());
     }
+    // **The log is the source of truth, including for what arrives live**: the
+    // device pushes a summary as each rep closes, this writes that rep's records to
+    // the archive, and the list below is built from the archive. Nothing in the UI
+    // keeps rep state of its own, so nothing can disagree with what is on disk.
+    _live = _ble.watchSummaries().listen(_onSummary);
     _load();
   }
 
   @override
   void dispose() {
+    _live?.cancel();
     // Only tear down what we own; an injected transport belongs to the test.
     if (widget.ble == null) {
       _ble.close();
       _logging?.close();
     }
     super.dispose();
+  }
+
+  /// A rep the device has just closed: fetch its trace, write it to the log, and let
+  /// the log re-serve the list.
+  void _onSummary(RepSummary summary) {
+    final archive = _archive;
+    if (archive == null) return;
+    unawaited(_addToLog(archive, summary));
+  }
+
+  Future<void> _addToLog(RepArchive archive, RepSummary summary) async {
+    try {
+      final added = await _queueWrite(() => archiveRep(archive, _ble, summary));
+      if (mounted && added > 0) setState(() => _synced += added);
+    } catch (e) {
+      // The rep is not lost: the device still has it, and the next catch-up (or
+      // the next live summary, which is idempotent) will archive it.
+      if (mounted) setState(() => _error = '$e');
+    }
+  }
+
+  /// Runs [write] after every write queued before it, and hands back its result —
+  /// including a failure, which must not wedge the ones behind it.
+  Future<T> _queueWrite<T>(Future<T> Function() write) {
+    final result = _writes.then((_) => write());
+    _writes = result.then((_) {}, onError: (Object _) {});
+    return result;
   }
 
   Future<void> _load() async {
@@ -155,24 +206,36 @@ class _RepListScreenState extends State<RepListScreen> {
     await _ble.connect();
     if (!_ble.status.isConnected) return; // the badge says why not
 
-    final added = await archiveFromTransport(
-      archive,
-      _ble,
-      onProgress: (done, total) {
-        if (mounted) {
-          setState(() {
-            _syncDone = done;
-            _syncTotal = total;
-          });
-        }
-      },
-    );
-    if (!mounted) return;
-    setState(() {
-      _synced += added;
-      _syncDone = 0;
-      _syncTotal = 0;
-    });
+    try {
+      // Catch-up: whatever the transport has already been told, in one pass. Reps
+      // that arrive from here on are written by [_onSummary], and both paths are
+      // idempotent against the log.
+      final added = await _queueWrite(() => archiveFromTransport(
+            archive,
+            _ble,
+            onProgress: (done, total) {
+              if (mounted) {
+                setState(() {
+                  _syncDone = done;
+                  _syncTotal = total;
+                });
+              }
+            },
+          ));
+      if (!mounted) return;
+      setState(() {
+        _synced += added;
+        _syncDone = 0;
+        _syncTotal = 0;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$e';
+        _syncDone = 0;
+        _syncTotal = 0;
+      });
+    }
   }
 
   Future<void> _disconnect() async {

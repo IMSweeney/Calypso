@@ -332,6 +332,28 @@ void main() {
     await transport.close();
   });
 
+  test('a chunk restarts the trace timeout, so a slow stream still lands', () async {
+    // The timeout is about silence, not about the whole stream taking a while: the log
+    // has a request whose first chunk arrived 22 s after it was sent, with the device
+    // streaming perfectly well. Here the total is twice the budget and each gap is
+    // inside it, which a whole-stream budget would have failed.
+    final link = FakeBleLink();
+    final transport = await connectedTransport(
+      link,
+      traceTimeout: const Duration(milliseconds: 120),
+    );
+
+    final pending = transport.trace(u(1));
+    await pumpEventQueue();
+    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 0, 2));
+    await Future<void>.delayed(const Duration(milliseconds: 90));
+    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 1, 2));
+    await Future<void>.delayed(const Duration(milliseconds: 90));
+
+    expect((await pending).length, 6, reason: 'two 3-point chunks');
+    await transport.close();
+  });
+
   test('calibration arrives from the device and leaves with the connection', () async {
     final link = FakeBleLink();
     final transport = await connectedTransport(link);

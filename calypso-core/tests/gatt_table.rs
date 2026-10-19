@@ -11,6 +11,7 @@ use calypso_core::ble::{
     SYNC_CHUNK_UUID, SYNC_REQUEST_UUID, SYNC_SERVICE_UUID, SYNC_SUMMARY_UUID,
     GRAVITY_SERVICE_UUID, GRAVITY_X_UUID, SYNC_MSG_MAX, SYNC_REQUEST_MAX,
 };
+use calypso_core::sync::SYNC_CHUNK_MAX;
 
 /// The text a client sees for a GATT UUID: the stored bytes, reversed.
 ///
@@ -149,6 +150,15 @@ fn sync_characteristics_are_wired_up() {
         .table
         .find_characteristic_by_value_handle::<BleVec<SYNC_MSG_MAX>>(gatt.summary.handle)
         .map(|c| c.handle == gatt.summary.handle)
+        .unwrap_or(false));
+    // And the chunk characteristic is sized for a *chunk*, not a summary. The type is the
+    // only place that size lives, so it is the thing to pin: a chunk characteristic that
+    // is too small drops notifications in silence and the trace stream stops part-way
+    // (see `docs/GOTCHAS.md`).
+    assert!(gatt
+        .table
+        .find_characteristic_by_value_handle::<BleVec<SYNC_CHUNK_MAX>>(gatt.trace_chunk.handle)
+        .map(|c| c.handle == gatt.trace_chunk.handle)
         .unwrap_or(false));
 }
 

@@ -92,13 +92,23 @@ macro_rules! define_mock_flash {
         }
 
         impl ReadNorFlash for $name {
-            const READ_SIZE: usize = 1;
+            /// 4, as on the ESP32 — and enforced below, because the real driver does.
+            ///
+            /// This mock used to say `1` and accept anything, which is why the suite
+            /// never caught the read shape that broke rep storage: `esp-storage`'s
+            /// `ReadNorFlash::read` returns `NotAligned` when the offset *or* the length
+            /// is not a multiple of `READ_SIZE`, and the log's scan reads records by
+            /// length — lengths that are whatever the payload happened to be.
+            const READ_SIZE: usize = 4;
 
             fn capacity(&self) -> usize {
                 self.inner.data.len()
             }
 
             fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+                if offset as usize % Self::READ_SIZE != 0 || bytes.len() % Self::READ_SIZE != 0 {
+                    return Err(MockError);
+                }
                 self.inner.read(offset, bytes)
             }
         }

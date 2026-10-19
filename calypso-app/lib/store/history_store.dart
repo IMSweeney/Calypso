@@ -38,6 +38,21 @@ class HistoryStore implements RepArchive {
   final HistoryFiles files;
 
   final List<StoredRep> _reps = [];
+
+  /// The rep uuids the records file holds, which is what decides whether a rep is
+  /// held — **not** [_received]. Both are rebuilt from the log by [load]; the one
+  /// that answers "do we have this rep?" is the log.
+  final Set<String> _uuids = {};
+
+  /// Client receipt times by uuid, loaded from and saved to
+  /// [HistoryFiles.receiptTimes].
+  ///
+  /// **Decoration, never truth.** The device has no RTC, so its own timestamps are
+  /// uptime milliseconds and mean nothing across a reboot; this is the only absolute
+  /// time available, and the only reason the side-car exists at all. Losing it costs
+  /// the list its timestamps and nothing else — in particular it must never make the
+  /// app treat a rep it already has as new, because appending it again would put two
+  /// copies of it in the log ([appendNew]).
   final Map<String, DateTime> _received = {};
   int _bytes = 0;
 
@@ -63,25 +78,39 @@ class HistoryStore implements RepArchive {
   @override
   Future<void> load() async {
     _reps.clear();
+    _uuids.clear();
     _received.clear();
     truncated = false;
 
     await files.directory.create(recursive: true);
     await _loadReceiptTimes();
 
-    if (!await files.records.exists()) {
+    if (await files.records.exists()) {
+      final bytes = await files.records.readAsBytes();
+      _bytes = bytes.length;
+      _goodBytes = 0;
+
+      final scan = scanBlocks(bytes, _received);
+      _reps.addAll(scan.reps);
+      for (final rep in _reps) {
+        _uuids.add(rep.uuid);
+      }
+      truncated = scan.truncated;
+      _goodBytes = scan.goodBytes;
+    } else {
       _bytes = 0;
       _goodBytes = 0;
-      return;
     }
-    final bytes = await files.records.readAsBytes();
-    _bytes = bytes.length;
-    _goodBytes = 0;
 
-    final scan = scanBlocks(bytes, _received);
-    _reps.addAll(scan.reps);
-    truncated = scan.truncated;
-    _goodBytes = scan.goodBytes;
+    // Times for reps the log does not hold are not worth keeping: the rep would be
+    // re-synced and re-stamped, and until then the entry is a uuid the log cannot
+    // account for. Pruned for the missing-log case too, which is why this sits
+    // outside the branch — and persisted there and then, so the file on disk never
+    // disagrees with the log. (An unreadable records file throws above rather than
+    // landing here, so a bad read cannot be mistaken for an empty log.)
+    final before = _received.length;
+    _received.removeWhere((uuid, _) => !_uuids.contains(uuid));
+    if (_received.length != before) await _saveReceiptTimes();
   }
 
   /// Adds records for reps the archive does not already have.
@@ -104,9 +133,12 @@ class HistoryStore implements RepArchive {
     final sink = files.records.openWrite(mode: FileMode.append);
     try {
       for (final entry in recordBlocks.entries) {
-        if (_received.containsKey(entry.key)) continue;
+        // The log decides, and only the log: a missing or stale `received.json` must
+        // not make this append a second copy of a rep whose records are already here.
+        if (_uuids.contains(entry.key)) continue;
         sink.add(entry.value);
         added++;
+        _uuids.add(entry.key);
         _received[entry.key] = receivedAt ?? DateTime.now();
       }
     } finally {
@@ -118,9 +150,10 @@ class HistoryStore implements RepArchive {
     return added;
   }
 
-  /// Whether the archive already holds this rep.
+  /// Whether the archive already holds this rep — asked of the log, not of the
+  /// receipt times beside it.
   @override
-  bool contains(String uuid) => _received.containsKey(uuid);
+  bool contains(String uuid) => _uuids.contains(uuid);
 
   /// Reads one rep's trace out of the archive.
   @override
@@ -156,8 +189,13 @@ class HistoryStore implements RepArchive {
     }
   }
 
+  /// Best-effort, deliberately: this file is decoration (see [_received]), so a disk
+  /// that will not take it costs timestamps and nothing else. Failing the append
+  /// that triggered it would be the tail wagging the dog.
   Future<void> _saveReceiptTimes() async {
     final json = {for (final e in _received.entries) e.key: e.value.toIso8601String()};
-    await files.receiptTimes.writeAsString(jsonEncode(json));
+    try {
+      await files.receiptTimes.writeAsString(jsonEncode(json));
+    } catch (_) {}
   }
 }

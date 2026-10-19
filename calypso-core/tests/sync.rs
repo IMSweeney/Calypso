@@ -1,14 +1,15 @@
 //! Host tests for the BLE sync streaming logic: BLE-sized trace chunks, the
 //! summary cursor, and request decoding. No radio involved.
 
+use calypso_core::ble::SYNC_MSG_MAX;
 use calypso_core::calibration::Calibration;
 use calypso_core::pb::{self, msg, Record};
-use calypso_core::uuid::fixture_uuid;
-use calypso_core::rep::TracePoint;
+use calypso_core::rep::{RepSummary, TracePoint};
 use calypso_core::sync::{
     decode_trace_request, encode_calibration_message, encode_summary_message, SummaryCursor,
-    TraceStreamer, BLE_CHUNK_SAMPLES, BLE_NOTIFY_BYTES,
+    TraceStreamer, BLE_CHUNK_SAMPLES, BLE_NOTIFY_BYTES, SYNC_CHUNK_MAX,
 };
+use calypso_core::uuid::fixture_uuid;
 
 fn point(i: usize) -> TracePoint {
     TracePoint {
@@ -155,9 +156,49 @@ fn worst_case_chunk_fits_the_notification_budget() {
     let mut streamer = TraceStreamer::all(fixture_uuid(1), 0, &points);
     let mut buf = [0u8; 512];
     let n = streamer.next_message(&mut buf).unwrap();
+    // Two budgets, and the tighter one is the characteristic. The MTU is what the radio
+    // will carry; `SYNC_CHUNK_MAX` is what the payload can hold. A chunk under the MTU
+    // but over the characteristic is exactly the silent stop this exists to prevent: the
+    // characteristic was sized for a summary for a while, and a 193-byte chunk simply
+    // failed to notify, mid-trace, with nothing said at either end.
+    assert!(
+        n <= SYNC_CHUNK_MAX,
+        "worst-case chunk is {n} bytes, over the {SYNC_CHUNK_MAX}-byte characteristic"
+    );
     assert!(
         n <= BLE_NOTIFY_BYTES,
         "worst-case chunk is {n} bytes, over the {BLE_NOTIFY_BYTES}-byte budget"
+    );
+}
+
+#[test]
+fn worst_case_summary_fits_the_summary_characteristic() {
+    // The same hazard on the other characteristic, so it is pinned the same way: every
+    // field at its widest encoding.
+    let summary = pb::summary_message(
+        fixture_uuid(3),
+        &RepSummary {
+            t_start_ms: u32::MAX,
+            t_end_ms: u32::MAX,
+            duration_ms: u32::MAX,
+            rom: f32::MAX,
+            peak_velocity: f32::MIN,
+            mean_velocity: f32::MAX,
+            peak_accel: f32::MIN,
+            roll_min_deg: f32::MIN,
+            roll_max_deg: f32::MAX,
+            pitch_min_deg: f32::MIN,
+            pitch_max_deg: f32::MAX,
+            trace_len: u32::MAX as usize,
+            decimated: true,
+        },
+        u32::MAX,
+    );
+    let mut buf = [0u8; 512];
+    let n = encode_summary_message(summary, &mut buf).unwrap();
+    assert!(
+        n <= SYNC_MSG_MAX,
+        "worst-case summary is {n} bytes, over the {SYNC_MSG_MAX}-byte characteristic"
     );
 }
 

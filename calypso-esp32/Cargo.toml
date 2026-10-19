@@ -68,9 +68,23 @@ trouble-host = { version = "0.5.0", features = ["gatt"] }
 critical-section = "1.2.0"
 static_cell      = "2.1.1"
 bno055 = "0.4.0"
-esp-storage = { version = "0.8.1", features = ["esp32"] }
+# `defmt` so a flash failure can name itself: `FlashStorageError` is the difference
+# between the flash *refusing* an operation (`OtherCoreRunning`) and failing one
+# (`IoTimeout`, `IoError`), and a message that hides it costs a session (see
+# docs/GOTCHAS.md, "Rep log unusable").
+esp-storage = { version = "0.8.1", features = ["esp32", "defmt"] }
 embedded-storage = "0.3.1"
 calypso-core = { path = "../calypso-core" }
+
+[features]
+# Store a synthetic "rep" every 10 s instead of detecting real ones, so the whole
+# device -> flash log -> BLE -> app path can be exercised on a bench with nobody
+# lifting. A build flag rather than a runtime setting on purpose: a device must not
+# be one accidental setting away from recording fiction as if it were a set.
+#
+#   cargo run --features fake-reps
+#
+fake-reps = []
 
 [profile.dev.package.esp-storage]
 opt-level = 3

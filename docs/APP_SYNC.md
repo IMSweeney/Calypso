@@ -49,21 +49,35 @@ abstract class RepTransport {
 
 ## Summary sync
 
-```
-idle ──connect──► syncing ──caught up──► live
-                     │                    │
-                     └── trace request ───┴──► streamingTrace ──► live
-```
+Two paths, one destination: the archive.
 
-- **Incremental.** The device keeps a cursor (`SummaryCursor`) of how far its
-  subscriber has been brought up to date, so re-subscribing sends only what is new. It advances the cursor only on a successful notify, so "is the app subscribed?" needs no CCCD bookkeeping — an unsubscribed app simply means the
-  next tick retries from the same position.
-- **Idempotent on the client.** Summaries are merged by `rep_uuid`; duplicates are
-  ignored, which makes re-syncing cheap and a ring wrap on the device harmless.
+- **Catch-up on connect.** `BleTransport` collects summaries from the moment it is
+  built, before anything asks for them, so `archiveFromTransport` drains what it
+  holds: for each rep the archive does not already have, request its trace and
+  append its records.
+- **Live.** The list screen subscribes to `watchSummaries()` once and writes each
+  summary to the archive as the device reports it, so a rep that closes while the
+  app is connected appears without another Connect. The subscription is not
+  per-connection: the transport's stream outlives a link, and summaries arrive on it
+  only while one is up.
+- **Incremental, on the device's side.** The device keeps a cursor
+  (`SummaryCursor`) of how far its subscriber has been brought up to date, so
+  re-subscribing sends only what is new, and it advances the cursor only on a
+  successful notify — where "successful" is checked properly, since
+  `Characteristic::notify` reports success whether or not anybody is subscribed
+  (see [`GOTCHAS.md`](GOTCHAS.md)). An app that is not subscribed means the next tick
+  retries from the same position.
 - **Wrap-safe.** Old reps disappear from the device's ring but not from the
-  client's archive. The cursor is clamped to the log's actual count, so a device that wrapped re-syncs from the oldest id it still has.
-- A dropped connection must not lose the archive: the subscription is dropped,
-  the client stops, and a later `syncSummaries()` picks up where it left off.
+  client's archive. The cursor is clamped to the log's actual count, so a device
+  that wrapped re-syncs from the oldest id it still has.
+- **Idempotent, at the log.** Both paths ask the archive what it holds and skip
+  that, so a rep summarised twice — around a reconnect, say — is written once. The
+  writes are chained, so the two paths cannot interleave on the same rep either.
+- A dropped connection costs nothing already archived: the stream goes quiet and the
+  next connect catches up.
+
+Both paths end in the same place, and the list is built from that place: the UI
+holds no rep state of its own.
 
 ## Trace sync
 
@@ -79,9 +93,17 @@ device streams `TraceChunk` notifications in response.
 
 ## The archive
 
-`HistoryStore` is the client's copy of everything synced:
+`HistoryStore` is the client's copy of everything synced, and **the only source of
+truth for what the app shows**:
 
 - Records live in `history.pblog` — the same `[u32 LE length][RepRecord]` framing
   as fixtures and captures, so history, a fixture and a dumped log are one format ([`FIXTURES.md`](FIXTURES.md)).
+- **What exists is read out of the log**: `contains(uuid)`, the list, its order and
+  each rep's trace all come from the records. Nothing else can make a rep exist, and
+  nothing else can stop one existing — which is also what makes re-syncing a no-op
+  rather than a second copy of a rep.
 - Client receipt times live in a small `received.json` beside it, because the
   device has no RTC: its timestamps are uptime milliseconds and are meaningless across reboots.
+  **Decoration, never truth** — losing it costs the list its timestamps (a rep with
+  no time shows `—`) and nothing else, and entries for reps the log does not hold
+  are dropped when it is loaded.

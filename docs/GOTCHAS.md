@@ -20,14 +20,64 @@ parks the other core for the duration of each operation.
 
 ### `Rep log unusable` in the boot log
 
-**Cause.** Almost always a stale partition table on the device: the `log`
-partition from `calypso-esp32/partitions.csv` (`data`/`undefined`, 0x190000,
-0x270000) is missing.
+The line carries the reason, and the reason decides what to do:
 
-**Fix.** Flash the table along with the app — `cargo run` from `calypso-esp32/`,
-a plain `espflash flash`, or the merged image from `dist/`, all write it. The
-firmware now names the cause and, for a missing partition, dumps the table it
-actually read, so the log says which one it got.
+| It ends with | What it means |
+|---|---|
+| `no data/undefined partition in the flashed table` | The flashed table is not the one in `calypso-esp32/partitions.csv` (`data`/`undefined`, 0x190000, 0x270000). Fix by flashing the table with the app — `cargo run` from `calypso-esp32/`, a plain `espflash flash`, or the merged image from `dist/`. The firmware dumps the table it actually read. |
+| `partition table unreadable: Invalid` | It read fine and is not a table. Same fix. |
+| `partition table unreadable: StorageError` | Reading the table failed at the flash level. |
+| `log partition: StorageError` | The flash failed while mounting the ring. |
+
+A mount failure costs that boot only: the ring is mounted again for each append, so
+a rep can still be stored once a later mount works.
+
+**The interesting part is the `Rep log probe` line that follows a `log partition`
+failure**, and it exists because the vendor partition wrapper flattens every storage
+error into `partitions::Error::StorageError` — which cannot tell a flash that
+*refused* an operation from one that failed it. The probe re-reads sector 0 with the
+raw `FlashStorage`, whose `FlashStorageError` does distinguish them
+(`OtherCoreRunning`, `IoTimeout`, `NotAligned`, …). The bytes it prints are the other
+half:
+
+- the read fails → its error is the real one;
+- it reads all `ff` → the ring is unformatted, so `mount` was **formatting** it, and the
+  erase is what failed;
+- it reads a header → the partition was formatted, so `mount`'s **read scan** failed.
+
+A write is deliberately not probed: repeating the erase to see whether it works is
+not a diagnostic, it is the bug.
+
+### A flash read's *length* must be a multiple of `READ_SIZE`
+
+**Symptom.** Reps stop being stored as soon as there is something in the log to read:
+`rep … could not be stored: log partition: reading records in sector 6: StorageError` —
+and the boot mount fails the same way (`Rep log unusable`) once the ring holds records,
+while a freshly erased ring mounts fine.
+
+**Cause.** `flashlog` is generic over `N: NorFlash`, so its reads resolve to
+`ReadNorFlash::read` — and `esp-storage`'s implementation **rejects any offset or length
+that is not a multiple of `READ_SIZE`** (4 on the ESP32) with `NotAligned`. The
+partition wrapper folds that into `partitions::Error::StorageError`, so the message says
+nothing. The log reads records *by their length*: the CRC walk and the payload copy are
+however long the record happens to be, which is never guaranteed to be a multiple of 4.
+
+The asymmetry that made this hard to see: the **same region** implements the *other*
+trait too, and `ReadStorage::read` (which the NVS calibration blob read resolves to)
+copies through a whole-sector scratch buffer and accepts any length. So a 22-byte NVS
+read worked, 8-byte sector and record headers worked, a 64-byte probe worked — and a
+2459-byte record payload did not.
+
+**Fix.** Every read goes through `flashlog::ReadBlocks::read_blocks`, which reads whole
+64-byte blocks and copies out the window asked for — the shape the diagnostic probe had
+proved worked. The test mock now advertises `READ_SIZE = 4` and **enforces** it (it used
+to say `1` and accept anything, which is why a test already named
+`unaligned_payloads_round_trip` never caught this).
+
+**And the diagnostics were worth their keep:** naming the *phase* and *sector* narrowed
+it to "a read in sector 6", and the probe reading that whole sector end to end from a
+shallower frame is what proved the bytes were fine and pointed at the shape of the call
+rather than the flash.
 
 ### NVS is not one big blob
 
@@ -255,12 +305,24 @@ advanced through the whole log into the void. The firmware now asks the server
 
 ### A trace chunk can be too big to notify, silently
 
-`sync::SYNC_CHUNK_MAX` (193 bytes) is the worst case for a 3-sample chunk, but the
-trace-chunk characteristic is typed `BleVec<SYNC_MSG_MAX>` (128 bytes, sized for a
-*summary*). A chunk whose encoding exceeds 128 bytes fails to notify, and the
-stream just stops — mid-trace, with no error. Real 3-sample chunks are ~115–126
-bytes, so it is close enough to bite. **Open**; the fix is sizing the
-characteristic to `SYNC_CHUNK_MAX` plus its GATT table test.
+**Symptom.** The device stores reps and the app lists them, but opening one says it has
+no trace (`rep xx: no trace in the archive`), and the app's BLE log shows the stream
+stopping part-way. Nothing is logged at either end.
+
+**Cause.** A payload that does not fit the characteristic it is notified on fails to
+notify *silently*: `Characteristic::notify` is never reached, because the payload cannot
+be built. The trace-chunk characteristic was typed `BleVec<SYNC_MSG_MAX>` (128 bytes,
+sized for a *summary*) while `sync::SYNC_CHUNK_MAX` is 193 for a 3-sample chunk — so a
+chunk past 128 bytes simply ended the stream. Two things hid it: the notification was
+never attempted, so no radio-level error was possible; and the worst-case test bounded
+chunks against the MTU (244) rather than against the characteristic (128).
+
+**Fix.** The characteristic is sized to `SYNC_CHUNK_MAX`, the firmware's store for it
+with that, and `stream_trace`'s payload too — plus tests that make the sizes impossible
+to get wrong quietly: the GATT table test types the chunk characteristic as
+`BleVec<SYNC_CHUNK_MAX>`, and the encoder test bounds a worst-case chunk *and* a
+worst-case summary against the characteristic each is notified on. `stream_trace` now also
+*says* when a chunk does not fit, rather than returning in silence.
 
 ## Tests and tooling
 

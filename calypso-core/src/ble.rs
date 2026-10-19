@@ -9,6 +9,7 @@
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use trouble_host::prelude::*;
 
+use crate::sync::SYNC_CHUNK_MAX;
 use crate::DEVICE_NAME_MAX;
 
 /// Number of attributes in the table:
@@ -47,8 +48,15 @@ pub const NOTIFIABLE_CHARACTERISTICS: usize = 3;
 /// length up to `N` (unlike a fixed-size array, which would pad).
 pub type BleVec<const N: usize> = heapless::Vec<u8, N>;
 
-/// Largest sync message sent device -> app. A `RepSummary` message encodes to
-/// ~120 bytes.
+/// Largest *summary* message sent device -> app. A `RepSummary` encodes to ~120 bytes,
+/// which is what this covers — and only that: a streamed trace chunk is bigger than a
+/// summary, and has its own size ([`SYNC_CHUNK_MAX`]).
+///
+/// The two are separate on purpose. A payload that does not fit the characteristic it is
+/// notified on **fails to notify silently** — `Characteristic::notify` is not even
+/// reached, because the payload cannot be built — so the stream simply stops. Sizing
+/// this one for a summary and using it for chunks is exactly what did that
+/// (see `docs/GOTCHAS.md`).
 pub const SYNC_MSG_MAX: usize = 128;
 /// Largest accepted `TraceRequest` from the app.
 pub const SYNC_REQUEST_MAX: usize = 32;
@@ -205,7 +213,13 @@ pub struct GattTable<'d, M: RawMutex> {
     /// `TraceRequest` from the app, write.
     pub trace_request: Characteristic<BleVec<SYNC_REQUEST_MAX>>,
     /// Sync messages carrying `TraceChunk`, notify.
-    pub trace_chunk: Characteristic<BleVec<SYNC_MSG_MAX>>,
+    ///
+    /// Sized for [`SYNC_CHUNK_MAX`] rather than [`SYNC_MSG_MAX`]: a streamed chunk of
+    /// [`crate::sync::BLE_CHUNK_SAMPLES`] points encodes to more than a summary does, and
+    /// a payload that does not fit its characteristic fails to notify *silently* — the
+    /// trace stream just stops part-way, and the app times out with a rep whose trace is
+    /// missing rather than an error from either end.
+    pub trace_chunk: Characteristic<BleVec<SYNC_CHUNK_MAX>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -284,7 +298,7 @@ pub fn build_gatt_table<'d, M: RawMutex>(
         .add_characteristic(
             SYNC_CHUNK_UUID.clone(),
             &[CharacteristicProp::Notify],
-            BleVec::<SYNC_MSG_MAX>::new(),
+            BleVec::<SYNC_CHUNK_MAX>::new(),
             trace_chunk_store,
         )
         .build();

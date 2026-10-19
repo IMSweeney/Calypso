@@ -38,9 +38,9 @@ use calypso_core::ble::{BleVec, SYNC_MSG_MAX};
 use calypso_core::calibration::Calibration;
 use calypso_core::flashlog::{self, FlashLog};
 use calypso_core::pb::msg;
-use calypso_core::sync::{self, decode_trace_request, SummaryCursor, TraceStreamer};
+use calypso_core::sync::{self, decode_trace_request, SummaryCursor, TraceStreamer, SYNC_CHUNK_MAX};
 use calypso_core::uuid::{self, RepUuid};
-use calypso_core::rep::{compute_rep, Detector, TraceBuf, TracePoint, MARGIN_MS};
+use calypso_core::rep::{compute_rep, Detector, RepSpan, TraceBuf, TracePoint, MARGIN_MS};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::sampler::{quantize, Sample, SampleRing, QUAT_SCALE, SAMPLE_RATE_HZ};
 use calypso_core::DEVICE_NAME_MAX;
@@ -87,6 +87,19 @@ static CALIBRATION_BITS: AtomicU32 = AtomicU32::new(0);
 /// on the transition to calibrated, so the save (a flash erase and write) does
 /// not repeat on every poll.
 static CALIBRATION_SAVED: AtomicBool = AtomicBool::new(false);
+
+/// Bench mode: store a synthetic "rep" every this many seconds instead of detecting
+/// real ones (`--features fake-reps`).
+///
+/// A build flag rather than a runtime setting on purpose: the device should not be one
+/// accidental setting away from recording fiction as a measurement, and a bench build
+/// says so in its own log lines (`fake-reps: …`).
+const FAKE_REPS: bool = cfg!(feature = "fake-reps");
+
+/// Bench mode's period, and how much of the ring each synthetic rep covers. The window
+/// has to leave room for the ZUPT margins inside `REP_WINDOW_SAMPLES` (9 s).
+const FAKE_REP_PERIOD_S: u32 = 10;
+const FAKE_REP_MS: u32 = 8_000;
 
 /// Ring-buffer window: how much history the detector can be asked for, plus
 /// headroom.
@@ -275,8 +288,10 @@ async fn main(spawner: Spawner) -> ! {
     // Mount the rep-record flash log (see docs/REP_TRACKING.md).
     match mount_rep_log(&mut store) {
         Ok(sectors) => info!("Rep log mounted: {} sectors", sectors),
-        // The reason, not just "unusable": the first question is always whether
-        // the flashed partition table has the log partition at all.
+        // The reason, not just "unusable", and the reason *named*: the first
+        // question is whether the flashed table has the log partition at all, and
+        // the second is which flash error it was — a refused write (`OtherCoreRunning`)
+        // and a bad read are different faults with different fixes.
         Err(reason) => warn!("Rep log unusable: {}", reason),
     }
 
@@ -347,7 +362,9 @@ async fn main(spawner: Spawner) -> ! {
     let mut gravity_x_store = [0u8; 4];
     let mut sync_msg_store = [0u8; calypso_core::ble::SYNC_MSG_MAX];
     let mut sync_request_store = [0u8; calypso_core::ble::SYNC_REQUEST_MAX];
-    let mut sync_chunk_store = [0u8; calypso_core::ble::SYNC_MSG_MAX];
+    // The chunk characteristic is sized for a streamed chunk, not a summary: see
+    // `calypso_core::ble`. A too-small store here is the same silent truncation.
+    let mut sync_chunk_store = [0u8; SYNC_CHUNK_MAX];
     let gatt = calypso_core::ble::build_gatt_table::<NoopRawMutex>(
         device_name.as_str(),
         &mut name_store[..],
@@ -585,6 +602,8 @@ async fn main(spawner: Spawner) -> ! {
             let mut detector = Detector::new();
             let mut reps: u32 = 0;
             let mut n: u32 = 0;
+            // Said once, in bench mode, so a session cannot be mistaken for a real one.
+            let mut logged_fake_reps = false;
             // The IMU's calibration levels, refreshed once a second — and logged
             // only when they change, so "paused until the IMU is calibrated" is
             // printed when it becomes true rather than 3,600 times an hour.
@@ -645,7 +664,32 @@ async fn main(spawner: Spawner) -> ! {
                 // measurement (see docs/CALIBRATION.md). Not feeding the detector at
                 // all also means it starts from a real rest once calibration
                 // completes.
-                let span = if calibration.is_ready() {
+                let span = if FAKE_REPS {
+                    // Bench mode: one synthetic rep per period, covering the last
+                    // FAKE_REP_MS of samples whatever the motion was. The calibration
+                    // gate is deliberately *not* applied — the chip's `acc` status
+                    // flaps on its own (see docs/GOTCHAS.md), so gating would make
+                    // reps appear and vanish at random, and this data is not meant to
+                    // be trustworthy anyway. Everything downstream is untouched: the
+                    // records are ordinary ones the app syncs and plots.
+                    if !logged_fake_reps {
+                        logged_fake_reps = true;
+                        warn!(
+                            "fake-reps: storing a synthetic rep every {} s, not detecting real ones",
+                            FAKE_REP_PERIOD_S
+                        );
+                    }
+                    if n.is_multiple_of(SAMPLE_RATE_HZ * FAKE_REP_PERIOD_S)
+                        && t_ms >= FAKE_REP_MS
+                    {
+                        Some(RepSpan {
+                            start_ms: t_ms - FAKE_REP_MS,
+                            end_ms: t_ms,
+                        })
+                    } else {
+                        None
+                    }
+                } else if calibration.is_ready() {
                     detector.update(&sample)
                 } else {
                     None
@@ -681,7 +725,11 @@ async fn main(spawner: Spawner) -> ! {
                                 UuidShort(Some(&rep_uuid)),
                                 n
                             ),
-                            Err(()) => warn!("rep {} could not be stored", UuidShort(Some(&rep_uuid))),
+                            Err(e) => warn!(
+                                "rep {} could not be stored: {}",
+                                UuidShort(Some(&rep_uuid)),
+                                e
+                            ),
                         }
                         info!(
                             "rep {}: {}..{} ms ({} ms), {} trace pts{}, rom {=f32} m, peak v {=f32} m/s, mean v {=f32} m/s, peak a {=f32} m/s^2, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
@@ -786,29 +834,204 @@ async fn main(spawner: Spawner) -> ! {
 /// `undefined`, see partitions.csv). Returns the number of sectors in the
 /// ring. Mounting here formats the partition on first boot; individual reps
 /// are written later by [`store_rep`].
-fn mount_rep_log(store: &mut FlashStore) -> Result<u32, &'static str> {
+fn mount_rep_log(store: &mut FlashStore) -> Result<u32, LogError> {
     let (flash, pt_mem) = store.split();
-    let pt = partitions::read_partition_table(flash, pt_mem)
-        .map_err(|_| "partition table unreadable")?;
+    let pt = partitions::read_partition_table(flash, pt_mem).map_err(LogError::Table)?;
     let Some(log_part) = pt
         .find_partition(partitions::PartitionType::Data(
             partitions::DataPartitionSubType::Undefined,
         ))
-        .map_err(|_| "partition table unreadable")?
+        .map_err(LogError::Table)?
     else {
         // The flashed table has no data/undefined partition. Usually a stale
         // table on the device rather than a broken log, so say what is actually
         // there — otherwise the next step is a guess.
         log_partition_table(&pt);
-        return Err("no data/undefined partition in the flashed table");
+        return Err(LogError::NoPartition);
     };
-    let mut region = log_part.as_embedded_storage(flash);
-    let log = FlashLog::mount(&mut region).map_err(|e| match e {
-        flashlog::Error::RegionTooSmall => "log partition smaller than two sectors",
-        flashlog::Error::TooLarge => "record too large for a sector",
-        flashlog::Error::Flash(_) => "flash read/write error on the log partition",
-    })?;
-    Ok(log.sectors())
+    // Scoped so the region's borrow of `flash` ends before the probe below.
+    let mounted = {
+        let mut region = log_part.as_embedded_storage(flash);
+        FlashLog::mount(&mut region).map(|log| log.sectors())
+    };
+    match mounted {
+        Ok(sectors) => Ok(sectors),
+        Err(e) => {
+            probe_log_partition(flash, log_part.offset(), failing_sector(&e));
+            Err(map_log_error(e))
+        }
+    }
+}
+
+/// One `flashlog::Error` in the terms the log line needs.
+fn map_log_error(e: flashlog::Error<partitions::Error>) -> LogError {
+    match e {
+        flashlog::Error::RegionTooSmall => LogError::RegionTooSmall,
+        flashlog::Error::TooLarge => LogError::TooLarge,
+        flashlog::Error::Flash {
+            phase,
+            sector,
+            source,
+        } => LogError::Region {
+            phase,
+            sector,
+            source,
+        },
+    }
+}
+
+/// A failing flash phase in words, with the sector: `erasing sector 1`,
+/// `header scan stopped at sector 212`.
+///
+/// `calypso-core` owns the vocabulary ([`flashlog::Phase`]) and this firmware owns the
+/// sentence, because core is platform-independent and has no defmt.
+struct FlashPhase {
+    phase: flashlog::Phase,
+    sector: u32,
+}
+
+impl defmt::Format for FlashPhase {
+    fn format(&self, f: defmt::Formatter) {
+        match self.phase {
+            flashlog::Phase::ScanHeaders => {
+                defmt::write!(f, "header scan stopped at sector {}", self.sector)
+            }
+            flashlog::Phase::ReadRecords => {
+                defmt::write!(f, "reading records in sector {}", self.sector)
+            }
+            flashlog::Phase::Erase => defmt::write!(f, "erasing sector {}", self.sector),
+            flashlog::Phase::Write => defmt::write!(f, "writing sector {}", self.sector),
+        }
+    }
+}
+
+/// Read **the whole sector that failed**, in 64-byte raw reads, and say where it stops.
+///
+/// Only after a failed log operation, because the useful detail is exactly what the
+/// vendor partition wrapper throws away: `PartitionEntry::as_embedded_storage` maps
+/// every storage failure to `partitions::Error::StorageError`. The raw `FlashStorage`
+/// does report the real `FlashStorageError`, and a read is safe to repeat.
+///
+/// The sector comes from the failure itself rather than from sector 0 — a probe that
+/// always looked at sector 0 reported "sector 0 reads fine" for a failure five sectors
+/// away. (It happened; that was the first version of this.)
+///
+/// Walking rather than sampling is the point: this runs from a *shallow* frame, after
+/// the failed read has unwound. So "sector N reads end to end" means the bytes are
+/// there and readable when nothing else is on the stack, and the failure is about the
+/// context the real read ran in — while "failed at +N" with the flash's own error name
+/// pins it to the flash or the driver. Those need different repairs, and nothing else
+/// distinguishes them.
+///
+/// A write is deliberately not probed: repeating an erase to see whether it works is
+/// not a diagnostic, it is the bug.
+fn probe_log_partition(flash: &mut FlashDevice<'static>, partition_offset: u32, sector: u32) {
+    let sector_size = FlashDevice::ERASE_SIZE as u32;
+    let base = partition_offset + sector * sector_size;
+    let mut buf = [0u8; 64];
+    let mut first = [0u8; 8];
+    let mut offset = 0u32;
+    while offset < sector_size {
+        if let Err(e) = flash.read(base + offset, &mut buf) {
+            warn!(
+                "Rep log probe: sector {} failed a raw read at +{}: {}",
+                sector, offset, e
+            );
+            return;
+        }
+        if offset == 0 {
+            first.copy_from_slice(&buf[..8]);
+        }
+        offset += buf.len() as u32;
+    }
+    info!(
+        "Rep log probe: sector {} reads end to end from this frame (starts {=[u8]:02x})",
+        sector,
+        first
+    );
+}
+
+/// The sector a failed flash operation was on, or 0 when the error was not ours to
+/// place. Read before the error is mapped, because mapping consumes it.
+fn failing_sector(e: &flashlog::Error<partitions::Error>) -> u32 {
+    match e {
+        flashlog::Error::Flash { sector, .. } => *sector,
+        _ => 0,
+    }
+}
+
+/// Why a flash-log operation failed, named.
+///
+/// Used for both the boot-time mount and a rep append, because an append *mounts the
+/// log itself* (see [`store_rep`]) and therefore fails for the same reasons — and
+/// because reporting them as two different-sounding sentences ("Rep log unusable" /
+/// "rep could not be stored") sends you looking for a second bug that is not there.
+///
+/// The underlying errors travel through rather than being folded into a sentence:
+///
+/// - for the table, `Invalid` means it read fine and is not a table, while
+///   `StorageError` means reading it failed — "partition table unreadable" covered
+///   both;
+/// - for the region, the *phase* says which flash operation failed (a refused erase
+///   and a failed read have different repairs — see `flashlog::Phase`), and the
+///   `partitions::Error` beside it says how far it got: `StorageError` means the
+///   storage layer failed (the specific error is flattened away by the vendor wrapper
+///   — see [`probe_log_partition`]), while `OutOfBounds`, `WriteProtected` and
+///   `InvalidArgument` mean the operation never reached the flash. "Flash read/write
+///   error on the log partition" covered all of them, and cost a session to read.
+///
+/// `partitions::Error` is `#[non_exhaustive]` and formatted rather than matched, so a
+/// future variant prints instead of failing to compile.
+enum LogError {
+    Table(partitions::Error),
+    NoPartition,
+    RegionTooSmall,
+    TooLarge,
+    Region {
+        phase: flashlog::Phase,
+        sector: u32,
+        source: partitions::Error,
+    },
+    Encode(calypso_core::pb::Error),
+}
+
+impl defmt::Format for LogError {
+    fn format(&self, f: defmt::Formatter) {
+        match self {
+            Self::Table(e) => defmt::write!(f, "partition table unreadable: {}", e),
+            Self::NoPartition => {
+                defmt::write!(f, "no data/undefined partition in the flashed table")
+            }
+            Self::RegionTooSmall => {
+                defmt::write!(f, "log partition smaller than two erase sectors")
+            }
+            Self::TooLarge => defmt::write!(f, "a record did not fit one erase sector"),
+            Self::Region {
+                phase,
+                sector,
+                source,
+            } => defmt::write!(
+                f,
+                "log partition: {}: {}",
+                FlashPhase {
+                    phase: *phase,
+                    sector: *sector
+                },
+                source
+            ),
+            // Ours rather than the flash's: something was too big for a buffer we
+            // sized, which is a different repair from a flash that will not write.
+            Self::Encode(calypso_core::pb::Error::BufferTooSmall) => {
+                defmt::write!(f, "record did not fit the encode buffer")
+            }
+            Self::Encode(calypso_core::pb::Error::Decode) => {
+                defmt::write!(f, "record decode failed")
+            }
+            Self::Encode(calypso_core::pb::Error::Empty) => {
+                defmt::write!(f, "record had no body")
+            }
+        }
+    }
 }
 
 /// Log what the flashed partition table contains, entry by entry.
@@ -927,23 +1150,26 @@ fn collect_summaries(
 /// MTU-sized chunks.
 ///
 /// The one frame in this firmware that is knowingly over the crate's
-/// `clippy::large_stack_frames` threshold, hence the exemption. It is 1363 bytes
-/// of which the largest single local is the 193-byte encode scratch
-/// ([`sync::SYNC_CHUNK_MAX`], the worst case for three samples); the rest is the
-/// inlined MIR of the encoder and the log calls. There is no buffer left to move
-/// to the heap — extracting the log work is already done (see
-/// [`read_trace_from_log`]) — and suppressing inlining across `calypso-core` to
-/// satisfy the lint would trade a bounded, once-per-trace cost for a real one.
+/// `clippy::large_stack_frames` threshold, hence the exemption. It is 1476 bytes,
+/// of which the largest locals are the 193-byte encode scratch and the 193-byte
+/// notification payload — both [`sync::SYNC_CHUNK_MAX`], the worst case for three
+/// samples. (The payload is sized to the *characteristic* rather than to a summary
+/// because a chunk that does not fit it fails to notify in silence; see
+/// `docs/GOTCHAS.md`.) The rest is the inlined MIR of the encoder and the log
+/// calls. There is no buffer left to move to the heap — extracting the log work is
+/// already done (see [`read_trace_from_log`]) — and suppressing inlining across
+/// `calypso-core` to satisfy the lint would trade a bounded, once-per-trace cost
+/// for a real one.
 #[allow(
     clippy::large_stack_frames,
-    reason = "1363 B: a 193 B encode scratch plus the inlined encoder/log frames"
+    reason = "1476 B: a 193 B encode scratch, a 193 B notification payload, and the inlined encoder/log frames"
 )]
 async fn stream_trace(
     store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
     rec_buf: &mut [u8],
     rec: &mut msg::RepRecord,
     trace_storage: &mut [TracePoint],
-    chunk_char: &Characteristic<BleVec<SYNC_MSG_MAX>>,
+    chunk_char: &Characteristic<BleVec<SYNC_CHUNK_MAX>>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     request: msg::TraceRequest,
 ) {
@@ -970,10 +1196,15 @@ async fn stream_trace(
     };
 
     let mut scratch = [0u8; sync::SYNC_CHUNK_MAX];
-    let mut payload: BleVec<SYNC_MSG_MAX> = BleVec::new();
+    // Sized to the characteristic, which is sized to the worst case a chunk can encode
+    // to. It used to be a summary's size, and a chunk that did not fit was dropped here
+    // in silence: the stream stopped part-way and the app timed out with a rep whose
+    // trace was missing, with nothing said at either end (see `docs/GOTCHAS.md`).
+    let mut payload: BleVec<SYNC_CHUNK_MAX> = BleVec::new();
     while let Some(n) = streamer.next_message(&mut scratch) {
         payload.clear();
         if payload.extend_from_slice(&scratch[..n]).is_err() {
+            warn!("trace chunk of {} bytes does not fit its characteristic", n);
             return;
         }
         if chunk_char.notify(conn, &payload).await.is_err() {
@@ -1033,26 +1264,49 @@ impl defmt::Format for UuidShort<'_> {
 /// Returns the number of log records written. The log is mounted per append:
 /// mounting is a scan of the sector headers, and appends are rare (once per
 /// rep, at rest), so there's no need to keep it alive between reps.
+///
+/// **Which is why an append fails for the same reasons the boot-time mount does**, and
+/// reports them the same way: a mount that cannot run means no rep can be stored, and
+/// nothing retries, so a rep is lost when this returns an error.
 fn store_rep(
     store: &mut FlashStore,
     rec_buf: &mut [u8],
     rep_uuid: RepUuid,
     summary: &calypso_core::rep::RepSummary,
     trace: &TraceBuf<'_>,
-) -> Result<u32, ()> {
+) -> Result<u32, LogError> {
     let (flash, pt_mem) = store.split();
-    let pt = partitions::read_partition_table(flash, pt_mem).map_err(|_| ())?;
+    let pt = partitions::read_partition_table(flash, pt_mem).map_err(LogError::Table)?;
     let Some(log_partition) = pt
         .find_partition(partitions::PartitionType::Data(
             partitions::DataPartitionSubType::Undefined,
         ))
-        .map_err(|_| ())?
+        .map_err(LogError::Table)?
     else {
-        return Err(());
+        return Err(LogError::NoPartition);
     };
-    let mut region = log_partition.as_embedded_storage(flash);
-    let mut log = FlashLog::mount(&mut region).map_err(|_| ())?;
-    store::append_rep(&mut log, rec_buf, rep_uuid, summary, trace.as_slice()).map_err(|_| ())
+    let offset = log_partition.offset();
+    // Scoped so the region's borrow of `flash` ends before the probe below.
+    let appended = {
+        let mut region = log_partition.as_embedded_storage(flash);
+        FlashLog::mount(&mut region)
+            .map_err(store::Error::Log)
+            .and_then(|mut log| {
+                store::append_rep(&mut log, rec_buf, rep_uuid, summary, trace.as_slice())
+            })
+    };
+    match appended {
+        Ok(records) => Ok(records),
+        Err(e) => {
+            if let store::Error::Log(e) = &e {
+                probe_log_partition(flash, offset, failing_sector(e));
+            }
+            Err(match e {
+                store::Error::Log(e) => map_log_error(e),
+                store::Error::Encode(e) => LogError::Encode(e),
+            })
+        }
+    }
 }
 
 /// Load the BLE device name from the NVS partition, falling back to the default.
@@ -1133,9 +1387,31 @@ fn load_calibration(bno055: &mut Bno055<I2c<'_, Blocking>>, store: &mut FlashSto
         return;
     };
     let mut delay = Delay;
-    match bno055.set_calibration_profile(profile, &mut delay) {
-        Ok(()) => info!("Stored IMU calibration applied"),
-        Err(_) => warn!("BNO055 rejected the stored calibration profile"),
+    if bno055.set_calibration_profile(profile, &mut delay).is_err() {
+        warn!("BNO055 rejected the stored calibration profile");
+        return;
+    }
+
+    // **Read it back, because the write is fire-and-forget.** `set_calibration_profile`
+    // is one I2C burst and reports only that the bus took it, so a profile the chip
+    // ignored is indistinguishable from one it accepted until its levels are read —
+    // which is exactly the ambiguity that "the accelerometer is 0 after every reboot"
+    // has been sitting in. The two outcomes need different fixes: bytes that do not
+    // come back mean the restore is not landing (our write, or the chip's mode), while
+    // bytes that do come back mean the chip holds the offsets and simply does not
+    // report `acc` as calibrated from them.
+    //
+    // Two more mode switches (~40 ms) and 22 bytes, once per boot, only when there is
+    // a profile to apply.
+    match bno055.calibration_profile(&mut delay) {
+        Ok(after) if after == profile => {
+            info!("Stored IMU calibration applied, and reads back byte for byte")
+        }
+        Ok(after) => warn!(
+            "Stored IMU calibration applied, but the chip reads back {=[u8]:02x}",
+            after.as_bytes()
+        ),
+        Err(_) => warn!("Stored IMU calibration applied, but could not be read back"),
     }
 }
 
@@ -1148,17 +1424,38 @@ fn load_calibration(bno055: &mut Bno055<I2c<'_, Blocking>>, store: &mut FlashSto
 /// worse than starting uncalibrated.
 fn read_calibration(store: &mut FlashStore) -> Option<BNO055Calibration> {
     let (flash, pt_mem) = store.split();
-    let pt = partitions::read_partition_table(flash, pt_mem).ok()?;
-    let nvs = pt
-        .find_partition(partitions::PartitionType::Data(
-            partitions::DataPartitionSubType::Nvs,
-        ))
-        .ok()??;
+    let pt = match partitions::read_partition_table(flash, pt_mem) {
+        Ok(pt) => pt,
+        Err(e) => {
+            warn!("NVS: partition table unreadable: {}", e);
+            return None;
+        }
+    };
+    let nvs = match pt.find_partition(partitions::PartitionType::Data(
+        partitions::DataPartitionSubType::Nvs,
+    )) {
+        Ok(Some(nvs)) => nvs,
+        Ok(None) => {
+            warn!("NVS: no nvs partition in the flashed table");
+            return None;
+        }
+        Err(e) => {
+            warn!("NVS: partition lookup failed: {}", e);
+            return None;
+        }
+    };
     let mut nvs_partition = nvs.as_embedded_storage(flash);
 
     let mut blob = [0u8; BNO055_CALIB_SIZE];
-    nvs_partition.read(BNO055_CALIBRATION_ADDR, &mut blob).ok()?;
+    if let Err(e) = nvs_partition.read(BNO055_CALIBRATION_ADDR, &mut blob) {
+        warn!("NVS: calibration read failed: {}", e);
+        return None;
+    }
     if blob.iter().all(|&b| b == 0xFF) {
+        // Distinguishable on purpose: from the caller's one line, "this device has
+        // never been calibrated" and "the calibration is there and unreadable" look
+        // the same, and they are not the same problem.
+        info!("NVS: no stored calibration (the sector is erased)");
         return None;
     }
     Some(BNO055Calibration::from_buf(&blob))
@@ -1186,16 +1483,19 @@ fn save_calibration(store: &mut FlashStore, profile: &BNO055Calibration) -> bool
     };
     let mut nvs_partition = nvs.as_embedded_storage(flash);
 
-    if nvs_partition
+    // Each error named: `OtherCoreRunning` here means the flash refused because the
+    // other core was up, and the erase-then-write below is why that matters — an
+    // erase that succeeds and a write that does not leaves no profile at all, so
+    // which of the two failed decides whether there is anything left to recover.
+    if let Err(e) = nvs_partition
         .erase(BNO055_CALIBRATION_ADDR, BNO055_CALIBRATION_ADDR + 0x1000)
-        .is_err()
     {
-        warn!("NVS: calibration erase failed");
+        warn!("NVS: calibration erase failed: {}", e);
         return false;
     }
-    if Storage::write(&mut nvs_partition, BNO055_CALIBRATION_ADDR, profile.as_bytes()).is_err()
+    if let Err(e) = Storage::write(&mut nvs_partition, BNO055_CALIBRATION_ADDR, profile.as_bytes())
     {
-        warn!("NVS: calibration write failed");
+        warn!("NVS: calibration write failed: {}", e);
         return false;
     }
     true

@@ -21,7 +21,7 @@
 //! the on-flash order is fully determined by the head sector — no index
 //! tables are needed at mount time.
 
-use embedded_storage::nor_flash::NorFlash;
+use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 
 const SECTOR_MAGIC: u32 = 0x4341_4C59; // "CALY"
 const RECORD_MAGIC: u16 = 0xCA10;
@@ -32,16 +32,96 @@ const ERASED: u8 = 0xFF;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error<E> {
-    Flash(E),
+    /// The flash refused or failed an operation, and this says which: see [`Phase`].
+    Flash {
+        phase: Phase,
+        /// The sector the operation was on. In the mount scan that is where the scan
+        /// stopped, which is the difference between "sector 0" and "the 212th header
+        /// of 624".
+        sector: u32,
+        source: E,
+    },
     /// Region smaller than two erase sectors.
     RegionTooSmall,
     /// Payload does not fit in a single sector (records never span sectors).
     TooLarge,
 }
 
+impl<E> Error<E> {
+    /// [`Error::Flash`] for one operation — spelled here rather than at each of the
+    /// fifteen call sites, where one of them would eventually be wrong.
+    fn flash(phase: Phase, sector: u32) -> impl FnOnce(E) -> Error<E> {
+        move |source| Error::Flash {
+            phase,
+            sector,
+            source,
+        }
+    }
+}
+
+/// What a failing flash operation was doing.
+///
+/// A bare "flash error" has cost this project two sessions. [`FlashLog::mount`] reads
+/// every sector header, then scans the head sector's records, then — when that
+/// sector's tail is corrupt — **erases** the next one; [`FlashLog::append`] writes, and
+/// erases when the ring advances. "The flash failed" covers all of them, and they have
+/// different repairs: a refused erase is a parking problem (`esp-storage` will not
+/// erase or write while the other core runs — see `docs/GOTCHAS.md`), while a failed
+/// read is not, and nothing else can tell them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// Reading sector headers while looking for the head.
+    ScanHeaders,
+    /// Reading a sector's records.
+    ReadRecords,
+    /// Erasing: the ring advancing a sector, a mount starting a fresh sector because
+    /// the head's tail was corrupt, or [`FlashLog::format`] erasing all of them (in
+    /// which case the sector is where it starts).
+    Erase,
+    /// Writing a record, or a sector header.
+    Write,
+}
+
 fn pad4(n: u32) -> u32 {
     (n + 3) & !3
 }
+
+/// Read in whole aligned blocks.
+///
+/// Every read in this module goes through it, and that is not fussiness — it is the
+/// only shape this flash's driver turned out to be reliable in from here. The symptom
+/// that taught us: `log partition: reading records in sector 6: StorageError` from the
+/// scan, while a diagnostic probe from a *shallower frame* read the same sector end to
+/// end in 64-byte blocks. Same bytes, same sector, same driver; the difference was that
+/// the scan's reads are however long the record happened to be, and esp-storage's
+/// `ReadStorage` implementation copies through a whole-sector scratch buffer for those
+/// (see `docs/GOTCHAS.md`).
+///
+/// So: read a whole `BLOCK` at a time, always, and copy out the window asked for. Small
+/// reads cost one block and the block is bounded, so nothing here needs a buffer bigger
+/// than 64 bytes.
+///
+/// `BLOCK` must be a multiple of the driver's `READ_SIZE` (4 on the ESP32, and every
+/// power of two up to 64 is), which is the constraint this exists to satisfy.
+trait ReadBlocks: ReadNorFlash {
+    fn read_blocks(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+        const BLOCK: usize = 64;
+        let mut block = [0u8; BLOCK];
+        let mut done = 0usize;
+        while done < bytes.len() {
+            let want = offset as usize + done;
+            let start = want / BLOCK * BLOCK;
+            let skip = want - start;
+            let n = (bytes.len() - done).min(BLOCK - skip);
+            self.read(start as u32, &mut block)?;
+            bytes[done..done + n].copy_from_slice(&block[skip..skip + n]);
+            done += n;
+        }
+        Ok(())
+    }
+}
+
+impl<T: ReadNorFlash> ReadBlocks for T {}
 
 /// CRC-16/CCITT (poly 0x1021, init 0xFFFF).
 fn crc16(mut crc: u16, data: &[u8]) -> u16 {
@@ -83,7 +163,9 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         let mut head: Option<(u32, u32)> = None; // (sector, epoch)
         for s in 0..sectors {
             let mut hdr = [0u8; 8];
-            flash.read(s * sector_size, &mut hdr).map_err(Error::Flash)?;
+            flash
+                .read_blocks(s * sector_size, &mut hdr)
+                .map_err(Error::flash(Phase::ScanHeaders, s))?;
             let magic = u32::from_le_bytes(hdr[0..4].try_into().unwrap());
             let epoch = u32::from_le_bytes(hdr[4..8].try_into().unwrap());
             if magic == SECTOR_MAGIC && head.is_none_or(|(_, e)| epoch > e) {
@@ -111,7 +193,9 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
             // would be ~19 s of flash traffic in the middle of boot — on a chip
             // where the other core has to be parked for every sector.
             None => {
-                log.flash.erase(0, log.sector_size).map_err(Error::Flash)?;
+                log.flash
+                    .erase(0, log.sector_size)
+                    .map_err(Error::flash(Phase::Erase, 0))?;
                 log.write_sector_header()?;
             }
             Some((head, epoch)) => {
@@ -145,7 +229,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
     pub fn format(&mut self) -> Result<(), Error<N::Error>> {
         self.flash
             .erase(0, self.sectors * self.sector_size)
-            .map_err(Error::Flash)?;
+            .map_err(Error::flash(Phase::Erase, 0))?;
         self.head = 0;
         self.head_epoch = 0;
         self.write_offset = SECTOR_HEADER_LEN;
@@ -165,14 +249,17 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         }
 
         let id = self.next_id;
-        let pos = self.head * self.sector_size + self.write_offset;
+        let sector = self.head;
+        let pos = sector * self.sector_size + self.write_offset;
 
         // Header: magic, len, id.
         let mut hdr = [0u8; RECORD_HEADER_LEN as usize];
         hdr[0..2].copy_from_slice(&RECORD_MAGIC.to_le_bytes());
         hdr[2..4].copy_from_slice(&(payload.len() as u16).to_le_bytes());
         hdr[4..8].copy_from_slice(&id.to_le_bytes());
-        self.flash.write(pos, &hdr).map_err(Error::Flash)?;
+        self.flash
+            .write(pos, &hdr)
+            .map_err(Error::flash(Phase::Write, sector))?;
 
         // Payload, in 4-byte-aligned writes (ESP32 flash granularity):
         // full words straight from the payload, then the tail word padded
@@ -181,14 +268,14 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         if full > 0 {
             self.flash
                 .write(pos + RECORD_HEADER_LEN, &payload[..full])
-                .map_err(Error::Flash)?;
+                .map_err(Error::flash(Phase::Write, sector))?;
         }
         if full < payload.len() {
             let mut tail = [ERASED; 4];
             tail[..payload.len() - full].copy_from_slice(&payload[full..]);
             self.flash
                 .write(pos + RECORD_HEADER_LEN + full as u32, &tail)
-                .map_err(Error::Flash)?;
+                .map_err(Error::flash(Phase::Write, sector))?;
         }
 
         // Trailer: CRC-16 over header[2..] + payload, padded to 4 bytes.
@@ -196,7 +283,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         let trailer = [crc.to_le_bytes()[0], crc.to_le_bytes()[1], ERASED, ERASED];
         self.flash
             .write(pos + RECORD_HEADER_LEN + pad4(payload.len() as u32), &trailer)
-            .map_err(Error::Flash)?;
+            .map_err(Error::flash(Phase::Write, sector))?;
 
         self.write_offset += rec_len;
         self.next_id += 1;
@@ -236,7 +323,9 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         let mut live = 0u32;
         for s in 0..self.sectors {
             let mut hdr = [0u8; 8];
-            self.flash.read(s * self.sector_size, &mut hdr).map_err(Error::Flash)?;
+            self.flash
+                .read_blocks(s * self.sector_size, &mut hdr)
+                .map_err(Error::flash(Phase::ScanHeaders, s))?;
             let magic = u32::from_le_bytes(hdr[0..4].try_into().unwrap());
             let epoch = u32::from_le_bytes(hdr[4..8].try_into().unwrap());
             if magic == SECTOR_MAGIC && self.head_epoch >= epoch && self.head_epoch - epoch < self.sectors {
@@ -275,9 +364,10 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         let mut hdr = [0u8; 8];
         hdr[0..4].copy_from_slice(&SECTOR_MAGIC.to_le_bytes());
         hdr[4..8].copy_from_slice(&self.head_epoch.to_le_bytes());
+        let sector = self.head;
         self.flash
-            .write(self.head * self.sector_size, &hdr)
-            .map_err(Error::Flash)
+            .write(sector * self.sector_size, &hdr)
+            .map_err(Error::flash(Phase::Write, sector))
     }
 
     /// Move to the next sector in the ring, erasing it (this is what drops
@@ -285,10 +375,11 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
     fn advance_sector(&mut self) -> Result<(), Error<N::Error>> {
         self.head = (self.head + 1) % self.sectors;
         self.head_epoch = self.head_epoch.wrapping_add(1);
-        let base = self.head * self.sector_size;
+        let sector = self.head;
+        let base = sector * self.sector_size;
         self.flash
             .erase(base, base + self.sector_size)
-            .map_err(Error::Flash)?;
+            .map_err(Error::flash(Phase::Erase, sector))?;
         self.write_sector_header()?;
         self.write_offset = SECTOR_HEADER_LEN;
         Ok(())
@@ -344,7 +435,9 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         loop {
             let base = sector * self.sector_size + pos;
             let mut hdr = [0u8; RECORD_HEADER_LEN as usize];
-            self.flash.read(base, &mut hdr).map_err(Error::Flash)?;
+            self.flash
+                .read_blocks(base, &mut hdr)
+                .map_err(Error::flash(Phase::ReadRecords, sector))?;
             if hdr.iter().all(|&b| b == ERASED) {
                 break; // erased space: clean end of data
             }
@@ -362,24 +455,24 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
             while remaining > 0 {
                 let n = remaining.min(chunk.len());
                 self.flash
-                    .read(base + RECORD_HEADER_LEN + off, &mut chunk[..n])
-                    .map_err(Error::Flash)?;
+                    .read_blocks(base + RECORD_HEADER_LEN + off, &mut chunk[..n])
+                    .map_err(Error::flash(Phase::ReadRecords, sector))?;
                 crc = crc16(crc, &chunk[..n]);
                 remaining -= n;
                 off += n as u32;
             }
             let mut trailer = [0u8; RECORD_TRAILER_LEN as usize];
             self.flash
-                .read(base + RECORD_HEADER_LEN + pad4(len), &mut trailer)
-                .map_err(Error::Flash)?;
+                .read_blocks(base + RECORD_HEADER_LEN + pad4(len), &mut trailer)
+                .map_err(Error::flash(Phase::ReadRecords, sector))?;
             if u16::from_le_bytes(trailer[0..2].try_into().unwrap()) != crc {
                 return Ok((pos, ScanStop::Corrupt));
             }
             let id = u32::from_le_bytes(hdr[4..8].try_into().unwrap());
             let keep_going = if !buf.is_empty() && len as usize <= buf.len() {
                 self.flash
-                    .read(base + RECORD_HEADER_LEN, &mut buf[..len as usize])
-                    .map_err(Error::Flash)?;
+                    .read_blocks(base + RECORD_HEADER_LEN, &mut buf[..len as usize])
+                    .map_err(Error::flash(Phase::ReadRecords, sector))?;
                 f(id, &buf[..len as usize])
             } else if buf.is_empty() {
                 f(id, &[])

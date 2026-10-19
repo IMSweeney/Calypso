@@ -25,6 +25,28 @@ This writes the partition table along with the bootloader and the app. The firmw
 
 For a standalone image to hand to someone else, see [`dist/README.md`](../dist/README.md).
 
+## Bench testing without lifting
+
+```sh
+cargo run --features fake-reps
+```
+
+Stores a synthetic "rep" every 10 s — the last 8 s of samples, whatever the motion was —
+instead of running the detector. Everything downstream is untouched, so this exercises
+the whole path on a bench with nobody lifting: the flash log, the summaries, the trace
+streaming, and the app syncing and plotting them.
+
+- **The calibration gate is deliberately not applied.** The chip's `acc` status flaps on
+  its own (see [`docs/GOTCHAS.md`](../docs/GOTCHAS.md)), so gating would make reps appear
+  and vanish at random; and this data is not meant to be trustworthy. Real builds still
+  gate.
+- **It says so.** One `fake-reps: storing a synthetic rep every 10 s, not detecting real
+  ones` line at the start, so a bench session cannot be mistaken for a real one in a log.
+- **The records are ordinary.** The app cannot tell them apart, which is the point: a
+  rep off the bench plots and archives exactly like one off a squat.
+- **It is a cargo feature, not a runtime setting.** A device should not be one accidental
+  switch away from recording fiction as a measurement.
+
 ## Test
 
 ```sh

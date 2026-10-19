@@ -10,6 +10,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:calypso/model/uuid.dart';
+import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:calypso/state/ble_status.dart';
 import 'package:calypso/store/memory_archive.dart';
 import 'package:calypso/transport/ble_transport.dart';
@@ -43,9 +44,22 @@ Future<void> pumpList(
   await tester.pumpAndSettle();
 }
 
+/// A summary notification, as the device sends one when a rep closes.
+Uint8List summaryMessage(String uuid) => pb.SyncMessage(
+      summary: pb.RepSummary(
+        repUuid: uuidToBytes(uuid)!,
+        durationMs: 1400,
+        rom: 0.41,
+        peakVelocity: 0.7,
+        traceLen: 3,
+        chunkCount: 1,
+      ),
+    ).writeToBuffer();
+
 void main() {
   _bleWiring();
   _calibrationHint();
+  _liveSummaries();
 
   testWidgets('it archives the source and lists the reps newest first',
       (tester) async {
@@ -206,6 +220,50 @@ void _calibrationHint() {
 
     expect(find.textContaining('IMU not calibrated'), findsNothing);
     expect(find.text('No reps yet'), findsOneWidget);
+  });
+}
+
+/// A rep reported while the app is connected lands in the log, and the list is
+/// served from the log — no second Connect, and no rep state held in the widget.
+void _liveSummaries() {
+  testWidgets('a rep that arrives while connected is written to the log and listed',
+      (tester) async {
+    final link = FakeBleLink();
+    final ble = BleTransport(link, traceTimeout: const Duration(milliseconds: 50));
+    final archive = MemoryArchive();
+
+    await tester.pumpWidget(MaterialApp(
+      home: RepListScreen(archive: archive, ble: ble, fixture: ''),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('No reps yet'), findsOneWidget);
+
+    await tester.tap(find.text('Connect'));
+    await tester.pump();
+    link.seeDevice('device-1', 'Calypso');
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    expect(find.text('Connected'), findsOneWidget);
+
+    // The device closes a rep. Its trace is requested and the fake link answers
+    // nothing, so the request times out and the summary is archived without one —
+    // the documented behaviour for a trace the device no longer holds, not a
+    // failure.
+    link.notify(CalypsoGatt.summary, summaryMessage(u(0)));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Rep ${uuidShort(u(0))}'), findsOneWidget,
+        reason: 'the list is the log, so it shows what the log just gained');
+    expect(archive.contains(u(0)), isTrue, reason: 'and the log has it');
+
+    // The device re-streams summaries on every connection, and a rep can be
+    // summarised twice around a reconnect: the log is written once either way.
+    link.notify(CalypsoGatt.summary, summaryMessage(u(0)));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Rep ${uuidShort(u(0))}'), findsOneWidget,
+        reason: 'one row, one record');
+    expect(archive.reps, hasLength(1));
   });
 }
 

@@ -17,7 +17,14 @@ class MemoryArchive implements RepArchive {
   }
 
   final List<int> _bytes = [];
+
+  /// Client receipt times, decoration rather than truth — same rule as
+  /// `HistoryStore`, and this class mirrors it so a widget test drives the same
+  /// semantics.
   final Map<String, DateTime> _received = {};
+
+  /// The uuids the records hold, rebuilt from them by [load].
+  final Set<String> _uuids = {};
   List<StoredRep> _reps = [];
   bool _truncated = false;
 
@@ -30,21 +37,27 @@ class MemoryArchive implements RepArchive {
   @override
   int get sizeBytes => _bytes.length;
 
+  /// Whether the records hold this rep, asked of the records rather than of the
+  /// receipt times beside them.
   @override
-  bool contains(String uuid) => _received.containsKey(uuid);
+  bool contains(String uuid) => _uuids.contains(uuid);
 
   @override
   Future<void> load() async {
     final scan = scanBlocks(Uint8List.fromList(_bytes), _received);
     _reps = scan.reps;
     _truncated = scan.truncated;
+    _uuids
+      ..clear()
+      ..addAll([for (final rep in _reps) rep.uuid]);
+    _received.removeWhere((uuid, _) => !_uuids.contains(uuid));
   }
 
   @override
   Future<int> appendNew(Map<String, Uint8List> recordBlocks, {DateTime? receivedAt}) async {
     var added = 0;
     for (final entry in recordBlocks.entries) {
-      if (_received.containsKey(entry.key)) continue;
+      if (_uuids.contains(entry.key)) continue;
       _bytes.addAll(entry.value);
       _received[entry.key] = receivedAt ?? DateTime.now();
       added++;

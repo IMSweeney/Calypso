@@ -94,6 +94,44 @@ void main() {
     expect(store.reps.length, 2);
   });
 
+  test('the log decides what is held, not the receipt times beside it', () async {
+    // The rule this archive is built on: `history.pblog` is the source of truth and
+    // `received.json` is decoration. Losing the side-car costs timestamps — and must
+    // never make a rep the log already holds look new, because appending it again
+    // would put two copies of it in the log.
+    await store.appendNew({u(1): blockAt(1)}, receivedAt: DateTime.utc(2026, 10, 18));
+    expect(store.contains(u(1)), isTrue);
+    expect(store.reps.single.receivedAt, isNotNull);
+
+    await HistoryFiles(dir).receiptTimes.delete();
+
+    final reopened = HistoryStore(HistoryFiles(dir));
+    await reopened.load();
+    expect(reopened.reps, hasLength(1), reason: 'the rep is in the log');
+    expect(reopened.contains(u(1)), isTrue, reason: 'so it is still held');
+    expect(reopened.reps.single.receivedAt, isNull, reason: 'only its time is gone');
+
+    // Which is what makes a re-sync a no-op rather than a duplicate.
+    expect(await reopened.appendNew({u(1): blockAt(1)}), 0);
+    expect(reopened.reps, hasLength(1));
+    expect(File('${dir.path}/history.pblog').lengthSync(),
+        HistoryFiles(dir).records.lengthSync(), reason: 'one file, one copy');
+  });
+
+  test('a receipt time for a rep the log does not hold does not make it exist', () async {
+    // The other direction, and the reason it is worth pruning: the side-car cannot
+    // conjure a rep into the list, and cannot accumulate uuids the log has no record
+    // of either.
+    final times = HistoryFiles(dir).receiptTimes;
+    await times.writeAsString('{"${u(7)}": "2026-10-18T00:00:00.000Z"}');
+
+    await store.load();
+    expect(store.contains(u(7)), isFalse);
+    expect(store.reps, isEmpty);
+    expect(await times.readAsString(), isNot(contains(u(7))),
+        reason: 'pruned on load, and the file follows the log');
+  });
+
   test('the archive survives a reload and keeps growing', () async {
     await store.appendNew({u(1): blockAt(1)});
 
