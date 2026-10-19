@@ -15,6 +15,8 @@ import 'dart:typed_data';
 
 import 'package:universal_ble/universal_ble.dart' as plugin;
 
+import '../logging/loggers.dart';
+
 /// The BLE operations this app needs. Deliberately small: if we ever need more,
 /// it should be because the protocol needs it.
 abstract class BleLink {
@@ -77,7 +79,24 @@ class DiscoveredService {
 }
 
 /// The real implementation, forwarding to `universal_ble`.
+///
+/// It also logs what the plugin reports, at the lowest level the app can see it:
+/// every value the radio delivered, every scan result, every connection change. That
+/// is deliberately *below* [BleTransport]'s per-characteristic streams, because
+/// those filter by UUID — so "the device never sent anything" and "the plugin
+/// received it and dropped it" are indistinguishable from inside the transport, and
+/// telling those two apart is the whole point of the log.
 class UniversalBleLink implements BleLink {
+  UniversalBleLink() {
+    // `raw` rather than `rx`: these are the values the plugin received, before the
+    // transport's per-characteristic streams had a look at them. The device is not
+    // named — this app talks to one at a time (`CONNECTIONS_MAX` is 1 at the other
+    // end too), and the scan and connected lines say which it is.
+    plugin.UniversalBle.onValueChange = (deviceId, characteristicId, value, timestamp) {
+      bleLog.fine(describeMessage('raw', characteristicId, value));
+    };
+  }
+
   @override
   Future<bool> isAvailable() async {
     final state = await plugin.UniversalBle.getBluetoothAvailabilityState();
@@ -98,7 +117,12 @@ class UniversalBleLink implements BleLink {
 
   @override
   void onScanResult(void Function(String deviceId, String? name) callback) {
-    plugin.UniversalBle.onScanResult = (device) => callback(device.deviceId, device.name);
+    plugin.UniversalBle.onScanResult = (device) {
+      // The first question when nothing arrives is whether the app saw the device
+      // at all; this is the answer, and it is above `connect` in the file.
+      bleLog.fine('raw scan ${device.deviceId} (${device.name ?? 'no name'})');
+      callback(device.deviceId, device.name);
+    };
   }
 
   @override
@@ -123,8 +147,15 @@ class UniversalBleLink implements BleLink {
   @override
   void onConnectionChange(
       void Function(String deviceId, bool connected, String? error) callback) {
-    plugin.UniversalBle.onConnectionChange =
-        (deviceId, isConnected, error) => callback(deviceId, isConnected, error);
+    plugin.UniversalBle.onConnectionChange = (deviceId, isConnected, error) {
+      // The plugin's view, next to the transport's own: when the two disagree is
+      // exactly when this is worth having.
+      bleLog.fine(
+        'raw connection $deviceId connected=$isConnected'
+        '${error == null ? '' : ' error=$error'}',
+      );
+      callback(deviceId, isConnected, error);
+    };
   }
 
   @override

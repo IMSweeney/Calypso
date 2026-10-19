@@ -7,9 +7,9 @@
 //! table is platform-independent.
 
 use calypso_core::ble::{
-    build_gatt_table, BleVec, BuildError, GattTable, GATT_TABLE_MAX, SYNC_CHUNK_UUID,
-    SYNC_REQUEST_UUID, SYNC_SERVICE_UUID, SYNC_SUMMARY_UUID, GRAVITY_SERVICE_UUID,
-    GRAVITY_X_UUID, SYNC_MSG_MAX, SYNC_REQUEST_MAX,
+    build_gatt_table, BleVec, BuildError, GattTable, NOTIFIABLE_CHARACTERISTICS, GATT_TABLE_MAX,
+    SYNC_CHUNK_UUID, SYNC_REQUEST_UUID, SYNC_SERVICE_UUID, SYNC_SUMMARY_UUID,
+    GRAVITY_SERVICE_UUID, GRAVITY_X_UUID, SYNC_MSG_MAX, SYNC_REQUEST_MAX,
 };
 
 /// The text a client sees for a GATT UUID: the stored bytes, reversed.
@@ -224,8 +224,33 @@ fn rejects_invalid_names() {
 
 #[test]
 fn table_size_const_matches() {
-    // Guard against the firmware and tests disagreeing on the table size.
+    // Guard against the firmware and tests disagreeing on the table size — and on
+    // the number of CCCD slots, which is the same kind of silently-wrong number (see
+    // `NOTIFIABLE_CHARACTERISTICS`).
     let gatt = gatt_table!("Calypso");
-    let _server: AttributeServer<'_, NoopRawMutex, DefaultPacketPool, GATT_TABLE_MAX, 1, 1> =
-        AttributeServer::new(gatt.table);
+    let _server: AttributeServer<
+        '_,
+        NoopRawMutex,
+        DefaultPacketPool,
+        GATT_TABLE_MAX,
+        NOTIFIABLE_CHARACTERISTICS,
+        1,
+    > = AttributeServer::new(gatt.table);
+}
+
+#[test]
+fn the_server_has_a_cccd_slot_for_every_subscribable_characteristic() {
+    // The firmware passes `NOTIFIABLE_CHARACTERISTICS` as `AttributeServer`'s
+    // `CCCD_MAX`. A client's subscription to a CCCD the server has no slot for is
+    // dropped *in silence*: `should_notify` is false for that handle, so `notify`
+    // returns `Ok` without sending and the device reports a delivery that never
+    // happened. Getting this number wrong is how the sync service spent a while
+    // being unsubscribable while gravity worked.
+    let gatt = gatt_table!("Calypso");
+
+    assert_eq!(gatt.cccd_count, NOTIFIABLE_CHARACTERISTICS);
+    // ...and the ones it counts are the ones clients actually subscribe to.
+    assert!(gatt.gravity_x.cccd_handle.is_some());
+    assert!(gatt.summary.cccd_handle.is_some());
+    assert!(gatt.trace_chunk.cccd_handle.is_some());
 }

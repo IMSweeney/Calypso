@@ -11,6 +11,7 @@ import 'dart:io';
 
 import 'package:logging/logging.dart';
 
+import 'loggers.dart';
 import 'rotating_file_appender.dart';
 
 /// Starts writing everything the app logs to a rotating file, and returns the
@@ -33,5 +34,13 @@ RotatingFileAppender startFileLogging(
 
   final appender = RotatingFileAppender(directory, maxBytes: maxBytes, keep: keep)
     ..attachToLogger(Logger.root);
+
+  // One record through the whole pipeline before anything else can go wrong, so an
+  // empty log is never ambiguous again. This exists because it was: a file created,
+  // opened, and never written to read identically to a device that never said
+  // anything — and that is exactly the question the file was being read to answer.
+  // If this line is all there is, logging works and nothing else happened; if the
+  // file is empty, logging is what is broken.
+  appLog.info('file logging started ($maxBytes bytes per file, $keep kept)');
   return appender;
 }

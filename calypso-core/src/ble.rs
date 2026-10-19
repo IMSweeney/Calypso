@@ -20,6 +20,28 @@ use crate::DEVICE_NAME_MAX;
 ///   plus 2 spare.
 pub const GATT_TABLE_MAX: usize = 23;
 
+/// How many characteristics in this table a client can subscribe to: every one
+/// built with `Notify` or `Indicate`, i.e. every one with a CCCD.
+///
+/// **This is `AttributeServer`'s `CCCD_MAX`, and getting it wrong is silent.** The
+/// server keeps a per-client CCCD table of exactly this many entries, and its
+/// `add_handle` drops every CCCD that does not fit without a word. A handle that is
+/// not in the table means `should_notify` is false for it — and
+/// `Characteristic::notify` then returns `Ok(())` *without sending anything*, so
+/// the device reports success while the client sees nothing at all.
+///
+/// It was 1 for a while, and that one slot went to the first CCCD in the table:
+/// the gravity characteristic's. Subscribing to gravity worked, which is what made
+/// it look like notifications were fine; subscribing to the sync service's two was
+/// accepted by the ATT layer, forgotten by the server, and answered with a cheerful
+/// `calibration status delivered to the app` once a second. Two clients — the app
+/// and an off-the-shelf one — reported the same silence.
+///
+/// [`build_gatt_table`] counts the CCCDs it actually created (see
+/// [`GattTable::cccd_count`]) and a host test asserts the two agree, so this cannot
+/// drift from the table again.
+pub const NOTIFIABLE_CHARACTERISTICS: usize = 3;
+
 /// Byte payload type for the sync characteristics. `heapless::Vec` is what
 /// `trouble-host` implements `AsGatt`/`FromGatt` for, so values can be any
 /// length up to `N` (unlike a fixed-size array, which would pad).
@@ -171,6 +193,9 @@ pub fn build_advertising(name: &str) -> Advertising {
 /// application cares about.
 pub struct GattTable<'d, M: RawMutex> {
     pub table: AttributeTable<'d, M, GATT_TABLE_MAX>,
+    /// How many characteristics here can be subscribed to — what the server's
+    /// `CCCD_MAX` has to be. See [`NOTIFIABLE_CHARACTERISTICS`].
+    pub cccd_count: usize,
     /// Device Name (0x2A00), read + write.
     pub device_name: Characteristic<HeaplessString<DEVICE_NAME_MAX>>,
     /// X-axis gravity (m/s^2), read + notify.
@@ -265,8 +290,23 @@ pub fn build_gatt_table<'d, M: RawMutex>(
         .build();
     sync.build();
 
+    // Counted from the characteristics that were actually built rather than from the
+    // number of `Notify` props written above, so the two cannot drift: this is the
+    // number of CCCD slots a client needs, and a slot too few is silent (see
+    // [`NOTIFIABLE_CHARACTERISTICS`]).
+    let cccd_count = [
+        gravity_x.cccd_handle,
+        summary.cccd_handle,
+        trace_request.cccd_handle,
+        trace_chunk.cccd_handle,
+    ]
+    .iter()
+    .filter(|handle| handle.is_some())
+    .count();
+
     Ok(GattTable {
         table,
+        cccd_count,
         device_name,
         gravity_x,
         summary,

@@ -214,6 +214,19 @@ fn calibration_status_carries_every_sensor() {
         }
         other => panic!("expected a calibration status, got {other:?}"),
     }
+
+    // The state the hardware is actually in, and the one the app has to render as
+    // "recording": accel and gyro full, the aggregate at 0 for ever (it counts the
+    // magnetometer, which IMU mode does not calibrate). `sys` still travels, for a
+    // console that says which sensor is behind — it just is not the gate.
+    let n = encode_calibration_message(&Calibration::new(0, 3, 3, 0), &mut buf).unwrap();
+    match pb::decode_sync(&buf[..n]).unwrap().body {
+        Some(msg::SyncMessage_::Body::Calibration(c)) => {
+            assert!(c.ready, "accel and gyro are what readiness is");
+            assert_eq!(c.sys, 0, "reported, and zero");
+        }
+        other => panic!("expected a calibration status, got {other:?}"),
+    }
 }
 
 #[test]

@@ -12,7 +12,20 @@ where 3 means fully calibrated.
 | `accel` | The chip held in a few different, **still** orientations. |
 | `gyro` | The chip **perfectly still** for a few seconds. |
 | `mag` | Figure-of-eight motion — **not used here**. |
-| `sys` | The aggregate the fusion uses; follows the others. |
+| `sys` | The aggregate — **counts the magnetometer, so in IMU mode it sits at 0 for ever** and is not part of the rule below. |
+
+## The rule
+
+`Calibration::is_ready()` is `accel == 3 && gyro == 3` (`calypso-core::calibration`),
+and that is the gate reps are held behind. Neither the magnetometer nor `sys` is part
+of it, and on this device neither can ever reach 3 — a gate that included `sys` was a
+device that never recorded a rep, with a hint on the phone that never cleared.
+
+The same gate decides when the profile is saved, which is how `sys` came to look like
+a persistence bug: with the gate never opening, the accelerometer's offsets were never
+written, so a reboot lost them. The gyroscope returns at 3 by itself, because the chip
+re-derives that from stillness alone — so the two sensors disagreed across a reboot
+while the save itself was fine.
 
 ## The calibration profile
 

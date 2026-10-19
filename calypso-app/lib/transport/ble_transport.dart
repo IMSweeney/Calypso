@@ -12,8 +12,8 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show debugPrint;
-import 'package:logging/logging.dart';
 
+import '../logging/loggers.dart';
 import '../model/calibration.dart';
 import '../model/rep.dart';
 import '../model/uuid.dart';
@@ -40,13 +40,6 @@ class CalypsoGatt {
 
 /// Which way a logged message went: the first word of its log line.
 enum _Direction { rx, tx }
-
-/// Every message this transport sends and receives is reported under the `ble`
-/// logger, so a session can be read back afterwards: a console scrolls away, and
-/// the question that raises ("did the device send anything at all?") gets asked on
-/// a phone with nothing attached. Nothing is attached unless the app started a
-/// `RotatingFileAppender` — see `lib/logging/setup.dart`.
-final Logger _log = Logger('ble');
 
 class BleTransport implements RepTransport {
   BleTransport(
@@ -103,11 +96,17 @@ class BleTransport implements RepTransport {
     await _teardownConnection();
 
     if (!await _link.isAvailable()) {
+      bleLog.warning('bluetooth unavailable: off, not permitted, or not present');
       status.set(BleStatus.unsupported,
           error: 'Bluetooth is off, not permitted, or not available');
       return;
     }
 
+    // **The session, one line at a time, so an empty log means something.** The
+    // messages below are the reason this log exists, but "nothing arrived" has three
+    // shapes — never connected, connected but not subscribed, subscribed but never
+    // sent — and without these lines a file full of nothing cannot tell them apart.
+    bleLog.info('scanning for ${CalypsoGatt.service}');
     status.set(BleStatus.scanning);
     final found = Completer<String>();
     _link.onScanResult((deviceId, name) {
@@ -120,12 +119,14 @@ class BleTransport implements RepTransport {
       deviceId = await found.future.timeout(scanTimeout);
     } on TimeoutException {
       await _link.stopScan();
+      bleLog.warning('no Calypso device found within ${scanTimeout.inSeconds}s');
       status.set(BleStatus.failed, error: 'No Calypso device found');
       return;
     } finally {
       await _link.stopScan();
     }
 
+    bleLog.info('connecting to $deviceId');
     status.set(BleStatus.connecting, deviceId: deviceId);
     try {
       await _link.connect(deviceId);
@@ -186,7 +187,11 @@ class BleTransport implements RepTransport {
         'calypso: notifications enabled for ${CalypsoGatt.summary} and '
         '${CalypsoGatt.traceChunk}',
       );
+      bleLog.info(
+        'subscribed to ${CalypsoGatt.summary} and ${CalypsoGatt.traceChunk}',
+      );
     } catch (e) {
+      bleLog.warning('could not connect to $deviceId: $e');
       status.set(BleStatus.failed, deviceId: deviceId, error: '$e');
       return;
     }
@@ -206,11 +211,13 @@ class BleTransport implements RepTransport {
           .valueStream(deviceId, CalypsoGatt.traceChunk)
           .listen((bytes) => _onMessage(bytes, CalypsoGatt.traceChunk));
     } catch (e) {
+      bleLog.warning('could not listen to $deviceId: $e');
       status.set(BleStatus.failed, deviceId: deviceId, error: '$e');
       await _teardownConnection();
       return;
     }
 
+    bleLog.info('connected to $deviceId');
     status.set(BleStatus.connected, deviceId: deviceId);
   }
 
@@ -275,6 +282,7 @@ class BleTransport implements RepTransport {
   }
 
   void _onConnectionLost(String? error) {
+    bleLog.info('connection lost${error == null ? '' : ': $error'}');
     _deviceId = null;
     calibration.clear();
     status.set(BleStatus.disconnected, error: error);
@@ -434,10 +442,7 @@ class BleTransport implements RepTransport {
   /// The vocabulary is the transport's, not the logger's: the pipeline knows about
   /// timestamps and levels, this knows a GATT characteristic when it sees one.
   void _logMessage(_Direction direction, String characteristic, List<int> bytes) {
-    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0'));
-    // Joined rather than interpolated so an empty payload ends at its `0B`
-    // rather than trailing a space.
-    _log.fine([direction.name, characteristic, '${bytes.length}B', ...hex].join(' '));
+    bleLog.fine(describeMessage(direction.name, characteristic, bytes));
   }
 
   void _onChunk(pb.TraceChunk chunk) {

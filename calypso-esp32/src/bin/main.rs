@@ -88,10 +88,6 @@ static CALIBRATION_BITS: AtomicU32 = AtomicU32::new(0);
 /// not repeat on every poll.
 static CALIBRATION_SAVED: AtomicBool = AtomicBool::new(false);
 
-/// Whether a calibration status has ever made it to a subscriber. Set once, so the
-/// first delivery is logged and the rest (one a second) are not.
-static CALIBRATION_DELIVERED: AtomicBool = AtomicBool::new(false);
-
 /// Ring-buffer window: how much history the detector can be asked for, plus
 /// headroom.
 ///
@@ -384,11 +380,21 @@ async fn main(spawner: Spawner) -> ! {
     let sync_batch: &'static mut AllocVec<msg::RepSummary> =
         Box::leak(Box::new(AllocVec::with_capacity(SUMMARY_BATCH)));
     info!("Sync buffers ready, heap free {} B", esp_alloc::HEAP.free());
+    // **That is the number of CCCD slots, and it was hard-coded to 1 here.** The
+    // server keeps one CCCD table per client with exactly this many entries and
+    // drops any CCCD that does not fit without a word, so the single slot went to
+    // the first CCCD in the table — gravity's. Subscribing to the sync service was
+    // then accepted by the ATT layer, forgotten by the server, and "notified" into
+    // the void: `should_notify` false means `Characteristic::notify` returns `Ok`
+    // without sending anything, which is why the device could log `calibration
+    // status delivered to the app` once a second while the app — and an off-the-shelf
+    // client — saw nothing at all. See `calypso_core::ble` for the count and the host
+    // test that keeps it equal to the table.
     let server = AttributeServer::<
         NoopRawMutex,
         DefaultPacketPool,
         { calypso_core::ble::GATT_TABLE_MAX },
-        1,
+        { calypso_core::ble::NOTIFIABLE_CHARACTERISTICS },
         CONNECTIONS_MAX,
     >::new(gatt.table);
 
@@ -451,11 +457,12 @@ async fn main(spawner: Spawner) -> ! {
                 };
                 info!("BLE connection established (stack {} B)", stack_used());
 
-                // Sync state: how many summaries this subscriber has been
-                // sent. Notifications fail while nobody is subscribed, so the
-                // cursor only advances on a successful send and the next tick
-                // retries — no CCCD bookkeeping needed.
+                // Sync state: how many summaries this subscriber has been sent.
+                // The cursor advances one per send, and a send to nobody reports
+                // success — so the caller has to know whether anybody is listening
+                // (see `is_subscribed`).
                 let mut cursor = SummaryCursor::new();
+                let mut summary_subscribed = false;
 
                 loop {
                     // Service GATT events; once a second, push the latest
@@ -463,27 +470,46 @@ async fn main(spawner: Spawner) -> ! {
                     let event = match select(conn.next(), Timer::after(Duration::from_secs(1))).await {
                         Either::First(event) => event,
                         Either::Second(()) => {
+                            // Who is listening, asked of the server rather than
+                            // inferred from a notify result, because a notify result
+                            // says nothing (see `is_subscribed`). Once a tick is
+                            // often enough to say when it changes.
+                            let subscribed = is_subscribed(&server, &conn, summary_char.cccd_handle);
+                            if subscribed != summary_subscribed {
+                                summary_subscribed = subscribed;
+                                if subscribed {
+                                    info!("app subscribed to summary notifications (calibration, reps)");
+                                } else {
+                                    info!("app unsubscribed from summary notifications");
+                                }
+                            }
                             // Calibration first: it is what tells the app whether
                             // to expect reps at all, so it should not queue behind
                             // a burst of summaries.
                             notify_calibration(&summary_char, &conn).await;
                             let value = f32::from_bits(GRAVITY_X_BITS.load(Ordering::Relaxed));
-                            // A failed notify means no subscriber yet; still fine
-                            // to keep the connection (and try again next tick).
-                            let _ = gravity_x_char.notify(&conn, &value).await;
-                            // Auto-sync: push any summaries the app hasn't
-                            // seen. A failed notify means nobody is
-                            // subscribed, so we stop and retry next tick.
-                            stream_new_summaries(
-                                store,
-                                sync_rec_buf,
-                                sync_rec_msg,
-                                sync_batch,
-                                &summary_char,
-                                &conn,
-                                &mut cursor,
-                            )
-                            .await;
+                            // Not `let _ =` for the error alone: gravity is what a
+                            // client can watch to see the link is alive.
+                            if gravity_x_char.notify(&conn, &value).await.is_err() {
+                                warn!("gravity notify failed");
+                            }
+                            // Auto-sync, but only while somebody is listening: the
+                            // cursor advances on every send, and a send to nobody is
+                            // a "success", so streaming with no subscriber would
+                            // walk the whole log into the void and the app would
+                            // never see it on that connection.
+                            if subscribed {
+                                stream_new_summaries(
+                                    store,
+                                    sync_rec_buf,
+                                    sync_rec_msg,
+                                    sync_batch,
+                                    &summary_char,
+                                    &conn,
+                                    &mut cursor,
+                                )
+                                .await;
+                            }
                             continue;
                         }
                     };
@@ -508,16 +534,22 @@ async fn main(spawner: Spawner) -> ! {
                                 {
                                     let wanted = calypso_core::pb::uuid_from_field(&request.rep_uuid);
                                     info!("trace request: rep {}", UuidShort(wanted.as_ref()));
-                                    stream_trace(
-                                        store,
-                                        sync_rec_buf,
-                                        sync_rec_msg,
-                                        &mut *sync_trace_storage,
-                                        &trace_chunk_char,
-                                        &conn,
-                                        request,
-                                    )
-                                    .await;
+                                    if is_subscribed(&server, &conn, trace_chunk_char.cccd_handle) {
+                                        stream_trace(
+                                            store,
+                                            sync_rec_buf,
+                                            sync_rec_msg,
+                                            &mut *sync_trace_storage,
+                                            &trace_chunk_char,
+                                            &conn,
+                                            request,
+                                        )
+                                        .await;
+                                    } else {
+                                        // Every chunk of `stream_trace` would report
+                                        // success and send nothing.
+                                        warn!("trace request ignored: chunk notifications are not subscribed");
+                                    }
                                 }
                             }
                             if wrote_name {
@@ -553,8 +585,12 @@ async fn main(spawner: Spawner) -> ! {
             let mut detector = Detector::new();
             let mut reps: u32 = 0;
             let mut n: u32 = 0;
-            // The IMU's calibration levels, refreshed once a second.
+            // The IMU's calibration levels, refreshed once a second — and logged
+            // only when they change, so "paused until the IMU is calibrated" is
+            // printed when it becomes true rather than 3,600 times an hour.
             let mut calibration = Calibration::default();
+            let mut logged_calibration: Option<Calibration> = None;
+            let mut logged_level: Option<bool> = None;
             // For the profile read-back, which the bno055 crate needs a delay for
             // (it briefly switches the chip to CONFIG mode).
             let mut delay = Delay;
@@ -675,37 +711,62 @@ async fn main(spawner: Spawner) -> ! {
                     let x = g.x as f32 / 100.0;
                     GRAVITY_X_BITS.store(x.to_bits(), Ordering::Relaxed);
                 }
-                // Level-sense log at 1 Hz, matching the old loop.
+                // Still *read* at 1 Hz, but logged only when something changes, or
+                // once a minute. Two lines a second used to say the same thing
+                // forever: the calibration levels and the level verdict only move
+                // when the sensor does, and the ring and heap figures are there to
+                // spot a leak, not to be watched. The minute keeps the boot-log
+                // figures this device is debugged from (see docs/GOTCHAS.md).
                 if n.is_multiple_of(SAMPLE_RATE_HZ) {
-                    get_level_sense(&mut bno055);
-                    let (len, pushed) = {
-                        let r = samples.borrow();
-                        (r.len(), r.pushed())
-                    };
-                    if calibration.is_ready() {
-                        info!(
-                            "sampler: {} Hz, ring {}/{} samples, {} pushed, {} reps, imu {} (recording), stack {} B, heap free {} B",
-                            SAMPLE_RATE_HZ,
-                            len,
-                            SAMPLE_RING_LEN,
-                            pushed,
-                            reps,
-                            CalibrationLog(calibration),
-                            stack_used(),
-                            esp_alloc::HEAP.free()
-                        );
-                    } else {
-                        // Warn, not info: nothing is being recorded, and the
-                        // levels say which sensor to work on.
-                        warn!(
-                            "sampler: {} Hz, ring {}/{} samples, {} pushed, imu {} — rep recording paused until the IMU is calibrated (stack {} B)",
-                            SAMPLE_RATE_HZ,
-                            len,
-                            SAMPLE_RING_LEN,
-                            pushed,
-                            CalibrationLog(calibration),
-                            stack_used()
-                        );
+                    let level = level_sense(&mut bno055);
+                    // Compared on the verdict, not the reading: X-grav moves by a
+                    // hundredth a second, and the question is only whether it is
+                    // level.
+                    let verdict = level.map(|(_, is_level)| is_level);
+                    if verdict != logged_level {
+                        logged_level = verdict;
+                        match level {
+                            Some((x, true)) => {
+                                info!("Sensor is level on the X axis (X-grav={=f32})", x)
+                            }
+                            Some((x, false)) => warn!("Sensor is not level, X-grav={=f32}", x),
+                            None => warn!("BNO055 gravity read error"),
+                        }
+                    }
+
+                    if n.is_multiple_of(SAMPLE_RATE_HZ * 60)
+                        || logged_calibration != Some(calibration)
+                    {
+                        logged_calibration = Some(calibration);
+                        let (len, pushed) = {
+                            let r = samples.borrow();
+                            (r.len(), r.pushed())
+                        };
+                        if calibration.is_ready() {
+                            info!(
+                                "sampler: {} Hz, ring {}/{} samples, {} pushed, {} reps, imu {} (recording), stack {} B, heap free {} B",
+                                SAMPLE_RATE_HZ,
+                                len,
+                                SAMPLE_RING_LEN,
+                                pushed,
+                                reps,
+                                CalibrationLog(calibration),
+                                stack_used(),
+                                esp_alloc::HEAP.free()
+                            );
+                        } else {
+                            // Warn, not info: nothing is being recorded, and the
+                            // levels say which sensor to work on.
+                            warn!(
+                                "sampler: {} Hz, ring {}/{} samples, {} pushed, imu {} — rep recording paused until the IMU is calibrated (stack {} B)",
+                                SAMPLE_RATE_HZ,
+                                len,
+                                SAMPLE_RING_LEN,
+                                pushed,
+                                CalibrationLog(calibration),
+                                stack_used()
+                            );
+                        }
                     }
                 }
             }
@@ -774,9 +835,14 @@ fn log_partition_table(pt: &partitions::PartitionTable<'_>) {
 }
 
 /// Push any log summaries the subscriber hasn't been sent yet, oldest first.
-/// Stops (without advancing the cursor) as soon as a notification fails,
-/// which is how "nobody is subscribed" shows up — so the next tick picks up
-/// where this one left off.
+///
+/// **Call this only while the peer is subscribed** ([`is_subscribed`]). The cursor
+/// advances on every send and a send to nobody reports success, so calling it with
+/// no subscriber walks the log into the void and the app never sees those reps on
+/// that connection.
+///
+/// Stops without advancing the cursor on a *real* notification failure, so the next
+/// tick picks up where this one left off.
 async fn stream_new_summaries(
     store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
     rec_buf: &mut [u8],
@@ -1163,8 +1229,10 @@ async fn poll_calibration(
         return (calibration, false);
     }
 
-    // Note this is `is_ready`, not `is_fully_calibrated`: the magnetometer is
-    // unused in IMU mode and its level never reaches 3 there.
+    // `is_ready`, not `is_fully_calibrated`: the magnetometer is unused in IMU mode,
+    // its level never reaches 3 there, and the aggregate `sys` counts it — so
+    // readiness is the accelerometer and gyroscope, and the rest would be waiting
+    // for a number that cannot arrive (see `calypso_core::calibration`).
     let Ok(profile) = bno055.calibration_profile(delay) else {
         warn!("could not read the calibration profile back");
         return (calibration, false);
@@ -1180,13 +1248,54 @@ async fn poll_calibration(
     (calibration, saved)
 }
 
+/// The attribute server this firmware runs, spelled once so the helpers can name it.
+type Server<'d> = AttributeServer<
+    'd,
+    NoopRawMutex,
+    DefaultPacketPool,
+    { calypso_core::ble::GATT_TABLE_MAX },
+    { calypso_core::ble::NOTIFIABLE_CHARACTERISTICS },
+    CONNECTIONS_MAX,
+>;
+
+/// Whether the peer has this characteristic's notifications enabled.
+///
+/// **This is the only way to know, and it is why the logs and the summary cursor
+/// are built on it rather than on a notification's result.**
+/// `Characteristic::notify` returns `Ok(())` whether or not anybody is subscribed:
+/// trouble-host checks its per-connection CCCD table (`should_notify`) and returns
+/// early *without sending* when the peer is not in it. So "the notification
+/// succeeded" is not evidence of anything, and code that treated it as evidence got
+/// it wrong twice here — a `calibration status delivered to the app` line printed
+/// once a second to a device that was sending nothing, and a summary cursor that
+/// walked the whole log into the void while nobody was listening.
+fn is_subscribed(
+    server: &Server<'_>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
+    cccd_handle: Option<u16>,
+) -> bool {
+    let Some(cccd_handle) = cccd_handle else {
+        return false;
+    };
+    server
+        .get_cccd_table(conn.raw())
+        .and_then(|table| {
+            table
+                .inner()
+                .iter()
+                .find(|(handle, _)| *handle == cccd_handle)
+                .map(|(_, cccd)| cccd.should_notify())
+        })
+        .unwrap_or(false)
+}
+
 /// Tell the app the IMU's calibration state, on the summary characteristic.
 ///
 /// The same characteristic summaries stream on: `SyncMessage` exists to
 /// multiplex device -> app messages, and the app is already subscribed to this
-/// one (see `proto/calypso.proto`). Best-effort — a failed notification means
-/// nobody is subscribed, which is how the summary stream reads it too, and the
-/// next tick tries again.
+/// one (see `proto/calypso.proto`). Best-effort, and note that a *successful*
+/// notification means nothing — see [`is_subscribed`], which is also where the
+/// "did anybody hear it" line is logged.
 async fn notify_calibration(
     summary_char: &Characteristic<BleVec<SYNC_MSG_MAX>>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
@@ -1200,18 +1309,16 @@ async fn notify_calibration(
     if payload.extend_from_slice(&scratch[..n]).is_err() {
         return;
     }
-    // Not `let _ =`: this is sent once a second and the whole point of it is that a
-    // screen somewhere shows it. "The hint never appeared" and "the hint was never
-    // sent" look identical from the app, so the device says which it was.
-    match summary_char.notify(conn, &payload).await {
-        Ok(()) => {
-            if !CALIBRATION_DELIVERED.swap(true, Ordering::Relaxed) {
-                info!("calibration status delivered to the app ({} bytes)", n);
-            }
-        }
-        // One line a second while nobody is subscribed: noisy, but the alternative
-        // is a UI that quietly shows nothing.
-        Err(_) => warn!("calibration notify failed (no subscriber?)"),
+    // **No success line, and the reason is worth keeping here.** `notify` returns
+    // `Ok(())` even when nobody is subscribed — it checks the peer's CCCD table and
+    // returns early without sending — so its result cannot distinguish "sent" from
+    // "sent nowhere". This function used to log `calibration status delivered to the
+    // app` on success, once a second, and did exactly that for a device whose
+    // summary characteristic could not be subscribed to at all (one CCCD slot, taken
+    // by gravity). Whether anybody is listening is reported where it can be known:
+    // `is_subscribed`, once a tick, in the caller.
+    if summary_char.notify(conn, &payload).await.is_err() {
+        warn!("calibration notify failed");
     }
 }
 
@@ -1272,20 +1379,15 @@ impl defmt::Format for CalibrationLog {
     }
 }
 
-fn get_level_sense(bno055: &mut Bno055<I2c<'_, Blocking>>) -> f32 {
-    match bno055.gravity() {
-        Ok(grav) => {
-            // info!("Gravity vector: x={} y={} z={}", grav.x, grav.y, grav.z);
-            if calypso_core::is_level_along_axis(grav.x) {
-                info!("Sensor is level on the X axis, gravity only on Y/Z");
-            } else {
-                info!("Sensor is not level: X-grav={}", grav.x);
-            }
-            grav.x
-        }
-        Err(_e) => {
-            warn!("BNO055 gravity read error");
-            0.0
-        }
-    }
+/// The IMU's X-axis gravity, and whether that reads as level.
+///
+/// `None` when the read failed, which is *not* the same as "not level": a failed
+/// I2C read is not a measurement, and a bar can be perfectly still with the sensor
+/// unreadable. Logged by the caller, and only when the verdict changes — this used
+/// to print `Sensor is not level` every second and bury everything else.
+fn level_sense(bno055: &mut Bno055<I2c<'_, Blocking>>) -> Option<(f32, bool)> {
+    bno055
+        .gravity()
+        .ok()
+        .map(|grav| (grav.x, calypso_core::is_level_along_axis(grav.x)))
 }

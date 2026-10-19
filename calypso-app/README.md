@@ -28,7 +28,7 @@ The **iOS Simulator has no CoreBluetooth at all**, so BLE only works on a real d
 ## Test
 
 ```sh
-flutter test                 # 85 tests, no device, no simulator
+flutter test                 # 86 tests, no device, no simulator
 flutter analyze              # expected clean
 ```
 
@@ -43,6 +43,36 @@ flutter test --update-goldens   # after an intentional visual change; review the
 
 Goldens are host-dependent (anti-aliasing differs between machines), so a golden
 failure on a different machine is expected rather than alarming.
+
+## Logging
+
+The app's logs go to a rotating file: `calypso.log` under the application support
+directory, 10 MB per file, three kept (`calypso.log.1`, `.2`). On macOS (sandboxed)
+that is `~/Library/Containers/com.calypso.calypso/Data/Library/Application Support/
+com.calypso.calypso/`; the app prints the full path as `calypso: log at …` when it
+starts. It is turned on by `lib/logging/setup.dart` — and a test that never calls
+that writes no file at all (see `docs/GOTCHAS.md`).
+
+BLE is the only writer so far, at two levels, both under the `ble` logger:
+
+- `UniversalBleLink` logs `raw` — every value the radio delivered, *before* the
+  transport's per-characteristic streams filtered it, plus each scan result and
+  connection change;
+- `BleTransport` logs the session (`scanning`, `connecting`, `subscribed`,
+  `connected`, `connection lost`) and each message it handled (`rx`, `tx`).
+
+One line shape for all of them (`describeMessage`, `lib/logging/loggers.dart`):
+
+```
+2026-10-18T20:41:03.482119 INFO    ble subscribed to 0000ca21-… and 0000ca23-…
+2026-10-18T20:41:03.631902 FINE    ble raw 0000ca21-b0cd-11ec-871f-d45ddf138840 6B 22 04 10 03 18 03
+2026-10-18T20:41:03.631955 FINE    ble rx 0000ca21-b0cd-11ec-871f-d45ddf138840 6B 22 04 10 03 18 03
+```
+
+The `raw`/`rx` pair is the point of the split: `raw` without a matching `rx` means
+the plugin dropped the value, and no `raw` at all means the device never sent it.
+The first line of the file is written at startup, so an empty log means logging is
+broken rather than nothing having happened.
 
 ## Codegen
 

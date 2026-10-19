@@ -3,12 +3,14 @@
 //! The BNO055 reports four 0..3 levels in `CALIB_STAT` (0x35): system, gyro,
 //! accelerometer and magnetometer. Three is fully calibrated.
 //!
-//! **Rep tracking needs `sys`, `gyro` and `accel` at 3.** The magnetometer is
-//! deliberately not part of it: the device runs the BNO055 in IMU mode, which
-//! does not use the magnetometer at all (it is unreliable next to a barbell's
-//! steel), and in that mode the magnetometer status never reaches 3 — so waiting
-//! on it would be waiting forever. `is_fully_calibrated` still reports the
-//! magnetometer, because that is what "fully calibrated" means for the chip.
+//! **Rep tracking needs `accel` and `gyro` at 3, and nothing else.** Neither the
+//! magnetometer nor the chip's aggregate `sys` is part of it: the device runs the
+//! BNO055 in IMU mode, which does not use the magnetometer at all (it is unreliable
+//! next to a barbell's steel) and in which the magnetometer status never reaches 3 —
+//! and **`sys` counts the magnetometer**, so `sys` never reaches 3 either. Waiting on
+//! a number that cannot arrive is a device that never records a rep;
+//! `is_fully_calibrated` still reports all four, because that is what "fully
+//! calibrated" means for the chip.
 //!
 //! The distinction matters because an uncalibrated gyro or accelerometer reports
 //! drift as motion: the rep detector would fire on it and the trace it stored
@@ -49,11 +51,27 @@ impl Calibration {
 
     /// Whether the device may record reps with this IMU state.
     ///
-    /// Deliberately stricter than "the numbers look plausible": all three of the
-    /// levels rep tracking depends on, at full. Note this is *not*
-    /// [`Self::is_fully_calibrated`] — the magnetometer is not used in IMU mode.
+    /// The two levels rep tracking depends on, at full: the accelerometer and the
+    /// gyroscope. **Not the magnetometer, and not [`Self::sys`]** — the aggregate
+    /// counts the magnetometer, so in IMU mode it never leaves 0 even with the other
+    /// two fully calibrated. The device's own boot log says it:
+    /// `imu acc:3 gyro:3 mag:0 sys:0 — rep recording paused until the IMU is
+    /// calibrated`, once a second, forever.
+    ///
+    /// Gating on the aggregate cost two things, and the second is why it took a power
+    /// cycle to notice:
+    ///
+    /// - no rep is ever recorded, because the detector is only fed while ready;
+    /// - **the calibration profile is never saved**, because it is saved on the
+    ///   transition to ready. So the accelerometer's offsets were dropped on every
+    ///   reboot — the gyroscope came back at 3 on its own (the chip re-derives that
+    ///   from stillness alone) and the accelerometer came back at 0, which reads as
+    ///   "the save is broken" rather than "the save never ran".
+    ///
+    /// `sys` is still *reported*, like the magnetometer: a serial console that says
+    /// which sensor is behind is the point of the whole routine.
     pub const fn is_ready(&self) -> bool {
-        self.sys == MAX_LEVEL && self.accel == MAX_LEVEL && self.gyro == MAX_LEVEL
+        self.accel == MAX_LEVEL && self.gyro == MAX_LEVEL
     }
 
     /// Pack into four bytes for a shared atomic / lock-free hand-off between
@@ -78,9 +96,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ready_needs_sys_accel_and_gyro() {
+    fn ready_needs_accel_and_gyro() {
+        // `(sys, accel, gyro, mag)`. The first case is the state this hardware actually
+        // reaches and could never leave: accel and gyro full, the aggregate at 0 because
+        // it counts the magnetometer, which IMU mode never calibrates. Gating on `sys`
+        // meant the device never recorded a rep *and* never saved its profile.
+        assert!(Calibration::new(0, 3, 3, 0).is_ready());
         assert!(Calibration::new(3, 3, 3, 0).is_ready());
-        assert!(!Calibration::new(2, 3, 3, 0).is_ready());
         assert!(!Calibration::new(3, 2, 3, 0).is_ready());
         assert!(!Calibration::new(3, 3, 2, 0).is_ready());
     }

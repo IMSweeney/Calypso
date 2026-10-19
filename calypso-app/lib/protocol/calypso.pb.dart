@@ -980,10 +980,15 @@ class SyncMessage extends $pb.GeneratedMessage {
 /// one 0..3 level per sensor, 3 meaning fully calibrated.
 ///
 /// The device has no display, so this is what the app turns into a hint. **Rep
-/// tracking needs `accel`, `gyro` and `sys` at 3**, and the device will not
-/// record a rep until they are — an uncalibrated IMU reports drift as motion, so
-/// a stored trace would be fiction. In the meantime BLE stays up: the app can
-/// connect, watch the levels climb and tell the user what to do.
+/// tracking needs `accel` and `gyro` at 3**, and the device will not record a rep
+/// until they are — an uncalibrated IMU reports drift as motion, so a stored trace
+/// would be fiction. In the meantime BLE stays up: the app can connect, watch the
+/// levels climb and tell the user what to do.
+///
+/// `sys` is reported for a console, and is **not** part of readiness: it is the
+/// chip's aggregate, it counts the magnetometer, and in IMU mode it sits at 0 for
+/// ever however well the other two are calibrated. Gating on it is a device that
+/// never records a rep (see `calypso_core::calibration`).
 ///
 /// `mag` is reported for completeness only. The BNO055 runs in IMU mode (no
 /// magnetometer, which is unreliable next to a barbell), where the magnetometer

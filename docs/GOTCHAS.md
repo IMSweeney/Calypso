@@ -78,7 +78,9 @@ The probes, in boot order:
 - `Radio up, heap free N B`, then the setup lines, then `Stack in use before the
   tasks: N B` — `main`'s frame, measured just before `join3` starts.
 - `BLE connection established (stack N B)` — depth inside the GATT task.
-- the 1 Hz sampler line, which carries `stack N B` beside the heap figure.
+- the sampler line, which carries `stack N B` beside the heap figure. It prints
+  when the IMU's state changes, and otherwise once a minute: the 1 Hz version said
+  the same six numbers 3,600 times an hour and buried everything else.
 
 ### A log that just stops is usually the heap
 
@@ -104,6 +106,29 @@ The figures to watch, and what they mean:
 The 30 s sample ring was 36 KB more than the device needs (the detector never
 asks for more than 9 s) and is now 12 s; Wi-Fi was removed and gave back most of
 the radio's 54 KB. Do not grow either without reading these numbers.
+
+## The IMU
+
+### `sys` never reaches 3 in IMU mode, and nothing should wait for it
+
+**Symptom.** The boot log says `imu acc:3 gyro:3 mag:0 sys:0 — rep recording paused
+until the IMU is calibrated`, for ever: no rep is ever recorded, and the app's hint
+never clears.
+
+**Cause.** `CALIB_STAT`'s `sys` bits are the chip's aggregate and **count the
+magnetometer**, which this build disables (IMU mode, no mag — steel barbell). So `sys`
+stays at 0 however well the accelerometer and gyroscope are calibrated, and readiness
+required it at 3.
+
+**Fix.** `is_ready()` is `accel == 3 && gyro == 3`. `sys` and `mag` are still reported,
+for a console that says which sensor is behind.
+
+**It cost a power cycle to see the rest of it.** The calibration profile is saved on the
+transition to `is_ready()`, so a gate that never opened also meant the accelerometer's
+offsets were never written to NVS: after a reboot, `gyro` came back at 3 (the chip
+re-derives that from stillness) and `accel` at 0 — which reads as "the save is broken"
+rather than "the save never ran". When a save looks broken, first check that whatever
+triggers it can actually happen.
 
 ## The radio
 
@@ -185,6 +210,48 @@ byte orders, at boot (`sync service uuid … (wire), … (as a client sees it)`)
 the app reports the tree it discovered — `device offers …, not …`. Two rounds of
 guessing from `characteristicNotFound` messages, which name a correct UUID, said
 nothing about the device.
+
+When *nothing arrives at all*, the app writes the session to `calypso.log` (in its
+container, path printed at startup), and the shape of that file narrows it down:
+
+| The file holds | It means |
+|---|---|
+| nothing at all | Logging is broken, not the link — the first line is written by the appender at startup. |
+| `scanning`, then nothing | The scan never found the device, or the connect failed; both log their reason. |
+| `subscribed`, but no `raw` | The device accepted the subscription and never sent — the CCCD trap below. |
+| `raw` but no `rx` | The plugin received the value and the transport's per-characteristic filter dropped it: `raw` is logged *below* that filter. |
+| `rx`, and the UI still says nothing | The bytes arrived and the app misread them. |
+
+`subscribed` is the app's side of the handshake. The device's side is a CCCD write,
+and the firmware reports it as `app subscribed to summary notifications` — which is
+evidence, unlike a notification's result (see below).
+
+### Notifications need a CCCD slot per characteristic
+
+**Symptom.** A client subscribes, the write is accepted, the device logs that the
+notification was delivered — and nothing ever arrives. Both our app and an
+off-the-shelf scanner saw the silence, while the *gravity* characteristic notified
+happily.
+
+**Cause.** `AttributeServer`'s `CCCD_MAX` is how many characteristics a client can
+subscribe to, and the firmware passed `1`. The server keeps one CCCD table per client
+with exactly that many entries, fills it with the first CCCDs it finds in the
+attribute table, and **drops the rest without a word**: `set_notify` matches no
+handle and does nothing, `should_notify` is then false, and
+`Characteristic::notify` returns `Ok(())` *without sending anything*. The one slot
+went to gravity, added before the sync service — so `0xca11` worked and `0xca21` /
+`0xca23` (calibration, summaries, traces) were dead. Every host test passed: they
+check the table and the encoders, not that a subscription survives.
+
+**Fix.** `calypso_core::ble::NOTIFIABLE_CHARACTERISTICS`, passed as the server's
+`CCCD_MAX`, with a host test asserting the constant equals the number of CCCDs
+`build_gatt_table` actually created.
+
+**Corollary: a notification's result is not evidence.** Because `notify` returns
+`Ok` when nobody is subscribed, `calibration status delivered to the app` printed
+happily once a second to a device that was sending nothing, and the summary cursor
+advanced through the whole log into the void. The firmware now asks the server
+(`is_subscribed` in `main.rs`) and logs the subscription where it can be known.
 
 ### A trace chunk can be too big to notify, silently
 
