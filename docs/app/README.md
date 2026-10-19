@@ -142,6 +142,35 @@ abstract class RepTransport {
 | `BleTransport` | Real device (and the Mac) | `universal_ble` behind a `BleLink` seam, so the protocol logic is testable with a fake and no radio: scan for the service, connect, **discover services**, subscribe `0xca21` and `0xca23`, write `0xca22`, reassemble chunks by index, complete exactly on `totalChunks` (idle timeout as a fallback for older firmware), and surface connection state. Discovery is not optional: on iOS and macOS the plugin resolves a characteristic against the peripheral's discovered service list, which CoreBluetooth leaves empty until `discoverServices` runs — and it reports that as `characteristicNotFound`, naming a UUID that is perfectly correct. `FakeBleLink` throws in the same order, so the suite catches a regression. |
 | (capture) | Capturing golden data | Not a transport: a capture is a copy of the archive file, which is already `.pblog` — `cp history.pblog fixtures/capture.pblog`. |
 
+### Logging
+
+The pipeline is [`package:logging`](https://pub.dev/packages/logging) — levels,
+named loggers (which is what a "tag" is) and one `Logger.root.onRecord` stream for
+appenders to hang off. The only part it does not ship is the file, and that is
+`lib/logging/rotating_file_appender.dart`: one line per record,
+`<timestamp> <LEVEL> <loggerName> <message>`, rotating at 10 MB and keeping three
+(`calypso.log`, `calypso.log.1`, `calypso.log.2`) under the app support directory,
+path printed at startup as `calypso: log at …`.
+
+It is switched on by `lib/logging/setup.dart`, which is also where the one
+load-bearing line lives: `Logger.root.level = Level.ALL`. Records below the root
+level are dropped *before* any appender sees them, the default is `Level.INFO`, and
+the failure mode is a log file that exists, opens and stays empty — pinned by
+`logging_test`.
+
+Because the pipeline is global, "no log file in a test" is the absence of a call: a
+test that never calls `startFileLogging` attaches nothing and writes nothing, with
+no seam to thread through and no real I/O under the fake clock. Tests that want to
+read the records call `captureLogs()` (`test/support/logging.dart`), which unhooks
+itself at the end — a listener otherwise outlives the test that added it.
+
+**BLE is the only writer so far**: `BleTransport` reports every message it sends
+and receives under the `ble` logger, one line each, because a console scrolls away
+and the questions this is for ("did the device send anything at all, and what were
+the bytes?") get asked on a phone with nothing attached. The appender swallows
+every failure — if it cannot open a file, logging is simply a no-op — because a log
+that can break the connection it is watching is worse than no log.
+
 ## Plot model and 3D view
 
 Input: a rep's `List<TracePoint>` — each with ZUPT-anchored displacement (m),

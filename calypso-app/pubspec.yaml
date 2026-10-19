@@ -22,6 +22,10 @@ dependencies:
   provider: ^6.1.2
   # Where the history file lives (iOS application support directory).
   path_provider: ^2.1.4
+  # The logging pipeline: levels, named loggers (which is what our tags are) and
+  # one `onRecord` stream for appenders to hang off. See lib/logging/. Dart team;
+  # already in the lock as a transitive dependency, so declaring it costs nothing.
+  logging: ^1.3.0
 
 dev_dependencies:
   flutter_test:

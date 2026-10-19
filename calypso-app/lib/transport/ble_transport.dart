@@ -12,6 +12,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:logging/logging.dart';
 
 import '../model/calibration.dart';
 import '../model/rep.dart';
@@ -36,6 +37,16 @@ class CalypsoGatt {
   static const String traceRequest = '0000ca22-b0cd-11ec-871f-d45ddf138840';
   static const String traceChunk = '0000ca23-b0cd-11ec-871f-d45ddf138840';
 }
+
+/// Which way a logged message went: the first word of its log line.
+enum _Direction { rx, tx }
+
+/// Every message this transport sends and receives is reported under the `ble`
+/// logger, so a session can be read back afterwards: a console scrolls away, and
+/// the question that raises ("did the device send anything at all?") gets asked on
+/// a phone with nothing attached. Nothing is attached unless the app started a
+/// `RotatingFileAppender` — see `lib/logging/setup.dart`.
+final Logger _log = Logger('ble');
 
 class BleTransport implements RepTransport {
   BleTransport(
@@ -167,6 +178,14 @@ class BleTransport implements RepTransport {
       }
       await _link.subscribe(deviceId, CalypsoGatt.service, CalypsoGatt.summary);
       await _link.subscribe(deviceId, CalypsoGatt.service, CalypsoGatt.traceChunk);
+      // Instrumentation: subscribing is the half of this link the app initiates. A
+      // hint that never appears has three shapes — never sent, notifications never
+      // enabled, or received and ignored — and the device logs the first, this logs
+      // the second, and `calypso: rx` logs the third.
+      debugPrint(
+        'calypso: notifications enabled for ${CalypsoGatt.summary} and '
+        '${CalypsoGatt.traceChunk}',
+      );
     } catch (e) {
       status.set(BleStatus.failed, deviceId: deviceId, error: '$e');
       return;
@@ -180,8 +199,12 @@ class BleTransport implements RepTransport {
     // Inside a guard too: a stream that cannot be opened is a failed connection,
     // not something to leak into the widget tree as an unhandled error.
     try {
-      _summarySub = _link.valueStream(deviceId, CalypsoGatt.summary).listen(_onMessage);
-      _chunkSub = _link.valueStream(deviceId, CalypsoGatt.traceChunk).listen(_onMessage);
+      _summarySub = _link
+          .valueStream(deviceId, CalypsoGatt.summary)
+          .listen((bytes) => _onMessage(bytes, CalypsoGatt.summary));
+      _chunkSub = _link
+          .valueStream(deviceId, CalypsoGatt.traceChunk)
+          .listen((bytes) => _onMessage(bytes, CalypsoGatt.traceChunk));
     } catch (e) {
       status.set(BleStatus.failed, deviceId: deviceId, error: '$e');
       await _teardownConnection();
@@ -308,12 +331,17 @@ class BleTransport implements RepTransport {
       repUuid: uuidToBytes(uuid) ?? Uint8List(0),
       allChunks: true,
     );
+    final payload = request.writeToBuffer();
+    // Logged before the write, not after: a write that fails is exactly the thing
+    // the log is for, and "requested but never sent" is worth telling apart from
+    // "never requested".
+    _logMessage(_Direction.tx, CalypsoGatt.traceRequest, payload);
     try {
       await _link.write(
         deviceId,
         CalypsoGatt.service,
         CalypsoGatt.traceRequest,
-        request.writeToBuffer(),
+        payload,
       );
     } catch (e) {
       _pending.remove(uuid);
@@ -353,7 +381,14 @@ class BleTransport implements RepTransport {
 
   // ── Notifications ───────────────────────────────────────────────────────
 
-  void _onMessage(Uint8List bytes) {
+  /// [characteristic] is which of the two notification characteristics carried
+  /// it: the streams are merged here, and only the caller knows which is which, so
+  /// the log can say.
+  void _onMessage(Uint8List bytes, String characteristic) {
+    // Logged before the guards below: the point of the file is what the radio
+    // actually delivered, including a straggler from a connection already torn
+    // down.
+    _logMessage(_Direction.rx, characteristic, bytes);
     // Also dropped: a straggling notification from a connection we have already
     // torn down (the subscription cancel above is not awaited).
     if (_closed || _deviceId == null) return;
@@ -392,6 +427,17 @@ class BleTransport implements RepTransport {
       case pb.SyncMessage_Body.notSet:
         break;
     }
+  }
+
+  /// One log line's worth of a BLE message: `<direction> <uuid> <n>B <hex>`.
+  ///
+  /// The vocabulary is the transport's, not the logger's: the pipeline knows about
+  /// timestamps and levels, this knows a GATT characteristic when it sees one.
+  void _logMessage(_Direction direction, String characteristic, List<int> bytes) {
+    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0'));
+    // Joined rather than interpolated so an empty payload ends at its `0B`
+    // rather than trailing a space.
+    _log.fine([direction.name, characteristic, '${bytes.length}B', ...hex].join(' '));
   }
 
   void _onChunk(pb.TraceChunk chunk) {

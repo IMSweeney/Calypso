@@ -17,6 +17,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
+import '../logging/rotating_file_appender.dart';
+import '../logging/setup.dart';
 import '../model/uuid.dart';
 import '../store/archive_sync.dart';
 import '../store/history_store.dart';
@@ -69,6 +71,10 @@ class RepListScreen extends StatefulWidget {
 class _RepListScreenState extends State<RepListScreen> {
   RepArchive? _archive;
   late final BleTransport _ble;
+
+  /// The file appender, when this screen is the one that turned logging on (see
+  /// [initState]).
+  RotatingFileAppender? _logging;
   String? _error;
   bool _loading = true;
   int _synced = 0;
@@ -78,14 +84,29 @@ class _RepListScreenState extends State<RepListScreen> {
   @override
   void initState() {
     super.initState();
-    _ble = widget.ble ?? BleTransport(UniversalBleLink());
+    final injected = widget.ble;
+    if (injected != null) {
+      _ble = injected;
+    } else {
+      // Logging is turned on here rather than in `main` so that it comes with the
+      // transport this screen owns. A test injects its own transport and never
+      // reaches this, which is the whole of "no file logging in tests": nothing is
+      // attached, so nothing is written — no seam to thread through, and no real
+      // I/O under the fake clock (the same reason `_load` takes its archive
+      // injected).
+      _logging = startFileLogging(getApplicationSupportDirectory);
+      _ble = BleTransport(UniversalBleLink());
+    }
     _load();
   }
 
   @override
   void dispose() {
-    // Only tear down a transport we own; an injected one belongs to the test.
-    if (widget.ble == null) _ble.close();
+    // Only tear down what we own; an injected transport belongs to the test.
+    if (widget.ble == null) {
+      _ble.close();
+      _logging?.close();
+    }
     super.dispose();
   }
 
