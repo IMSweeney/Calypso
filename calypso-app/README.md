@@ -1,26 +1,63 @@
 # calypso-app
 
-The client side: syncs reps from the device over BLE, lists rep summaries, and
-plots a single rep in 3D.
+The Calypso client: a Flutter app that syncs reps from the device over BLE,
+lists them, and plots a single rep's bar path in 3D.
 
-**Status: planning.** No code yet.
+Status: **working**, through the BLE transport. The remaining gap is a capture
+from real hardware — every path below can be exercised on the Mac with fixtures.
 
-- [Architecture](../docs/app/README.md) — stack and why, layers, project layout,
-  protocol client, transports, plot model, fixtures, testing, dev loop.
-- [Plan](../docs/app/plan.md) — goal, decisions (including what was rejected),
-  phases, TODO checklist, open questions.
+## Build and run
 
-Decided: **Flutter**, **`flutter_reactive_ble`**, plot drawn by hand with
-`vector_math` + `CustomPainter`, Dart messages generated from
-`proto/calypso.proto`, and the client as the archive of record.
+```sh
+flutter pub get
 
-Planned layout:
+flutter run -d macos                  # fastest loop; CoreBluetooth works on the Mac
+flutter run -d <iphone>               # real device
+```
 
-- `lib/protocol/` — generated message classes + record/chunk decoding
-- `lib/sync/` — summary cursor, trace reassembly, session grouping
-- `lib/transport/` — `RepTransport` implementations: fixture, BLE, recording
-- `lib/plot/` — plot model (pure Dart) + `CustomPainter` renderer
-- `lib/state/`, `lib/ui/` — state controllers and screens
-- `test/` — unit, widget and golden tests
-- `assets/fixtures/` — checked-in `.pblog` logs from the firmware's encoders;
-  regenerate with `cargo run -p calypso-core --example gen_fixtures`
+The app starts on the archive, seeded from a fixture so there is something to
+look at with no hardware attached:
+
+```sh
+flutter run -d macos --dart-define=FIXTURE=dip-left   # any name from assets/fixtures
+flutter run -d macos --dart-define=FIXTURE=           # empty: start with an empty archive
+```
+
+The **iOS Simulator has no CoreBluetooth at all**, so BLE only works on a real device or the Mac. Development against fixtures needs neither.
+
+## Test
+
+```sh
+flutter test                 # 85 tests, no device, no simulator
+flutter analyze              # expected clean
+```
+
+The suite covers the whole data path without hardware: `.pblog` decoding, trace
+reassembly, the sync client, the plot model, the archive's torn-tail recovery,
+the rep list and plot screens (widget tests), and `BleTransport` against a fake
+link. Golden images pin the rendering:
+
+```sh
+flutter test --update-goldens   # after an intentional visual change; review the diff
+```
+
+Goldens are host-dependent (anti-aliasing differs between machines), so a golden
+failure on a different machine is expected rather than alarming.
+
+## Codegen
+
+The Dart message classes are **checked in**, so a fresh checkout builds and tests
+without `protoc`. Regenerate them only when `proto/calypso.proto` changes:
+
+```sh
+./tool/gen_proto.sh          # needs protoc + `dart pub global activate protoc_plugin`
+```
+
+Fixtures are generated from the core crate, not written by hand:
+
+```sh
+cd .. && cargo run -p calypso-core --example gen_fixtures
+```
+
+See [`docs/FIXTURES.md`](../docs/FIXTURES.md) for what each fixture is for, and
+[`docs/APP_SYNC.md`](../docs/APP_SYNC.md) for the sync protocol and the archive.

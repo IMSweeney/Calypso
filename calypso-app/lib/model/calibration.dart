@@ -5,7 +5,7 @@
 /// be still" becomes a sentence on a phone. The raw levels come from the BNO055's
 /// `CALIB_STAT` register (`0..3` per sensor, 3 fully calibrated), and whether reps
 /// are being recorded comes from the device itself — see `proto/calypso.proto` and
-/// `docs/calibration`.
+/// `docs/CALIBRATION.md`.
 ///
 /// The magnetometer is read and shown but **never** acted on: the BNO055 runs in
 /// IMU mode here, which does not use it and where it never calibrates, so a hint

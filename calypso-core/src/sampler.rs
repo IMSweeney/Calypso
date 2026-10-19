@@ -1,8 +1,7 @@
 //! 100 Hz IMU sampling: fixed-point sample format and a RAM ring buffer.
 //!
 //! Platform-independent; the firmware task feeds it from the BNO055 and the
-//! rep detector (Phase 3) consumes windows from it. See
-//! `docs/rep-tracking/README.md` §1–2.
+//! rep detector consumes windows from it. See `docs/REP_TRACKING.md`.
 
 /// Linear-acceleration scale: LSB per m/s² (matches the BNO055's native
 /// fixed-point output, so no conversion is needed on the device).

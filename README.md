@@ -1,75 +1,36 @@
 # Project Calypso
 
-## Tooling
+Calypso records barbell reps on a small ESP32 sensor and syncs them to a phone
+app that plots the bar path in 3D — so a squat that dipped to one side, or a
+lifter who leaned forward, is visible afterwards.
 
-### First time setup
-- `cargo install espup`
-- `espup install`
-- `~/export-esp.sh`
-- `cargo install espflash`
-- probe-rs?
+| Component | What it is |
+|---|---|
+| `calypso-esp32/` | Firmware for the original ESP32 (Xtensa). Samples the IMU at 100 Hz, detects reps, stores them in flash, serves them over BLE. |
+| `calypso-core/` | All the platform-independent logic: sampling, rep detection, trace maths, wire format, flash log, GATT table. No embedded dependencies, so it compiles and is unit-tested on the host. |
+| `calypso-app/` | The Flutter client: syncs reps over BLE, lists them, plots one in 3D. |
+| `proto/` | `calypso.proto` — the single source of truth for the wire format. The firmware generates Rust from it, the app generates Dart. |
+| `dist/` | Deployable firmware images, one folder per chip family, each with a `flash.sh`. Images are build artifacts, not committed. |
 
-## Editor setup
+## Quick start
 
-Open the repo in VS Code: `.vscode/extensions.json` recommends the extensions
-that cover every language here — `rust-analyzer` (Rust), `Dart-Code.dart-code`
-(Dart/Flutter in `calypso-app/`) and `zxh404.vscode-proto3` (`.proto`).
-`.vscode/settings.json` wires up formatting and excludes build output.
+Toolchain, once:
 
-Note: `calypso-esp32` targets Xtensa, so rust-analyzer needs the esp toolchain
-(`source ~/export-esp.sh`) before that crate analyses cleanly; the other crates
-work out of the box.
+```sh
+cargo install espup && espup install   # ESP32 (Xtensa) toolchain; then `source ~/export-esp.sh` per shell
+cargo install espflash                 # flashing + serial monitor
+# Flutter stable is needed for calypso-app (https://docs.flutter.dev/get-started/install)
+```
 
-## Layout
-- `calypso-esp32/` — ESP32 (Xtensa) firmware
-- `calypso-core/` — platform-independent logic, unit-tested on the host
-- `dist/` — deploy scripts and docs; flash images are generated, not committed
-- `calypso-app/` — the iOS client (planning): architecture in
-  `docs/app/README.md`, plan in `docs/app/plan.md`
-- `proto/` — the protobuf wire format (`calypso.proto`), shared with the app;
-  `calypso-core` generates its Rust types from it at build time (no `protoc`
-  install needed — the build vendored one)
+Then, per component (details in each component's README):
 
-### Flashing
-- `cd calypso-esp32 && cargo build`
-- `cargo run`
+```sh
+cd calypso-core && cargo test
+cd calypso-esp32 && cargo run  # builds, flashes and monitors the device
+cd calypso-app && flutter test
+```
 
-Three things bite on this board, all written up in
-`docs/rep-tracking/README.md` (firmware constraints):
+`cargo test` does not work in `calypso-esp32`: the target is `no_std` and Rust's
+test harness needs `std`. Testable logic lives in `calypso-core`, which is where
+the firmware tests run from.
 
-- **Flash writes and erases need the other core parked** — esp-storage refuses
-them while CPU1 runs, and reads keep working, so it looks like broken flash.
-- **`Detected a write to the stack guard value`** is a stack overflow. The boot
-  log's `stack N B` figures say where, but note the radio's own tasks have small
-  heap stacks too, so it is not always the main one.
-- **A log that just stops is usually the heap, not a hang.** The panic handler
-  prints `*** PANIC: ... ***` now, and the three `heap free N B` figures in the
-  boot log say how much room is left.
-
-### Testing
-`cargo test` in `calypso-esp32/` does not work: the firmware target
-(`xtensa-esp32-none-elf`) is `no_std`, and Rust's test harness requires `std`.
-Platform-independent logic lives in the `calypso-core` crate instead, which is
-tested on the host:
-- `cd calypso-core && cargo test`
-
-Client fixtures (`.pblog` log dumps the iOS app is developed against) are
-generated from the same encoders the firmware uses:
-
-- `cargo run -p calypso-core --example gen_fixtures`
-
-For on-device tests, look at [`embedded-test`](https://crates.io/crates/embedded-test).
-
-## TODO
-- [X] Save calibration to memory between power cycles
-- [X] Simple level sensor along one axis
-- [X] Export data over BLE [Example](https://github.com/esp-rs/esp-hal/blob/main/examples/ble/bas_peripheral/src/main.rs)
-- [ ] OTA code updates [Example](https://github.com/esp-rs/esp-hal/blob/main/examples/ota/update/src/main.rs)
-- [ ] Storing path/time data. (how much can we store?)
-- [ ] Detecting reps, calculating rep stats (speed, distance)
-- [ ] Sending a rep's data over BLE
-- [ ] Displaying the rep in 3d
-- [X] Calibration routine: an un-calibrated device still gets BLE, and the app
-      shows a hint naming the sensor that is behind. Each sensor's level is read
-      from the BNO055 (accel/gyro/mag/sys) and reps are only recorded once the
-      ones that matter are good — see `docs/calibration/`

@@ -175,7 +175,7 @@ async fn main(spawner: Spawner) -> ! {
     // radio has allocated anything (sample ring 24 KB, rep window 18 KB, two trace
     // buffers 16 KB each, plus scratch), and the radio's task stacks come from
     // here too. Both regions are statics, so this one is also 64 KB the linker
-    // stack below does not get — see the heap note in docs/rep-tracking before
+    // stack below does not get — see the heap note in docs/GOTCHAS.md before
     // changing the split.
     esp_alloc::heap_allocator!(size: 64 * 1024);
 
@@ -259,7 +259,7 @@ async fn main(spawner: Spawner) -> ! {
     // Apply a stored calibration profile if there is one, but never wait for the
     // IMU to calibrate: this used to block boot, which left an uncalibrated
     // device with no BLE, no app and no way to find out why. It now comes up
-    // fully and says what it is waiting for (see docs/calibration).
+    // fully and says what it is waiting for (see docs/CALIBRATION.md).
     load_calibration(&mut bno055, &mut store);
 
     // Load the persisted BLE device name, falling back to the default.
@@ -276,7 +276,7 @@ async fn main(spawner: Spawner) -> ! {
         calypso_core::ble::reverse16(calypso_core::ble::SYNC_SERVICE_UUID_BYTES)
     );
 
-    // Mount the rep-record flash log (see docs/rep-tracking).
+    // Mount the rep-record flash log (see docs/REP_TRACKING.md).
     match mount_rep_log(&mut store) {
         Ok(sectors) => info!("Rep log mounted: {} sectors", sectors),
         // The reason, not just "unusable": the first question is always whether
@@ -291,7 +291,7 @@ async fn main(spawner: Spawner) -> ! {
     // borrows it. A ring that owned this array would be built as a *value* before
     // `Box::new` could move it to the heap — 60 KB of stack temporary when it was
     // a 30 s window, more than twice this task's whole stack, which is how this
-    // used to crash (see docs/rep-tracking, "firmware constraints").
+    // used to crash (see docs/GOTCHAS.md).
     let mut ring_vec = AllocVec::new();
     ring_vec.resize(SAMPLE_RING_LEN, Sample::ZERO);
     let ring_buf: &'static mut [Sample] = Box::leak(ring_vec.into_boxed_slice());
@@ -606,7 +606,7 @@ async fn main(spawner: Spawner) -> ! {
                 // Only while the IMU is trustworthy. Uncalibrated, the gyro and
                 // accelerometer report drift as motion: the detector would fire on
                 // it and the stored trace would be fiction rather than a
-                // measurement (see docs/calibration). Not feeding the detector at
+                // measurement (see docs/CALIBRATION.md). Not feeding the detector at
                 // all also means it starts from a real rest once calibration
                 // completes.
                 let span = if calibration.is_ready() {
@@ -1060,7 +1060,7 @@ fn save_device_name(store: &mut FlashStore, name: &str) {
 /// that used to block boot in a loop, which meant an uncalibrated device had no
 /// BLE, no app, and nothing to say about why. The device now boots fully and
 /// tells the app what to do; it just does not record reps until the levels are
-/// good (see `docs/calibration`).
+/// good (see `docs/CALIBRATION.md`).
 fn load_calibration(bno055: &mut Bno055<I2c<'_, Blocking>>, store: &mut FlashStore) {
     let Some(profile) = read_calibration(store) else {
         info!("No stored IMU calibration; waiting for the sensor to calibrate");

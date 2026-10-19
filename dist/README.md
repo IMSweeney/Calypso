@@ -17,7 +17,7 @@ From the repo root:
 
 ```
 cd calypso-esp32
-source ~/export-esp.sh    # one-time per shell; see "First time setup" in the top-level README
+source ~/export-esp.sh    # once per shell; see the top-level README's "Quick start"
 cargo build --release
 espflash save-image --chip esp32 --merge \
   --partition-table partitions.csv \
@@ -39,6 +39,9 @@ platform-independent logic on the host instead:
 cd calypso-core
 cargo test
 ```
+
+See [`calypso-esp32/README.md`](../calypso-esp32/README.md) for the dev loop and
+the boot-log figures worth reading after flashing.
 
 ## Deploy
 

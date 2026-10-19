@@ -1,5 +1,5 @@
 //! Append-only record log on NOR flash, structured as a ring of erase
-//! sectors. Used for the workout/rep store (see `docs/rep-tracking`).
+//! sectors. Used for the workout/rep store (see `docs/REP_TRACKING.md`).
 //!
 //! Layout:
 //! - The region is split into `N::ERASE_SIZE` sectors.

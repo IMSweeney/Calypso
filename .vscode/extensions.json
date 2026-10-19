@@ -1,5 +1,5 @@
 {
-  "//": "Suggested extensions so a fresh clone gets highlighting and analysis for every language in this repo (see docs/app/plan.md for the toolchain notes).",
+  "//": "Suggested extensions so a fresh clone gets highlighting and analysis for every language in this repo (see the component READMEs and docs/GOTCHAS.md for the toolchain notes).",
   "recommendations": [
     "rust-lang.rust-analyzer",
     "Dart-Code.dart-code",

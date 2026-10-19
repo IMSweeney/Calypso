@@ -2,7 +2,7 @@
 ///
 /// The device has no display and will not record a rep until its IMU is
 /// calibrated, which on its own looks like an app that does nothing. This is the
-/// strip that explains it — see `docs/calibration`.
+/// strip that explains it — see `docs/CALIBRATION.md`.
 ///
 /// Shown only while connected and only until the IMU is calibrated: the levels
 /// come from the device, so they mean nothing once the link drops (the transport

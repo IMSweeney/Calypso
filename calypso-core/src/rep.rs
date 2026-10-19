@@ -4,7 +4,7 @@
 //! sample at a time, and when a rep closes it slices the sample ring for the
 //! reported span (plus [`MARGIN_MS`] each side) and calls [`compute_rep`].
 //!
-//! See `docs/rep-tracking/README.md` §3.
+//! See `docs/REP_TRACKING.md`.
 
 use crate::sampler::Sample;
 
