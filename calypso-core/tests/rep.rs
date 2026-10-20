@@ -18,7 +18,12 @@ fn sample(t_ms: u32, accel: [f32; 3], quat: [i16; 4]) -> Sample {
     }
 }
 
-fn squat_set(reps: usize, up_ms: u32, rest_ms: u32, peak_accel: f32) -> (Vec<Sample>, Vec<RepSpan>) {
+fn squat_set(
+    reps: usize,
+    up_ms: u32,
+    rest_ms: u32,
+    peak_accel: f32,
+) -> (Vec<Sample>, Vec<RepSpan>) {
     let mut out = Vec::new();
     let mut spans = Vec::new();
     let mut t = 0u32;
@@ -124,7 +129,10 @@ fn rotate_by_quat_maps_body_to_world() {
     assert!((v[0]).abs() < 1e-5);
     assert!((v[1]).abs() < 1e-5);
     assert!((v[2] - 1.0).abs() < 1e-5);
-    assert_eq!(rotate_by_quat([1.0, 0.0, 0.0, 0.0], [1.0, 2.0, 3.0]), [1.0, 2.0, 3.0]);
+    assert_eq!(
+        rotate_by_quat([1.0, 0.0, 0.0, 0.0], [1.0, 2.0, 3.0]),
+        [1.0, 2.0, 3.0]
+    );
 }
 
 #[test]
@@ -199,7 +207,11 @@ fn compute_rep_recovers_known_displacement() {
         "peak-to-peak z {peak_to_peak}, expected ~{a}"
     );
     assert!(sum.peak_velocity > 0.0);
-    assert!(sum.peak_velocity < 1.5, "peak velocity {}", sum.peak_velocity);
+    assert!(
+        sum.peak_velocity < 1.5,
+        "peak velocity {}",
+        sum.peak_velocity
+    );
     let first = buf.get(0).unwrap();
     let last = buf.get(buf.len() - 1).unwrap();
     assert!(first.pos[2].abs() < 1e-3);
@@ -254,7 +266,11 @@ fn roll_pitch_range_is_reported_in_summary() {
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
     let sum = compute_rep(&samples, &mut buf);
-    assert!(sum.roll_min_deg.abs() < 1.0, "roll min {}", sum.roll_min_deg);
+    assert!(
+        sum.roll_min_deg.abs() < 1.0,
+        "roll min {}",
+        sum.roll_min_deg
+    );
     assert!(
         (sum.roll_max_deg - 25.0).abs() < 1.5,
         "roll max {}",

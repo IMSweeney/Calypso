@@ -204,7 +204,9 @@ fn encode_message<M: micropb::MessageEncode>(message: &M, out: &mut [u8]) -> Res
     let mut writer: &mut [u8] = out;
     {
         let mut encoder = micropb::PbEncoder::new(&mut writer);
-        message.encode(&mut encoder).map_err(|_| Error::BufferTooSmall)?;
+        message
+            .encode(&mut encoder)
+            .map_err(|_| Error::BufferTooSmall)?;
     }
     Ok(capacity - writer.len())
 }
@@ -237,7 +239,9 @@ pub fn decode_record_into(message: &mut msg::RepRecord, bytes: &[u8]) -> Result<
     // the latter builds a whole ~2 KB record as a temporary, which is the very
     // thing this function exists to avoid.
     message.body = None;
-    message.decode_from_bytes(bytes).map_err(|_| Error::Decode)?;
+    message
+        .decode_from_bytes(bytes)
+        .map_err(|_| Error::Decode)?;
     if message.body.is_none() {
         return Err(Error::Empty);
     }
@@ -257,14 +261,18 @@ pub fn encode_trace_request(request: &msg::TraceRequest, out: &mut [u8]) -> Resu
 /// Decode a `SyncRequest` (app -> device).
 pub fn decode_sync_request(bytes: &[u8]) -> Result<msg::SyncRequest, Error> {
     let mut message = msg::SyncRequest::default();
-    message.decode_from_bytes(bytes).map_err(|_| Error::Decode)?;
+    message
+        .decode_from_bytes(bytes)
+        .map_err(|_| Error::Decode)?;
     Ok(message)
 }
 
 /// Decode a sync message (app -> device or device -> app).
 pub fn decode_sync(bytes: &[u8]) -> Result<msg::SyncMessage, Error> {
     let mut message = msg::SyncMessage::default();
-    message.decode_from_bytes(bytes).map_err(|_| Error::Decode)?;
+    message
+        .decode_from_bytes(bytes)
+        .map_err(|_| Error::Decode)?;
     Ok(message)
 }
 

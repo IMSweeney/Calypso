@@ -13,7 +13,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use calypso_core::fixtures::{self, push_rep, push_record, squat_set};
+use calypso_core::fixtures::{self, push_record, push_rep, squat_set};
 use calypso_core::pb::{self, msg};
 use calypso_core::rep::{compute_rep, TraceBuf, TracePoint};
 use calypso_core::store::RECORD_BUF_BYTES;
@@ -85,7 +85,10 @@ fn main() -> std::io::Result<()> {
         let mut storage = vec![TracePoint::ZERO; 512];
         let mut trace = TraceBuf::new(&mut storage);
         let mut summary = compute_rep(window, &mut trace);
-        assert!(summary.decimated, "a 10 s rep should exceed the 512-point buffer");
+        assert!(
+            summary.decimated,
+            "a 10 s rep should exceed the 512-point buffer"
+        );
         assert_eq!(summary.trace_len, 512);
 
         summary.rep_uuid = pb::uuid_to_field(&fixture_uuid(1));
@@ -166,7 +169,10 @@ fn main() -> std::io::Result<()> {
             let xs: Vec<f32> = trace.iter().map(|p| p.pos[0]).collect();
             let range = xs.iter().cloned().fold(f32::MIN, f32::max)
                 - xs.iter().cloned().fold(f32::MAX, f32::min);
-            assert!(range > 0.05, "the dipped path should bow sideways: {range} m");
+            assert!(
+                range > 0.05,
+                "the dipped path should bow sideways: {range} m"
+            );
             summary.rep_uuid = pb::uuid_to_field(&fixture_uuid((i + 1) as u32));
             push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();
         }

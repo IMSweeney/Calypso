@@ -50,9 +50,15 @@ fn rep_survives_the_round_trip_through_flash() {
     let mut log = mount(&mut flash);
     let mut rec = calypso_core::pb::msg::RepRecord::default();
     let mut summaries_back = Vec::new();
-    store::for_each_summary(&mut log, &mut buf, &mut rec, |s| summaries_back.push(s.clone()))
-        .unwrap();
-    assert_eq!(summaries_back.len(), 3, "all three summaries should be in the log");
+    store::for_each_summary(&mut log, &mut buf, &mut rec, |s| {
+        summaries_back.push(s.clone())
+    })
+    .unwrap();
+    assert_eq!(
+        summaries_back.len(),
+        3,
+        "all three summaries should be in the log"
+    );
     for (i, s) in summaries_back.iter().enumerate() {
         let (want, _) = &stored[i];
         assert_eq!(s.rep_uuid, want.rep_uuid);
@@ -118,17 +124,29 @@ fn oldest_reps_fall_off_when_the_ring_wraps() {
     .unwrap();
 
     assert!(!surviving.is_empty());
-    assert!(surviving.len() < 20, "the ring should have dropped some: {surviving:?}");
+    assert!(
+        surviving.len() < 20,
+        "the ring should have dropped some: {surviving:?}"
+    );
     assert!(surviving.contains(&fixture_uuid(20)), "newest rep survives");
     let written: Vec<RepUuid> = (1..=20).map(fixture_uuid).collect();
-    assert!(surviving.iter().all(|uuid| written.contains(uuid)), "only our reps");
+    assert!(
+        surviving.iter().all(|uuid| written.contains(uuid)),
+        "only our reps"
+    );
 
     let first_surviving = (1..=20)
         .find(|i| surviving.contains(&fixture_uuid(*i)))
         .expect("something survived");
-    assert!(first_surviving > 1, "the oldest reps should have been overwritten");
+    assert!(
+        first_surviving > 1,
+        "the oldest reps should have been overwritten"
+    );
     for i in first_surviving..=20 {
-        assert!(surviving.contains(&fixture_uuid(i)), "rep {i} should have survived");
+        assert!(
+            surviving.contains(&fixture_uuid(i)),
+            "rep {i} should have survived"
+        );
     }
     assert_eq!(surviving.len(), (20 - first_surviving + 1) as usize);
 }
@@ -149,21 +167,25 @@ fn summary_and_chunks_share_the_rep_uuid() {
 
     let short = String::from_utf8_lossy(&calypso_core::uuid::short(&want)).to_string();
     let mut kinds = Vec::new();
-    log.for_each(&mut buf, |_, payload| {
-        match calypso_core::pb::decode_record(payload).unwrap() {
+    log.for_each(
+        &mut buf,
+        |_, payload| match calypso_core::pb::decode_record(payload).unwrap() {
             calypso_core::pb::Record::Summary(s) => {
                 kinds.push(format!("summary:{short}:chunks={}", s.chunk_count));
             }
             calypso_core::pb::Record::Trace(t) => {
                 kinds.push(format!("trace:{short}:{}", t.index));
             }
-        }
-    })
+        },
+    )
     .unwrap();
 
     let expected_chunks = calypso_core::pb::chunk_count_for(trace.len());
     assert_eq!(kinds.len(), 1 + expected_chunks as usize);
-    assert_eq!(kinds[0], format!("summary:{short}:chunks={expected_chunks}"));
+    assert_eq!(
+        kinds[0],
+        format!("summary:{short}:chunks={expected_chunks}")
+    );
     for i in 0..expected_chunks {
         assert_eq!(kinds[1 + i as usize], format!("trace:{short}:{i}"));
     }

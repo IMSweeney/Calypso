@@ -7,45 +7,47 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+use alloc::vec::Vec as AllocVec;
 use bt_hci::controller::ExternalController;
+use core::cell::RefCell;
 use defmt::{info, warn};
 use embassy_executor::Spawner;
 use embassy_futures::join::join3;
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex as AsyncMutex;
-use embassy_time::{Duration, Instant, Ticker, Timer, Delay};
-use esp_storage::FlashStorage as FlashDevice;
-use alloc::vec::Vec as AllocVec;
-use core::cell::RefCell;
-use esp_hal::{Blocking};
+use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
+use embedded_storage::nor_flash::NorFlash;
+use embedded_storage::{ReadStorage, Storage};
+use esp_bootloader_esp_idf::partitions;
+use esp_hal::Blocking;
 use esp_hal::clock::CpuClock;
-use esp_hal::timer::timg::TimerGroup;
 use esp_hal::i2c::master::I2c;
 use esp_hal::rng::Rng;
 use esp_hal::time::Rate;
+use esp_hal::timer::timg::TimerGroup;
 use esp_println as _;
 use esp_radio::ble::controller::BleConnector;
-use trouble_host::prelude::*;
-use esp_bootloader_esp_idf::partitions;
+use esp_storage::FlashStorage as FlashDevice;
 use esp_storage::FlashStorage;
-use embedded_storage::{ReadStorage, Storage};
-use embedded_storage::nor_flash::NorFlash;
+use trouble_host::prelude::*;
 
-use bno055::{BNO055OperationMode, BNO055Calibration, BNO055_CALIB_SIZE};
+use alloc::boxed::Box;
 use bno055::Bno055;
+use bno055::{BNO055_CALIB_SIZE, BNO055Calibration, BNO055OperationMode};
+use calypso_core::DEVICE_NAME_MAX;
 use calypso_core::ble::{BleVec, SYNC_REQUEST_MAX};
 use calypso_core::calibration::Calibration;
 use calypso_core::flashlog::{self, FlashLog};
 use calypso_core::pb::msg;
-use calypso_core::sync::{self, decode_trace_request, SummaryCursor, TraceStreamer, SYNC_CHUNK_MAX};
-use calypso_core::uuid::{self, RepUuid};
-use calypso_core::rep::{compute_rep, Detector, RepSpan, TraceBuf, TracePoint, MARGIN_MS};
+use calypso_core::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, compute_rep};
+use calypso_core::sampler::{QUAT_SCALE, SAMPLE_RATE_HZ, Sample, SampleRing, quantize};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
-use calypso_core::sampler::{quantize, Sample, SampleRing, QUAT_SCALE, SAMPLE_RATE_HZ};
-use calypso_core::DEVICE_NAME_MAX;
+use calypso_core::sync::{
+    self, SYNC_CHUNK_MAX, SummaryCursor, TraceStreamer, decode_trace_request,
+};
+use calypso_core::uuid::{self, RepUuid};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use alloc::boxed::Box;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -230,8 +232,10 @@ async fn main(spawner: Spawner) -> ! {
     // 400 kHz so the 100 Hz sampler's ~14 bytes/sample cost ~0.5 ms of the
     // 10 ms period.
     let i2c_config = esp_hal::i2c::master::Config::default().with_frequency(Rate::from_khz(400));
-    let i2c = I2c::new(peripherals.I2C0, i2c_config).unwrap()
-    .with_sda(peripherals.GPIO22).with_scl(peripherals.GPIO19);
+    let i2c = I2c::new(peripherals.I2C0, i2c_config)
+        .unwrap()
+        .with_sda(peripherals.GPIO22)
+        .with_scl(peripherals.GPIO19);
     info!("Done setting up i2c");
 
     let mut delay = Delay;
@@ -243,7 +247,9 @@ async fn main(spawner: Spawner) -> ! {
     // IMU mode: accel + gyro fusion, no magnetometer (unreliable near
     // barbells). Roll/pitch stay accurate; yaw drift is corrected per rep by
     // ZUPT (Phase 3).
-    bno055.set_mode(BNO055OperationMode::IMU, &mut delay).unwrap();
+    bno055
+        .set_mode(BNO055OperationMode::IMU, &mut delay)
+        .unwrap();
 
     // `multicore_auto_park` is not optional on this chip: esp-storage's default
     // strategy *refuses* every write and erase while the second core is running
@@ -308,8 +314,7 @@ async fn main(spawner: Spawner) -> ! {
     let rep_window: &'static mut [Sample] = Box::leak(window_vec.into_boxed_slice());
     let mut trace_vec = alloc::vec::Vec::new();
     trace_vec.resize(TRACE_POINTS, TracePoint::ZERO);
-    let rep_trace_storage: &'static mut [TracePoint] =
-        Box::leak(trace_vec.into_boxed_slice());
+    let rep_trace_storage: &'static mut [TracePoint] = Box::leak(trace_vec.into_boxed_slice());
     let mut rep_trace = TraceBuf::new(rep_trace_storage);
     // Scratch for encoding one log record at a time (~2 KB).
     let rec_buf: &'static mut [u8] =
@@ -390,8 +395,7 @@ async fn main(spawner: Spawner) -> ! {
     // largest message, which is a trace chunk, on a task stack that has none to
     // spare. One buffer, on the heap, and the senders encode straight into it (they
     // are awaited from the same loop, so they never overlap).
-    let notify_payload: &'static mut BleVec<SYNC_CHUNK_MAX> =
-        Box::leak(Box::new(BleVec::new()));
+    let notify_payload: &'static mut BleVec<SYNC_CHUNK_MAX> = Box::leak(Box::new(BleVec::new()));
     let mut notify = Notify {
         characteristic: &messages_char,
         payload: notify_payload,
@@ -921,8 +925,7 @@ fn probe_log_partition(flash: &mut FlashDevice<'static>, partition_offset: u32, 
     }
     info!(
         "Rep log probe: sector {} reads end to end from this frame (starts {=[u8]:02x})",
-        sector,
-        first
+        sector, first
     );
 }
 
@@ -1171,7 +1174,10 @@ async fn stream_trace(
         let mut guard = store.lock().await;
         // The log work stays out of this future: see `collect_summaries`.
         if !read_trace_from_log(&mut guard, rec_buf, rec, rep_uuid, &mut trace) {
-            warn!("trace for rep {} is no longer in the log", UuidShort(Some(&rep_uuid)));
+            warn!(
+                "trace for rep {} is no longer in the log",
+                UuidShort(Some(&rep_uuid))
+            );
             return;
         }
     }
@@ -1281,9 +1287,7 @@ fn store_rep(
         let mut region = log_partition.as_embedded_storage(flash);
         FlashLog::mount(&mut region)
             .map_err(store::Error::Log)
-            .and_then(|mut log| {
-                store::append_rep(&mut log, rec_buf, summary, trace.as_slice())
-            })
+            .and_then(|mut log| store::append_rep(&mut log, rec_buf, summary, trace.as_slice()))
     };
     match appended {
         Ok(records) => Ok(records),
@@ -1412,14 +1416,15 @@ fn save_calibration(store: &mut FlashStore, profile: &BNO055Calibration) -> bool
     // other core was up, and the erase-then-write below is why that matters — an
     // erase that succeeds and a write that does not leaves no profile at all, so
     // which of the two failed decides whether there is anything left to recover.
-    if let Err(e) = nvs_partition
-        .erase(BNO055_CALIBRATION_ADDR, BNO055_CALIBRATION_ADDR + 0x1000)
-    {
+    if let Err(e) = nvs_partition.erase(BNO055_CALIBRATION_ADDR, BNO055_CALIBRATION_ADDR + 0x1000) {
         warn!("NVS: calibration erase failed: {}", e);
         return false;
     }
-    if let Err(e) = Storage::write(&mut nvs_partition, BNO055_CALIBRATION_ADDR, profile.as_bytes())
-    {
+    if let Err(e) = Storage::write(
+        &mut nvs_partition,
+        BNO055_CALIBRATION_ADDR,
+        profile.as_bytes(),
+    ) {
         warn!("NVS: calibration write failed: {}", e);
         return false;
     }

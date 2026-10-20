@@ -71,7 +71,10 @@ fn wrap_drops_oldest_sectors() {
     let mut live = Vec::new();
     let mut buf = [0u8; 256];
     log.for_each(&mut buf, |id, _| live.push(id)).unwrap();
-    assert!(live.len() < ids.len(), "expected some records to be dropped");
+    assert!(
+        live.len() < ids.len(),
+        "expected some records to be dropped"
+    );
     assert_eq!(*live.last().unwrap(), *ids.last().unwrap());
     let first_live = live[0];
     assert!(live.iter().copied().eq(first_live..=*ids.last().unwrap()));
@@ -136,5 +139,8 @@ fn region_too_small_rejected() {
     }
     let mut tiny = Tiny(MockFlash::new());
     tiny.0.inner.data.truncate(SECTOR);
-    assert!(matches!(FlashLog::mount(&mut tiny), Err(Error::RegionTooSmall)));
+    assert!(matches!(
+        FlashLog::mount(&mut tiny),
+        Err(Error::RegionTooSmall)
+    ));
 }

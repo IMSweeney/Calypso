@@ -29,7 +29,10 @@ fn trace_streams_in_ble_sized_chunks() {
     let mut seen = Vec::new();
     let mut indices = Vec::new();
     while let Some(n) = streamer.next_message(&mut buf) {
-        assert!(n <= BLE_NOTIFY_BYTES, "chunk message {n} bytes, over the MTU");
+        assert!(
+            n <= BLE_NOTIFY_BYTES,
+            "chunk message {n} bytes, over the MTU"
+        );
         let msg = pb::decode_sync(&buf[..n]).unwrap();
         match msg.body {
             Some(msg::SyncMessage_::Body::Trace(chunk)) => {
@@ -78,7 +81,8 @@ fn every_streamed_chunk_carries_the_stream_total() {
 fn stored_records_leave_the_stream_total_unset() {
     let points = trace(4);
     let mut rec_buf = [0u8; 512];
-    let n = pb::encode_trace_chunk(fixture_uuid(1), 0, points[0].t_ms, 0, &points, &mut rec_buf).unwrap();
+    let n = pb::encode_trace_chunk(fixture_uuid(1), 0, points[0].t_ms, 0, &points, &mut rec_buf)
+        .unwrap();
     match pb::decode_record(&rec_buf[..n]).unwrap() {
         Record::Trace(chunk) => assert_eq!(chunk.total_chunks, 0),
         other => panic!("expected a trace chunk, got {other:?}"),
@@ -231,7 +235,10 @@ fn calibration_status_carries_every_sensor() {
     let n = encode_calibration_message(&Calibration::new(3, 3, 3, 0), &mut buf).unwrap();
     match pb::decode_sync(&buf[..n]).unwrap().body {
         Some(msg::SyncMessage_::Body::Calibration(c)) => {
-            assert!(c.ready, "IMU mode: the magnetometer is not part of readiness");
+            assert!(
+                c.ready,
+                "IMU mode: the magnetometer is not part of readiness"
+            );
             assert_eq!(c.mag, 0);
         }
         other => panic!("expected a calibration status, got {other:?}"),

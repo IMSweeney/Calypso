@@ -59,7 +59,9 @@ fn summary_round_trips() {
 
 #[test]
 fn trace_chunk_round_trips() {
-    let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES).map(|i| sample_point(i, 500)).collect();
+    let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES)
+        .map(|i| sample_point(i, 500))
+        .collect();
     let mut buf = [0u8; 2048];
     let n = pb::encode_trace_chunk(fixture_uuid(7), 2, 500, 9, &points, &mut buf).unwrap();
 
@@ -105,7 +107,10 @@ fn full_chunk_fits_one_flash_sector() {
     let points = vec![worst; TRACE_CHUNK_SAMPLES];
     let mut buf = [0u8; 4096];
     let n = pb::encode_trace_chunk(fixture_uuid(1), 0, 0, 0, &points, &mut buf).unwrap();
-    assert!(n <= 4076, "chunk encoded to {n} bytes, over the record limit");
+    assert!(
+        n <= 4076,
+        "chunk encoded to {n} bytes, over the record limit"
+    );
     assert!(
         n <= calypso_core::store::RECORD_BUF_BYTES,
         "chunk encoded to {n} bytes, over RECORD_BUF_BYTES"
@@ -114,7 +119,9 @@ fn full_chunk_fits_one_flash_sector() {
 
 #[test]
 fn undersized_buffer_is_reported() {
-    let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES).map(|i| sample_point(i, 0)).collect();
+    let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES)
+        .map(|i| sample_point(i, 0))
+        .collect();
     let mut tiny = [0u8; 8];
     assert_eq!(
         pb::encode_trace_chunk(fixture_uuid(1), 0, 0, 0, &points, &mut tiny),
@@ -140,10 +147,16 @@ fn trace_request_round_trips_in_its_envelope() {
     let n = pb::encode_trace_request(&request, &mut buf).unwrap();
 
     let envelope = pb::decode_sync_request(&buf[..n]).unwrap();
-    assert!(matches!(envelope.body, Some(msg::SyncRequest_::Body::Trace(_))));
+    assert!(matches!(
+        envelope.body,
+        Some(msg::SyncRequest_::Body::Trace(_))
+    ));
 
     let decoded = pb::decode_trace_request(&buf[..n]).unwrap();
-    assert_eq!(pb::uuid_from_field(&decoded.rep_uuid), Some(fixture_uuid(42)));
+    assert_eq!(
+        pb::uuid_from_field(&decoded.rep_uuid),
+        Some(fixture_uuid(42))
+    );
     assert!(decoded.all_chunks);
 
     assert_eq!(pb::decode_trace_request(&[]), Err(pb::Error::Empty));

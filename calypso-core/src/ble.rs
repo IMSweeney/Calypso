@@ -38,8 +38,7 @@ pub const GATT_TABLE_MAX: usize = GAP_ATTRIBUTES + SYNC_SERVICE_ATTRIBUTES + GAT
 
 // The pieces have to add up to what the table actually pushes; the host tests
 // build it, and this keeps the arithmetic honest where a reader can see it.
-const _: () =
-    assert!(GATT_TABLE_MAX > GAP_ATTRIBUTES + SYNC_SERVICE_ATTRIBUTES);
+const _: () = assert!(GATT_TABLE_MAX > GAP_ATTRIBUTES + SYNC_SERVICE_ATTRIBUTES);
 
 /// How many characteristics in this table a client can subscribe to: every one
 /// built with `Notify`, i.e. every one with a CCCD. The sync service's two.
@@ -271,7 +270,10 @@ pub fn build_gatt_table<'d, M: RawMutex>(
             device_name_store,
         )
         .build();
-    gap.add_characteristic_ro(characteristic::APPEARANCE, &appearance::sensor::GENERIC_SENSOR);
+    gap.add_characteristic_ro(
+        characteristic::APPEARANCE,
+        &appearance::sensor::GENERIC_SENSOR,
+    );
     gap.build();
 
     table.add_service(Service::new(service::GATT)).build();
@@ -291,7 +293,10 @@ pub fn build_gatt_table<'d, M: RawMutex>(
     let requests = sync
         .add_characteristic(
             SYNC_REQUESTS_UUID.clone(),
-            &[CharacteristicProp::Write, CharacteristicProp::WriteWithoutResponse],
+            &[
+                CharacteristicProp::Write,
+                CharacteristicProp::WriteWithoutResponse,
+            ],
             BleVec::<SYNC_REQUEST_MAX>::new(),
             requests_store,
         )

@@ -37,15 +37,17 @@ fn fixture_uuids_are_stable_and_distinct() {
 
     let mut seen = std::collections::HashSet::new();
     for index in 0..1000 {
-        assert!(seen.insert(uuid::fixture_uuid(index)), "collision at {index}");
+        assert!(
+            seen.insert(uuid::fixture_uuid(index)),
+            "collision at {index}"
+        );
     }
 }
 
 #[test]
 fn short_form_is_eight_hex_characters() {
     let uuid: RepUuid = [
-        0x3f, 0x2a, 0x9c, 0x81, 0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa,
-        0xbb,
+        0x3f, 0x2a, 0x9c, 0x81, 0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
     ];
     assert_eq!(&uuid::short(&uuid), b"3f2a9c81");
 

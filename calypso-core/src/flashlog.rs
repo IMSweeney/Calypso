@@ -128,7 +128,11 @@ fn crc16(mut crc: u16, data: &[u8]) -> u16 {
     for &b in data {
         crc ^= (b as u16) << 8;
         for _ in 0..8 {
-            crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x1021 } else { crc << 1 };
+            crc = if crc & 0x8000 != 0 {
+                (crc << 1) ^ 0x1021
+            } else {
+                crc << 1
+            };
         }
     }
     crc
@@ -282,7 +286,10 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         let crc = crc16(crc16(0xFFFF, &hdr[2..]), payload);
         let trailer = [crc.to_le_bytes()[0], crc.to_le_bytes()[1], ERASED, ERASED];
         self.flash
-            .write(pos + RECORD_HEADER_LEN + pad4(payload.len() as u32), &trailer)
+            .write(
+                pos + RECORD_HEADER_LEN + pad4(payload.len() as u32),
+                &trailer,
+            )
             .map_err(Error::flash(Phase::Write, sector))?;
 
         self.write_offset += rec_len;
@@ -328,7 +335,10 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
                 .map_err(Error::flash(Phase::ScanHeaders, s))?;
             let magic = u32::from_le_bytes(hdr[0..4].try_into().unwrap());
             let epoch = u32::from_le_bytes(hdr[4..8].try_into().unwrap());
-            if magic == SECTOR_MAGIC && self.head_epoch >= epoch && self.head_epoch - epoch < self.sectors {
+            if magic == SECTOR_MAGIC
+                && self.head_epoch >= epoch
+                && self.head_epoch - epoch < self.sectors
+            {
                 live += 1;
             }
         }
@@ -444,7 +454,10 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
             let magic = u16::from_le_bytes(hdr[0..2].try_into().unwrap());
             let len = u16::from_le_bytes(hdr[2..4].try_into().unwrap()) as u32;
             let rec_len = RECORD_HEADER_LEN + pad4(len) + RECORD_TRAILER_LEN;
-            if magic != RECORD_MAGIC || len as usize > self.max_payload() || pos + rec_len > self.sector_size {
+            if magic != RECORD_MAGIC
+                || len as usize > self.max_payload()
+                || pos + rec_len > self.sector_size
+            {
                 return Ok((pos, ScanStop::Corrupt));
             }
             // CRC over header[2..8] + payload (read in small chunks).

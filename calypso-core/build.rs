@@ -17,7 +17,9 @@ fn main() {
     // protoc needs an include path that is a prefix of the file names it is
     // given, so run from the repo root and pass root-relative paths.
     let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo");
-    let root = Path::new(&manifest).parent().expect("crate is in the repo root");
+    let root = Path::new(&manifest)
+        .parent()
+        .expect("crate is in the repo root");
     std::env::set_current_dir(root).expect("chdir to repo root");
 
     let proto = root.join("proto/calypso.proto");

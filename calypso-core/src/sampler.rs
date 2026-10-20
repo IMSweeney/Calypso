@@ -30,7 +30,11 @@ impl Sample {
     pub const BYTE_SIZE: usize = 20;
 
     /// All-zero sample (const-constructible for static ring initialisation).
-    pub const ZERO: Sample = Sample { t_ms: 0, accel: [0; 3], quat: [0; 4] };
+    pub const ZERO: Sample = Sample {
+        t_ms: 0,
+        accel: [0; 3],
+        quat: [0; 4],
+    };
 
     /// Build from floating-point readings (m/s², unit quaternion).
     pub fn from_f32(t_ms: u32, accel: [f32; 3], quat_wxyz: [f32; 4]) -> Self {
@@ -55,7 +59,11 @@ impl Sample {
 /// Round-and-clamp a float to i16 fixed point (no_std: no f32::round).
 pub fn quantize(v: f32, scale: i32) -> i16 {
     let scaled = v * scale as f32;
-    let rounded = if scaled >= 0.0 { scaled + 0.5 } else { scaled - 0.5 };
+    let rounded = if scaled >= 0.0 {
+        scaled + 0.5
+    } else {
+        scaled - 0.5
+    };
     if rounded >= i16::MAX as f32 {
         i16::MAX
     } else if rounded <= i16::MIN as f32 {
@@ -193,5 +201,3 @@ impl<'a> SampleRing<'a> {
         }
     }
 }
-
-

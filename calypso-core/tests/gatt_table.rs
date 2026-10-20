@@ -1,5 +1,5 @@
 use calypso_core::ble::{
-    build_gatt_table, BleVec, BuildError, GattTable, NOTIFIABLE_CHARACTERISTICS, GATT_TABLE_MAX,
+    build_gatt_table, BleVec, BuildError, GattTable, GATT_TABLE_MAX, NOTIFIABLE_CHARACTERISTICS,
     SYNC_MESSAGES_UUID, SYNC_REQUESTS_UUID, SYNC_REQUEST_MAX, SYNC_SERVICE_UUID,
 };
 use calypso_core::sync::SYNC_CHUNK_MAX;
@@ -23,9 +23,18 @@ fn canonical(uuid: &Uuid) -> String {
 
 #[test]
 fn uuids_are_what_a_client_matches_against() {
-    assert_eq!(canonical(&SYNC_SERVICE_UUID), "0000ca20-b0cd-11ec-871f-d45ddf138840");
-    assert_eq!(canonical(&SYNC_MESSAGES_UUID), "0000ca21-b0cd-11ec-871f-d45ddf138840");
-    assert_eq!(canonical(&SYNC_REQUESTS_UUID), "0000ca22-b0cd-11ec-871f-d45ddf138840");
+    assert_eq!(
+        canonical(&SYNC_SERVICE_UUID),
+        "0000ca20-b0cd-11ec-871f-d45ddf138840"
+    );
+    assert_eq!(
+        canonical(&SYNC_MESSAGES_UUID),
+        "0000ca21-b0cd-11ec-871f-d45ddf138840"
+    );
+    assert_eq!(
+        canonical(&SYNC_REQUESTS_UUID),
+        "0000ca22-b0cd-11ec-871f-d45ddf138840"
+    );
 }
 
 macro_rules! gatt_table {
