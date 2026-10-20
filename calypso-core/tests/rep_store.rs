@@ -1,7 +1,3 @@
-//! End-to-end host test of the Phase 4 chain: synthetic motion → detector →
-//! ZUPT trace → protobuf records → flash log → read back and decode. No
-//! device needed.
-
 mod common;
 
 use calypso_core::fixtures::{detect_and_trace, squat_set};
@@ -14,7 +10,6 @@ use common::{mount, BigFlash, MockFlash};
 
 const Q_ID: [i16; 4] = [QUAT_SCALE as i16, 0, 0, 0];
 
-/// Runs the shared fixture pipeline and splits it the way these tests want.
 fn pipeline(samples: &[Sample]) -> (Vec<Vec<TracePoint>>, Vec<msg::RepSummary>) {
     let reps = detect_and_trace(samples, 512);
     (
@@ -30,11 +25,8 @@ fn rep_survives_the_round_trip_through_flash() {
     assert_eq!(traces.len(), 3);
     assert_eq!(summaries.len(), 3);
 
-    // Real 4 KB sectors, so a full trace chunk fits one log record.
     let mut flash = BigFlash::new();
     let mut buf = [0u8; RECORD_BUF_BYTES];
-    // Identity is a field of the summary now, so it is set there rather than
-    // carried alongside.
     let stored: Vec<(msg::RepSummary, Vec<TracePoint>)> = summaries
         .iter()
         .zip(traces.iter())
@@ -55,10 +47,7 @@ fn rep_survives_the_round_trip_through_flash() {
         }
     }
 
-    // Remount (as the device does at boot) and read it all back.
     let mut log = mount(&mut flash);
-    // Scratch the caller owns: the decoded record is ~2 KB, so it is not built
-    // inside the scan (see `pb::decode_record_into`).
     let mut rec = calypso_core::pb::msg::RepRecord::default();
     let mut summaries_back = Vec::new();
     store::for_each_summary(&mut log, &mut buf, &mut rec, |s| summaries_back.push(s.clone()))
@@ -74,7 +63,6 @@ fn rep_survives_the_round_trip_through_flash() {
         assert!((s.peak_velocity - want.peak_velocity).abs() < 1e-6);
     }
 
-    // Traces come back with the same shape as what was computed.
     for (sum, want_trace) in &stored {
         let rep_uuid = calypso_core::pb::summary_uuid(sum).unwrap();
         let mut storage = vec![TracePoint::ZERO; 512];
@@ -82,7 +70,6 @@ fn rep_survives_the_round_trip_through_flash() {
         let n = store::read_trace(&mut log, &mut buf, &mut rec, rep_uuid, &mut out).unwrap();
         assert_eq!(n, want_trace.len(), "trace length for {rep_uuid:?}");
         for (got, want) in out.iter().zip(want_trace.iter()) {
-            // Timestamps are stored relative to the rep's first point.
             assert_eq!(got.t_ms, want.t_ms - want_trace[0].t_ms);
             assert!((got.pos[0] - want.pos[0]).abs() < 1e-6);
             assert!((got.pos[2] - want.pos[2]).abs() < 1e-6);
@@ -91,7 +78,6 @@ fn rep_survives_the_round_trip_through_flash() {
         }
     }
 
-    // A rep that isn't in the log reads back empty.
     let mut storage = vec![TracePoint::ZERO; 512];
     let mut out = TraceBuf::new(&mut storage);
     assert_eq!(
@@ -102,8 +88,6 @@ fn rep_survives_the_round_trip_through_flash() {
 
 #[test]
 fn oldest_reps_fall_off_when_the_ring_wraps() {
-    // Small mock sectors (256 B) so a handful of reps wrap the ring; the
-    // trace is short so each record still fits a 236-byte record payload.
     let (samples, _) = squat_set(1, 1500, 800, 0.4);
     let mut summary = pipeline(&samples).1.remove(0);
     let trace: Vec<TracePoint> = (0..4)
@@ -133,17 +117,12 @@ fn oldest_reps_fall_off_when_the_ring_wraps() {
     })
     .unwrap();
 
-    // UUIDs carry no order, so this asserts on membership rather than sequence:
-    // some reps were dropped, the newest survived, and every survivor is one we
-    // actually wrote.
     assert!(!surviving.is_empty());
     assert!(surviving.len() < 20, "the ring should have dropped some: {surviving:?}");
     assert!(surviving.contains(&fixture_uuid(20)), "newest rep survives");
     let written: Vec<RepUuid> = (1..=20).map(fixture_uuid).collect();
     assert!(surviving.iter().all(|uuid| written.contains(uuid)), "only our reps");
 
-    // A ring drops from the oldest end, so what survives is a suffix of what was
-    // written: the earliest survivor, and then every rep after it.
     let first_surviving = (1..=20)
         .find(|i| surviving.contains(&fixture_uuid(*i)))
         .expect("something survived");
@@ -168,7 +147,6 @@ fn summary_and_chunks_share_the_rep_uuid() {
     summary.rep_uuid = calypso_core::pb::uuid_to_field(&want);
     store::append_rep(&mut log, &mut buf, &mut summary, trace).unwrap();
 
-    // Walk the raw records: one summary, then chunks 0..n share its uuid.
     let short = String::from_utf8_lossy(&calypso_core::uuid::short(&want)).to_string();
     let mut kinds = Vec::new();
     log.for_each(&mut buf, |_, payload| {

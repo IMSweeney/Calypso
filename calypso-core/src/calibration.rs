@@ -97,10 +97,6 @@ mod tests {
 
     #[test]
     fn ready_needs_accel_and_gyro() {
-        // `(sys, accel, gyro, mag)`. The first case is the state this hardware actually
-        // reaches and could never leave: accel and gyro full, the aggregate at 0 because
-        // it counts the magnetometer, which IMU mode never calibrates. Gating on `sys`
-        // meant the device never recorded a rep *and* never saved its profile.
         assert!(Calibration::new(0, 3, 3, 0).is_ready());
         assert!(Calibration::new(3, 3, 3, 0).is_ready());
         assert!(!Calibration::new(3, 2, 3, 0).is_ready());
@@ -109,8 +105,6 @@ mod tests {
 
     #[test]
     fn the_magnetometer_never_blocks_rep_recording() {
-        // IMU mode has no magnetometer: its status sits at 0 forever, and
-        // waiting on it would mean never recording a rep.
         let imu_mode = Calibration::new(3, 3, 3, 0);
         assert!(imu_mode.is_ready());
         assert!(!imu_mode.is_fully_calibrated());
@@ -136,8 +130,6 @@ mod tests {
 
     #[test]
     fn packed_erased_flash_is_not_ready() {
-        // 0xFFFFFFFF is what erased flash reads back as: every level maxed,
-        // which must not read as a calibrated IMU.
         let erased = Calibration::from_bits(0xFFFF_FFFF);
         assert_eq!(erased, Calibration::new(0xFF, 0xFF, 0xFF, 0xFF));
         assert!(!erased.is_ready());

@@ -1,6 +1,3 @@
-//! Tests for the fixture generator and the `.pblog` dump framing, which the
-//! client's Dart reader has to match.
-
 use calypso_core::fixtures::{self, push_rep, push_record, read_dump, squat_dump, squat_set};
 use calypso_core::pb::{self, msg, Record};
 use calypso_core::rep::{compute_rep, TraceBuf, TracePoint};
@@ -18,7 +15,6 @@ fn squash_set_is_detected_and_traced() {
         assert!(!trace.is_empty());
         assert_eq!(summary.trace_len, trace.len() as u32);
         assert!(!summary.decimated);
-        // A 0.4 m squat: the trace should show roughly that much travel.
         assert!(
             (summary.rom - 0.4).abs() < 0.15,
             "rom {} for a 0.4 m squat",
@@ -33,7 +29,6 @@ fn dump_round_trips_every_record() {
     let (records, truncated) = read_dump(&dump);
     assert!(!truncated);
 
-    // Two reps, each a summary plus its trace chunks.
     let mut summaries = Vec::new();
     let mut chunks = Vec::new();
     for record in &records {
@@ -45,8 +40,6 @@ fn dump_round_trips_every_record() {
     assert_eq!(summaries.len(), 2);
     assert_eq!(chunks.len(), records.len() - 2);
 
-    // Summaries are numbered from 1 and each rep's chunks carry its id, in
-    // order, with the trace length the summary claims.
     for (i, summary) in summaries.iter().enumerate() {
         assert_eq!(pb::summary_uuid(summary), Some(fixture_uuid(i as u32)));
         let mine: Vec<&msg::TraceChunk> =
@@ -67,8 +60,6 @@ fn truncation_is_reported_not_ignored() {
     assert!(!truncated);
     assert!(full_records.len() > 1);
 
-    // Cut the last record short: the reader must report it rather than
-    // silently returning a partial message.
     let cut = &dump[..dump.len() - 40];
     let (records, truncated) = read_dump(cut);
     assert!(truncated);
@@ -110,8 +101,6 @@ fn empty_and_single_point_dumps_are_valid() {
 
 #[test]
 fn decimation_keeps_the_last_point() {
-    // The decimation grid is anchored at the final sample, so a rep's end (the
-    // most interesting point to plot) is always stored.
     let (samples, _) = squat_set(1, 10_000, 1_000, 1.2);
     let lead_in = 300 / fixtures::SAMPLE_DT_MS as usize;
     let window = &samples[lead_in - 12..lead_in + 1_000 + 12];
@@ -126,7 +115,6 @@ fn decimation_keeps_the_last_point() {
         window.last().unwrap().t_ms,
         "the last trace point should be the last sample"
     );
-    // Decimated traces are downsampled, not truncated: two points per stride.
     assert!(trace.get(1).unwrap().t_ms > trace.get(0).unwrap().t_ms + 10);
 }
 

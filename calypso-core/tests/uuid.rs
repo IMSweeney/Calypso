@@ -1,9 +1,6 @@
-//! Rep identity: v4 UUIDs, minted where a rep is created.
-
 use calypso_core::pb::{self, msg};
 use calypso_core::uuid::{self, RepUuid, UUID_LEN};
 
-/// A predictable source of randomness: a counter run through a mixing step.
 fn counter_rand() -> impl FnMut() -> u32 {
     let mut n = 0u32;
     move || {
@@ -21,17 +18,13 @@ fn a_minted_uuid_is_a_v4_uuid() {
 
 #[test]
 fn minting_consumes_the_randomness_it_is_given() {
-    // Same seed, same id — so a test can reproduce one.
     let mut source = counter_rand();
     let first = uuid::new_uuid(&mut source);
     assert_eq!(first, uuid::new_uuid(&mut counter_rand()));
 
-    // ...and the same source advances, so consecutive reps differ.
     let second = uuid::new_uuid(&mut source);
     assert_ne!(first, second, "the source advances between reps");
 
-    // Sixteen bytes means four words: a source that never changes must not
-    // collapse to a constant id, but it should still fill all four.
     let constant = uuid::new_uuid(&mut || 0);
     assert_eq!(&constant[..4], &[0, 0, 0, 0]);
     assert_ne!(constant, uuid::new_uuid(&mut || 0xdead_beef));
@@ -39,8 +32,6 @@ fn minting_consumes_the_randomness_it_is_given() {
 
 #[test]
 fn fixture_uuids_are_stable_and_distinct() {
-    // Fixtures are regenerated and compared, so these must not drift; and two
-    // reps inside one fixture must not collide.
     assert_eq!(uuid::fixture_uuid(0), uuid::fixture_uuid(0));
     assert_eq!(uuid::fixture_uuid(0)[6] >> 4, 4, "still a v4 uuid");
 
@@ -58,7 +49,6 @@ fn short_form_is_eight_hex_characters() {
     ];
     assert_eq!(&uuid::short(&uuid), b"3f2a9c81");
 
-    // Zero-padded, so a column of ids lines up.
     let leading_zero: RepUuid = [0, 0, 0x0a, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     assert_eq!(&uuid::short(&leading_zero), b"00000aff");
 }
@@ -70,8 +60,6 @@ fn the_wire_form_is_sixteen_bytes_and_rejects_anything_else() {
     assert_eq!(field.len(), UUID_LEN);
     assert_eq!(pb::uuid_from_field(&field), Some(uuid));
 
-    // A truncated, empty or oversized field is not an identity: this is what
-    // keeps a half-written record from being mistaken for a rep.
     assert_eq!(pb::uuid_from_field(&field[..15]), None);
     assert_eq!(pb::uuid_from_field(&[]), None);
     assert_eq!(pb::uuid_from_field(&[1u8; 17]), None);
@@ -79,8 +67,6 @@ fn the_wire_form_is_sixteen_bytes_and_rejects_anything_else() {
 
 #[test]
 fn a_uuid_survives_both_record_kinds() {
-    // The identity has to come back out of a summary and out of a chunk: the
-    // client keys its archive on it, and the device matches chunks by it.
     let uuid = uuid::fixture_uuid(3);
     let summary = msg::RepSummary {
         rep_uuid: pb::uuid_to_field(&uuid),

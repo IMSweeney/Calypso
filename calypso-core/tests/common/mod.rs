@@ -1,17 +1,10 @@
-//! Shared test support: mock NOR flashes that reproduce real flash semantics
-//! (writes can only clear bits, erase resets a sector to 0xFF, writes must be
-//! 4-byte aligned). Two sizes are used: small sectors wrap the ring quickly,
-//! and 4 KB sectors match the real ESP32 flash so record sizes are realistic.
 #![allow(dead_code)] // not every test target uses every mock
-
 
 use calypso_core::flashlog::FlashLog;
 use embedded_storage::nor_flash::{NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash};
 
-/// Small sectors so tests wrap the ring quickly.
 pub const SECTOR: usize = 256;
 pub const SECTORS: usize = 8;
-/// Real ESP32 sector size, for tests that care about record capacity.
 pub const BIG_SECTOR: usize = 4096;
 pub const BIG_SECTORS: usize = 8;
 
@@ -92,13 +85,6 @@ macro_rules! define_mock_flash {
         }
 
         impl ReadNorFlash for $name {
-            /// 4, as on the ESP32 — and enforced below, because the real driver does.
-            ///
-            /// This mock used to say `1` and accept anything, which is why the suite
-            /// never caught the read shape that broke rep storage: `esp-storage`'s
-            /// `ReadNorFlash::read` returns `NotAligned` when the offset *or* the length
-            /// is not a multiple of `READ_SIZE`, and the log's scan reads records by
-            /// length — lengths that are whatever the payload happened to be.
             const READ_SIZE: usize = 4;
 
             fn capacity(&self) -> usize {
@@ -135,11 +121,8 @@ macro_rules! define_mock_flash {
 }
 
 define_mock_flash!(MockFlash, SECTOR, SECTORS);
-// Flash with real 4 KB ESP32 sectors, for record-capacity tests.
 define_mock_flash!(BigFlash, BIG_SECTOR, BIG_SECTORS);
 
-/// Mount a log over a mock flash. The flash is owned by the caller so it can
-/// be inspected (or remounted) after the log is dropped.
 pub fn mount<N: NorFlash>(flash: &mut N) -> FlashLog<'_, N> {
     FlashLog::mount(flash).unwrap()
 }

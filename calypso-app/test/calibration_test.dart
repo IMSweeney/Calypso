@@ -1,7 +1,3 @@
-// The calibration model: what arrives from the device, and the wording derived
-// from it. No device and no widgets — this is the part that decides what the user
-// is told to do, so it is worth pinning down on its own.
-
 import 'package:calypso/model/calibration.dart';
 import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:calypso/state/calibration.dart';
@@ -19,9 +15,6 @@ void main() {
   });
 
   test('ready is the device\'s answer, not one re-derived here', () {
-    // The device sends the gate it is acting on. If the app re-derived it, a
-    // firmware that changed the rule (dropping the aggregate, say) would leave
-    // the app confidently telling the user the opposite of what is happening.
     final saysReady = pb.CalibrationStatus(sys: 3, accel: 3, gyro: 3, mag: 0, ready: true);
     expect(saysReady.ready, isTrue);
 
@@ -30,9 +23,6 @@ void main() {
   });
 
   test('the magnetometer is reported but never asked for', () {
-    // The trap this hardware sets: the BNO055 runs in IMU mode, where the
-    // magnetometer never calibrates. A hint that asked the user to fix `mag`
-    // would send them to do figure eights in the gym forever.
     final onlyMagShort = pb.CalibrationStatus(
       sys: maxCalibrationLevel,
       accel: maxCalibrationLevel,
@@ -52,8 +42,6 @@ void main() {
     final gyroOnly = pb.CalibrationStatus(sys: 3, accel: 3, gyro: 2, mag: 0, ready: false);
     final accelOnly = pb.CalibrationStatus(sys: 3, accel: 2, gyro: 3, mag: 0, ready: false);
 
-    // Stillness is what the gyroscope wants; a few still orientations is what the
-    // accelerometer wants. Each hint asks for one, not for both.
     expect(gyroOnly.action, contains('still on the rack'));
     expect(gyroOnly.action, isNot(contains('upright')));
 
@@ -65,8 +53,6 @@ void main() {
   });
 
   test('nothing is asked for when the sensors are fine but the device is not recording', () {
-    // Both levels good, ready still false: the aggregate is catching up. There is
-    // no action to give, and inventing one would send the user off to no effect.
     final finishing = pb.CalibrationStatus(sys: 2, accel: 3, gyro: 3, mag: 0, ready: false);
     final gyroOnly = pb.CalibrationStatus(sys: 3, accel: 3, gyro: 2, mag: 0, ready: false);
 
@@ -81,16 +67,11 @@ void main() {
 
   group('CalibrationNotifier', () {
     test('is not ready before the device has said anything', () {
-      // The safe thing to believe: a device we have heard nothing from is not
-      // recording.
       expect(CalibrationNotifier().isReady, isFalse);
       expect(CalibrationNotifier().latest, isNull);
     });
 
     test('notifies on a change, and stays quiet on a repeat', () {
-      // The device pushes once a second and the levels rarely move: rebuilding
-      // the list screen every second for an identical reading is the thing this
-      // guards against.
       final notifier = CalibrationNotifier();
       var notifications = 0;
       notifier.addListener(() => notifications++);

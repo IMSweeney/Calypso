@@ -5,7 +5,7 @@ import 'support/fake_transport.dart';
 import 'support/test_uuid.dart';
 
 void main() {
-  final points = tracePoints(10); // 3 chunks of 4
+  final points = tracePoints(10);
   final chunks = chunksFor(u(1), points);
 
   test('chunks assemble in order', () {
@@ -28,7 +28,6 @@ void main() {
     }
     final assembled = assembler.assemble();
     expect(assembled.length, 10);
-    // Still ordered by chunk index, not arrival.
     expect(
       assembled.map((p) => p.tOffsetMs).toList(),
       [for (var i = 0; i < 10; i++) i * 10],
@@ -42,7 +41,6 @@ void main() {
     assembler.add(chunks[2]);
     expect(assembler.chunkCount, 2);
     expect(assembler.missingIndices(), [1]);
-    // 10 points chunk as 4 + 4 + 2, so chunks 0 and 2 hold 6 points.
     expect(assembler.assemble().length, 6, reason: 'the repeat added nothing');
   });
 

@@ -1,9 +1,3 @@
-// Decode round-trip over every generated fixture.
-//
-// The fixtures come from the firmware's own protobuf encoders
-// (`cargo run -p calypso-core --example gen_fixtures`), so this test is a real
-// check of the wire format rather than of a hand-written sample.
-
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -26,13 +20,9 @@ void main() {
 
     for (var i = 0; i < summaries.length; i++) {
       final summary = summaries[i];
-      // The fixtures carry the generator's deterministic uuids, so each rep in
-      // the set can be named by its index.
       expect(summary.uuid, u(i), reason: 'rep $i carries its generator uuid');
       expect(summary.decimated, isFalse);
 
-      // Each summary is followed by the chunks it promises, in order, holding
-      // exactly the trace length it reports.
       final chunks = traceChunksFor(result.records, u(i));
       expect(chunks.length, summary.chunkCount);
       var points = 0;
@@ -44,20 +34,16 @@ void main() {
       expect(points, summary.traceLen);
     }
 
-    // A 0.4 m squat: the summaries should show roughly that much travel.
     for (final s in summaries) {
       expect(s.rom, closeTo(0.4, 0.15));
       expect(s.durationMs, greaterThan(0));
       expect(s.peakVelocity, greaterThan(0));
     }
 
-    // Chunk timestamps are relative to the rep's first trace point.
     final first = traceChunksFor(result.records, u(0)).first;
     expect(first.samples.first.tOffsetMs, 0);
     expect(first.samples.last.tOffsetMs, greaterThan(0));
 
-    // Position and orientation survive the fixed-point round trip. The first
-    // sample is at rest, so the travel shows up later in the trace.
     final depth = first.samples
         .map((s) => s.pz.abs())
         .reduce((a, b) => a > b ? a : b);
@@ -92,7 +78,6 @@ void main() {
     final points = chunks.fold<int>(0, (n, c) => n + c.samples.length);
     expect(points, 512);
 
-    // Decimation anchors on the last sample, so the rep's end is stored.
     final all = chunks.expand((c) => c.samples).toList();
     expect(all.last.tOffsetMs, greaterThan(all[all.length - 2].tOffsetMs));
   });
@@ -118,7 +103,7 @@ void main() {
 
     final samples = traceChunksFor(result.records, u(99)).single.samples;
     expect(samples.length, 4);
-    expect(samples[0].ax, -32768); // i16::MIN survives the sint32 encoding
+    expect(samples[0].ax, -32768);
     expect(samples[0].qw, -32768);
   });
 
@@ -126,8 +111,6 @@ void main() {
     final result = readDump(fixture('truncated'));
 
     expect(result.truncated, isTrue);
-    // The cut fixture is one rep: a summary plus four chunks, with the last
-    // frame clipped, so exactly four records survive.
     expect(result.records.length, 4);
     expect(summariesOf(result.records).single.uuid, u(0));
   });

@@ -1,6 +1,3 @@
-//! Host tests for the BLE sync streaming logic: BLE-sized trace chunks, the
-//! summary cursor, and request decoding. No radio involved.
-
 use calypso_core::calibration::Calibration;
 use calypso_core::pb::{self, msg, Record};
 use calypso_core::rep::TracePoint;
@@ -46,13 +43,9 @@ fn trace_streams_in_ble_sized_chunks() {
         }
     }
 
-    // Derived from the constant, not hardcoded: this assertion used to spell out
-    // four-sample arithmetic and broke the moment the chunk size changed.
     let expected_chunks = 10usize.div_ceil(BLE_CHUNK_SAMPLES) as u32;
     assert_eq!(TraceStreamer::chunk_count(10), expected_chunks);
     assert_eq!(indices, (0..expected_chunks).collect::<Vec<_>>());
-    // Reassembled in index order, the trace is identical (timestamps are
-    // relative to the rep's first point).
     assert_eq!(seen.len(), points.len());
     for (got, want) in seen.iter().zip(points.iter()) {
         assert_eq!(got.t_ms, want.t_ms - points[0].t_ms);
@@ -64,9 +57,6 @@ fn trace_streams_in_ble_sized_chunks() {
 
 #[test]
 fn every_streamed_chunk_carries_the_stream_total() {
-    // What the client uses to know it has the whole trace: it cannot derive the
-    // count from the summary, because the device re-chunks to fit the MTU
-    // (4 points here, 48 in the log).
     let points = trace(10);
     let mut streamer = TraceStreamer::all(fixture_uuid(3), points[0].t_ms, &points);
     let mut buf = [0u8; 512];
@@ -86,8 +76,6 @@ fn every_streamed_chunk_carries_the_stream_total() {
 
 #[test]
 fn stored_records_leave_the_stream_total_unset() {
-    // A record written to the log must not claim to be part of a stream: there,
-    // the summary's chunk_count is what describes the trace.
     let points = trace(4);
     let mut rec_buf = [0u8; 512];
     let n = pb::encode_trace_chunk(fixture_uuid(1), 0, points[0].t_ms, 0, &points, &mut rec_buf).unwrap();
@@ -116,7 +104,7 @@ fn chunk_count_matches_the_stream() {
 
 #[test]
 fn single_chunk_request_sends_exactly_one() {
-    let points = trace(20); // 5 chunks
+    let points = trace(20);
     let mut streamer = TraceStreamer::one(fixture_uuid(7), points[0].t_ms, &points, 3);
     let mut buf = [0u8; 512];
 
@@ -130,13 +118,12 @@ fn single_chunk_request_sends_exactly_one() {
         }
         other => panic!("expected a trace chunk, got {other:?}"),
     }
-    // ...and then the stream is finished.
     assert!(streamer.next_message(&mut buf).is_none());
 }
 
 #[test]
 fn out_of_range_single_chunk_yields_nothing() {
-    let points = trace(8); // 2 chunks (0, 1)
+    let points = trace(8);
     let mut streamer = TraceStreamer::one(fixture_uuid(7), 1000, &points, 9);
     let mut buf = [0u8; 512];
     assert!(streamer.next_message(&mut buf).is_none());
@@ -144,7 +131,6 @@ fn out_of_range_single_chunk_yields_nothing() {
 
 #[test]
 fn worst_case_chunk_fits_the_notification_budget() {
-    // Extreme values, so every field takes its maximum encoding.
     let worst = TracePoint {
         t_ms: u32::MAX,
         pos: [f32::MAX, f32::MIN, -1.5e30],
@@ -155,11 +141,6 @@ fn worst_case_chunk_fits_the_notification_budget() {
     let mut streamer = TraceStreamer::all(fixture_uuid(1), 0, &points);
     let mut buf = [0u8; 512];
     let n = streamer.next_message(&mut buf).unwrap();
-    // Two budgets, and the tighter one is the characteristic. The MTU is what the radio
-    // will carry; `SYNC_CHUNK_MAX` is what the payload can hold. A chunk under the MTU
-    // but over the characteristic is exactly the silent stop this exists to prevent: the
-    // characteristic was sized for a summary for a while, and a 193-byte chunk simply
-    // failed to notify, mid-trace, with nothing said at either end.
     assert!(
         n <= SYNC_CHUNK_MAX,
         "worst-case chunk is {n} bytes, over the {SYNC_CHUNK_MAX}-byte characteristic"
@@ -172,8 +153,6 @@ fn worst_case_chunk_fits_the_notification_budget() {
 
 #[test]
 fn worst_case_summary_fits_the_summary_characteristic() {
-    // The same hazard on the other characteristic, so it is pinned the same way: every
-    // field at its widest encoding.
     let summary = msg::RepSummary {
         rep_uuid: pb::uuid_to_field(&fixture_uuid(3)),
         t_start_ms: u32::MAX,
@@ -193,17 +172,11 @@ fn worst_case_summary_fits_the_summary_characteristic() {
     };
     let mut buf = [0u8; 512];
     let n = encode_summary_message(summary, &mut buf).unwrap();
-    // Asserted against the *notify characteristic's* ceiling rather than a
-    // summary-shaped one: a summary, a calibration status and a trace chunk all go
-    // out on the same characteristic now, and a payload that does not fit it fails to
-    // notify in silence (see `docs/GOTCHAS.md`).
     assert!(
         n <= SYNC_CHUNK_MAX,
         "worst-case summary is {n} bytes, over the {SYNC_CHUNK_MAX}-byte characteristic"
     );
 
-    // The third body sharing that characteristic. It is small, but it is the one that
-    // goes out once a second, so it is worth pinning where the others are.
     let n = encode_calibration_message(&Calibration::new(3, 3, 3, 0), &mut buf).unwrap();
     assert!(
         n <= SYNC_CHUNK_MAX,
@@ -228,13 +201,11 @@ fn summary_messages_and_cursor() {
         other => panic!("expected a summary, got {other:?}"),
     }
 
-    // The cursor tracks what the subscriber has already been sent.
     let mut cursor = SummaryCursor::new();
     assert_eq!(cursor.next(), 0);
     assert_eq!(cursor.remaining(4), 4);
     cursor.advance(2);
     assert_eq!(cursor.remaining(4), 2);
-    // Re-subscribing after reps fell off the ring rewinds to what exists.
     cursor.clamp_to(1);
     assert_eq!(cursor.next(), 1);
     cursor.clamp_to(9);
@@ -243,8 +214,6 @@ fn summary_messages_and_cursor() {
 
 #[test]
 fn calibration_status_carries_every_sensor() {
-    // The app's hint is only as specific as what it is told: each level has to
-    // survive, including the magnetometer it must *not* send the user chasing.
     let calibration = Calibration::new(3, 2, 1, 0);
     let mut buf = [0u8; 128];
     let n = encode_calibration_message(&calibration, &mut buf).unwrap();
@@ -259,7 +228,6 @@ fn calibration_status_carries_every_sensor() {
         other => panic!("expected a calibration status, got {other:?}"),
     }
 
-    // `ready` is the device's own gate, sent rather than left to the app.
     let n = encode_calibration_message(&Calibration::new(3, 3, 3, 0), &mut buf).unwrap();
     match pb::decode_sync(&buf[..n]).unwrap().body {
         Some(msg::SyncMessage_::Body::Calibration(c)) => {
@@ -269,10 +237,6 @@ fn calibration_status_carries_every_sensor() {
         other => panic!("expected a calibration status, got {other:?}"),
     }
 
-    // The state the hardware is actually in, and the one the app has to render as
-    // "recording": accel and gyro full, the aggregate at 0 for ever (it counts the
-    // magnetometer, which IMU mode does not calibrate). `sys` still travels, for a
-    // console that says which sensor is behind — it just is not the gate.
     let n = encode_calibration_message(&Calibration::new(0, 3, 3, 0), &mut buf).unwrap();
     match pb::decode_sync(&buf[..n]).unwrap().body {
         Some(msg::SyncMessage_::Body::Calibration(c)) => {
@@ -307,8 +271,7 @@ fn trace_requests_are_validated() {
     let one = decode_trace_request(&encode(fixture_uuid(12), false, 5)).unwrap();
     assert_eq!(one.chunk_index, 5);
 
-    // A short uuid is not an identity, and an absurd chunk index is rejected.
-    // (Its own buffer: the closure above holds `buf`.)
+    // Its own buffer: the closure above holds `buf`.
     let mut scratch = [0u8; 32];
     let too_short: heapless::Vec<u8, 16> = heapless::Vec::from_slice(&[1, 2, 3]).unwrap();
     let n = pb::encode_trace_request(
@@ -322,6 +285,5 @@ fn trace_requests_are_validated() {
     .unwrap();
     assert!(decode_trace_request(&scratch[..n]).is_none());
     assert!(decode_trace_request(&encode(fixture_uuid(1), false, 9999)).is_none());
-    // Garbage bytes don't panic.
     assert!(decode_trace_request(&[0xFF, 0xFF, 0xFF, 0xFF]).is_none());
 }

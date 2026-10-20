@@ -1,10 +1,3 @@
-// The BLE transport, driven through the plugin seam.
-//
-// No radio, no plugin, no device: a [FakeBleLink] stands in for the Bluetooth
-// stack, so the parts that are easy to get wrong — subscribing, the sync
-// protocol, chunk reassembly, knowing when a stream has ended, and behaving
-// sanely when the connection drops — are all exercised on the host.
-
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -24,7 +17,6 @@ import 'support/calibration.dart';
 import 'support/fake_ble_link.dart';
 import 'support/test_uuid.dart';
 
-/// A summary as the device reports one, for the rep with [uuid].
 pb.RepSummary summaryProto(String uuid, {int traceLen = 7}) => pb.RepSummary(
       repUuid: uuidToBytes(uuid)!,
       tStartMs: 10_000,
@@ -45,7 +37,6 @@ pb.RepSummary summaryProto(String uuid, {int traceLen = 7}) => pb.RepSummary(
 Uint8List summaryMessage(String uuid, {int traceLen = 7}) =>
     pb.SyncMessage(summary: summaryProto(uuid, traceLen: traceLen)).writeToBuffer();
 
-/// A trace chunk as the device streams it: three points, and the stream total.
 Uint8List chunkMessage(String uuid, int index, int total,
     {int points = 3, int from = 0, int? totalOverride}) {
   final samples = [
@@ -101,10 +92,6 @@ void main() {
   });
 
   test('discovery happens between connecting and subscribing', () async {
-    // iOS and macOS resolve characteristics against the peripheral's discovered
-    // service list, so subscribing first fails as "characteristic not found" for a
-    // UUID that is right. `FakeBleLink` throws in that order too, so this test
-    // fails if the call is ever dropped from `BleTransport.connect`.
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
 
@@ -120,12 +107,6 @@ void main() {
 
   test('a device that does not offer the sync service says so, and what it has',
       () async {
-    // The plugin reports a missing characteristic as "characteristicNotFound"
-    // naming the UUID we asked for — which is correct, so the message reads as a
-    // device fault and says nothing about the device. This replaces it with what
-    // the device actually offers, which is the only thing that can tell the two
-    // apart. (A device from *older firmware* has its own, more useful message —
-    // see the next test.)
     final link = FakeBleLink()
       ..services = const [
         DiscoveredService('0000fff0-0000-1000-8000-00805f9b34fb', [
@@ -145,11 +126,6 @@ void main() {
   });
 
   test('a reversed GATT tree names both causes', () async {
-    // The UUID byte order was got wrong once in the firmware, and a device flashed
-    // before that exposes its services reversed. But a *client* that cached the GATT
-    // database of an older build reports the same thing under the same address, and
-    // that cannot be fixed by reflashing — so the message names both, and the check
-    // for a stale cache comes first because it is the one that survives a reflash.
     final link = FakeBleLink()
       ..services = const [
         DiscoveredService('408813df-5dd4-1f87-ec11-cdb020ca0000', [
@@ -195,13 +171,10 @@ void main() {
 
     link.notify(CalypsoGatt.messages, summaryMessage(u(1)));
     link.notify(CalypsoGatt.messages, summaryMessage(u(2)));
-    // A re-send (the device streams everything on each subscribe) is not
-    // emitted twice, but is still known.
     link.notify(CalypsoGatt.messages, summaryMessage(u(2)));
     await pumpEventQueue();
 
     expect(seen, [u(1), u(2)]);
-    // Summaries come back ordered by uuid, and uuids do not sort by rep.
     expect((await transport.summaries()).map((s) => s.uuid), unorderedEquals([u(1), u(2)]));
     await sub.cancel();
     await transport.close();
@@ -217,13 +190,11 @@ void main() {
     final pending = transport.trace(u(1));
     await pumpEventQueue();
 
-    // The request is a bare TraceRequest (not wrapped in a SyncMessage).
     final request =
         pb.SyncRequest.fromBuffer(link.lastWriteTo(CalypsoGatt.requests)).trace;
     expect(uuidFromBytes(request.repUuid), u(1));
     expect(request.allChunks, isTrue);
 
-    // Chunks arrive out of order, with a duplicate, and totalChunks set.
     link.notify(CalypsoGatt.messages, chunkMessage(u(1), 2, 3, points: 1, from: 6));
     link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 3, from: 0));
     link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 3, from: 0));
@@ -253,8 +224,6 @@ void main() {
   });
 
   test('without totalChunks, a quiet stream counts as complete', () async {
-    // Firmware from before total_chunks landed: the client can only tell the
-    // stream ended by it going quiet.
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
     final pending = transport.trace(u(1));
@@ -287,7 +256,6 @@ void main() {
     final pending = transport.trace(u(3));
     await pumpEventQueue();
 
-    // Two of five chunks, then silence: the device no longer has the rest.
     link.notify(CalypsoGatt.messages, chunkMessage(u(3), 0, 5, from: 0));
     link.notify(CalypsoGatt.messages, chunkMessage(u(3), 1, 5, from: 3));
     await pumpEventQueue();
@@ -306,9 +274,6 @@ void main() {
     final pending = transport.trace(u(1));
     await pumpEventQueue();
 
-    // Attach the expectation *before* the drop: otherwise the request completes
-    // with an error before anything is listening, and the framework reports it as
-    // an unhandled error rather than a delivered one.
     final expectation = expectLater(pending, throwsA(isA<TraceUnavailableException>()));
 
     link.dropConnection('out of range');
@@ -335,10 +300,6 @@ void main() {
   });
 
   test('a chunk restarts the trace timeout, so a slow stream still lands', () async {
-    // The timeout is about silence, not about the whole stream taking a while: the log
-    // has a request whose first chunk arrived 22 s after it was sent, with the device
-    // streaming perfectly well. Here the total is twice the budget and each gap is
-    // inside it, which a whole-stream budget would have failed.
     final link = FakeBleLink();
     final transport = await connectedTransport(
       link,
@@ -360,8 +321,6 @@ void main() {
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
 
-    // Connected, but the device has not said anything yet: the hint must not
-    // invent a state it has not been told.
     expect(transport.calibration.latest, isNull);
 
     link.notify(CalypsoGatt.messages, calibrationMessage(sys: 1, accel: 1, gyro: 2));
@@ -373,7 +332,6 @@ void main() {
     expect(latest.ready, isFalse);
     expect(latest.action, contains('still on the rack'));
 
-    // The device re-sends once a second; an identical reading is not a change.
     var notifications = 0;
     transport.calibration.addListener(() => notifications++);
     link.notify(CalypsoGatt.messages, calibrationMessage(sys: 1, accel: 1, gyro: 2));
@@ -385,7 +343,6 @@ void main() {
     expect(notifications, 1);
     expect(transport.calibration.isReady, isTrue);
 
-    // The levels describe the connection they arrived on, so a drop takes them.
     link.dropConnection('out of range');
     await pumpEventQueue();
     expect(transport.calibration.latest, isNull);
@@ -403,7 +360,6 @@ void main() {
     expect(await transport.summaries(), isEmpty);
     expect(transport.status.status, BleStatus.connected, reason: 'still connected');
 
-    // ...and a good message still gets through afterwards.
     link.notify(CalypsoGatt.messages, summaryMessage(u(4)));
     await pumpEventQueue();
     expect((await transport.summaries()).single.uuid, u(4));
@@ -411,15 +367,13 @@ void main() {
   });
 
   test('device to plot: a synced trace lands in the archive and reads back', () async {
-    // The whole chain, on the host: notifications → transport → archive → trace.
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
     link.notify(CalypsoGatt.messages, summaryMessage(u(1), traceLen: 7));
     link.notify(CalypsoGatt.messages, summaryMessage(u(2), traceLen: 7));
     await pumpEventQueue();
 
-    // Play the device: answer each trace request with its chunks.
-    transport.watchSummaries().listen((_) {}); // keep the stream alive
+    transport.watchSummaries().listen((_) {});
     unawaited(() async {
       while (transport.status.isConnected) {
         await Future<void>.delayed(const Duration(milliseconds: 5));
@@ -439,7 +393,6 @@ void main() {
     final added = await archiveFromTransport(archive, transport);
     expect(added, 2);
 
-    // The archive is a real .pblog: the trace reads back from it.
     final trace = await archive.trace(u(1));
     expect(trace.length, 7);
     expect(trace.last.pz, closeTo(-0.06, 1e-6));

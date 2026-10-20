@@ -1,11 +1,3 @@
-// The list screen, driven through its injection seams.
-//
-// The screen takes an archive and a source, so these tests use an in-memory
-// archive and a transport built from fixture bytes read *synchronously*. That is
-// deliberate: widget tests run under a fake clock, where real asynchronous I/O
-// (file reads, asset loading) never completes — a screen that does I/O in
-// initState hangs there with the spinner running until pumpAndSettle times out.
-
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -26,7 +18,6 @@ import 'support/calibration.dart';
 import 'support/fake_ble_link.dart';
 import 'support/test_uuid.dart';
 
-/// Fixture bytes, read synchronously: no async I/O in the widget path.
 FixtureTransport fixtureTransport(String name) =>
     FixtureTransport.fromBytes(
       Uint8List.fromList(File('assets/fixtures/$name.pblog').readAsBytesSync()),
@@ -44,7 +35,6 @@ Future<void> pumpList(
   await tester.pumpAndSettle();
 }
 
-/// A summary notification, as the device sends one when a rep closes.
 Uint8List summaryMessage(String uuid) => pb.SyncMessage(
       summary: pb.RepSummary(
         repUuid: uuidToBytes(uuid)!,
@@ -69,9 +59,6 @@ void main() {
     expect(find.textContaining('Rep'), findsNWidgets(3));
     expect(find.text('+3 synced'), findsOneWidget);
 
-    // Newest first: the fixture's last rep is the top row, its first the bottom.
-    // Rows are labelled with a short uuid (the device's rep identity), not a
-    // rep number.
     final titles = tester
         .widgetList<ListTile>(find.byType(ListTile))
         .map((t) => (t.title as Text).data!)
@@ -79,13 +66,10 @@ void main() {
     expect(titles.first, startsWith('Rep ${uuidShort(u(2))} ·'));
     expect(titles.last, startsWith('Rep ${uuidShort(u(0))} ·'));
 
-    // Each row carries the numbers, and a timestamp (receipt time: the device
-    // has no clock of its own).
     expect(find.textContaining('ROM 0.4'), findsWidgets);
     expect(find.textContaining('tilt'), findsWidgets);
     expect(titles.first, matches(RegExp(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}')));
 
-    // The archive really holds them.
     expect(archive.reps.length, 3);
     expect(archive.reps.last.receivedAt, isNotNull);
   });
@@ -93,9 +77,6 @@ void main() {
   testWidgets('re-opening the app does not duplicate the archive', (tester) async {
     final archive = MemoryArchive();
     for (var i = 0; i < 2; i++) {
-      // A real restart replaces the whole tree, so unmount first: pumping the
-      // same widget type again would reuse the existing State and never re-run
-      // the sync at all.
       await tester.pumpWidget(const SizedBox.shrink());
       await pumpList(tester, fixture: 'synthetic-squat', archive: archive);
     }
@@ -135,8 +116,6 @@ void main() {
   });
 
   testWidgets('the archive is kept when the source goes away', (tester) async {
-    // Archive a rep, then re-pump with a source that has nothing to offer: the
-    // list still shows what the client already had (it is the archive of record).
     final archive = MemoryArchive();
     await pumpList(tester, fixture: 'synthetic-squat', archive: archive);
     expect(find.textContaining('Rep'), findsNWidgets(3));
@@ -146,11 +125,7 @@ void main() {
   });
 }
 
-/// The calibration hint, driven end to end: a notification from the device moves
-/// the UI, and the hint goes away when there is nothing to say.
 void _calibrationHint() {
-  /// Pumps the list screen over a fake link and connects it, as `_bleWiring`
-  /// does. Returns the link, for scripting the device's notifications.
   Future<FakeBleLink> pumpConnected(WidgetTester tester) async {
     final link = FakeBleLink();
     final ble = BleTransport(link, traceTimeout: const Duration(milliseconds: 50));
@@ -173,7 +148,6 @@ void _calibrationHint() {
   testWidgets('an uncalibrated device explains itself, then stops', (tester) async {
     final link = await pumpConnected(tester);
 
-    // Connected, but no reading yet: nothing to say.
     expect(find.textContaining('IMU not calibrated'), findsNothing);
 
     link.notify(CalypsoGatt.messages, calibrationMessage(sys: 1, accel: 1, gyro: 2));
@@ -181,14 +155,10 @@ void _calibrationHint() {
 
     expect(find.textContaining('IMU not calibrated'), findsOneWidget);
     expect(find.textContaining('rep recording is paused'), findsOneWidget);
-    // The words are the point: they say what to do with the bar, and the levels
-    // say which sensor is behind.
     expect(find.textContaining('still on the rack'), findsOneWidget);
     expect(find.textContaining('accel 1/3'), findsOneWidget);
     expect(find.textContaining('mag 0/3'), findsOneWidget);
 
-    // The IMU finishes calibrating: the hint goes away and the list has the
-    // screen to itself again.
     link.notify(CalypsoGatt.messages, calibrationMessage());
     await tester.pumpAndSettle();
     expect(find.textContaining('IMU not calibrated'), findsNothing);
@@ -201,9 +171,6 @@ void _calibrationHint() {
     await tester.pumpAndSettle();
     expect(find.textContaining('IMU not calibrated'), findsOneWidget);
 
-    // The levels describe the connection. Saying "rest the bar still" about a
-    // device we are no longer talking to would be telling the user to fix
-    // something we cannot see.
     link.dropConnection('out of range');
     await tester.pumpAndSettle();
     expect(find.textContaining('IMU not calibrated'), findsNothing);
@@ -223,8 +190,6 @@ void _calibrationHint() {
   });
 }
 
-/// A rep reported while the app is connected lands in the log, and the list is
-/// served from the log — no second Connect, and no rep state held in the widget.
 void _liveSummaries() {
   testWidgets('a rep that arrives while connected is written to the log and listed',
       (tester) async {
@@ -246,10 +211,6 @@ void _liveSummaries() {
     }
     expect(find.text('Connected'), findsOneWidget);
 
-    // The device closes a rep. Its trace is requested and the fake link answers
-    // nothing, so the request times out and the summary is archived without one —
-    // the documented behaviour for a trace the device no longer holds, not a
-    // failure.
     link.notify(CalypsoGatt.messages, summaryMessage(u(0)));
     await tester.pumpAndSettle();
 
@@ -257,8 +218,6 @@ void _liveSummaries() {
         reason: 'the list is the log, so it shows what the log just gained');
     expect(archive.contains(u(0)), isTrue, reason: 'and the log has it');
 
-    // The device re-streams summaries on every connection, and a rep can be
-    // summarised twice around a reconnect: the log is written once either way.
     link.notify(CalypsoGatt.messages, summaryMessage(u(0)));
     await tester.pumpAndSettle();
     expect(find.textContaining('Rep ${uuidShort(u(0))}'), findsOneWidget,
@@ -267,8 +226,6 @@ void _liveSummaries() {
   });
 }
 
-/// The BLE wiring, with a fake link: the Connect action drives the transport,
-/// the badge follows its state, and no plugin is touched.
 void _bleWiring() {
   testWidgets('connecting updates the badge and subscribes, with no hardware',
       (tester) async {
@@ -280,7 +237,6 @@ void _bleWiring() {
     ));
     await tester.pumpAndSettle();
 
-    // Nothing to show yet, and no device.
     expect(find.text('No reps yet'), findsOneWidget);
     expect(find.text('No device'), findsOneWidget);
 
@@ -288,7 +244,6 @@ void _bleWiring() {
     await tester.pump();
     expect(find.text('Scanning…'), findsOneWidget);
 
-    // The device answers the scan, so the transport connects and subscribes.
     link.seeDevice('device-1', 'Calypso');
     for (var i = 0; i < 8; i++) {
       await tester.pump(const Duration(milliseconds: 10));
@@ -299,14 +254,11 @@ void _bleWiring() {
     expect(link.subscribed, [CalypsoGatt.messages]);
     expect(find.text('Disconnect'), findsOneWidget);
 
-    // Disconnecting is reflected too.
     await tester.tap(find.text('Disconnect'));
     for (var i = 0; i < 8; i++) {
       await tester.pump(const Duration(milliseconds: 10));
     }
-    // Diagnostic: is the transport disconnected, the badge label, or the rebuild?
     expect(ble.status.status, BleStatus.disconnected);
-    expect(find.text('Disconnected'), findsOneWidget);
     expect(find.text('Disconnected'), findsOneWidget);
   });
 }

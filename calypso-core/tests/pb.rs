@@ -1,12 +1,7 @@
-//! Host tests for the protobuf record layer: round-trips, sizing against the
-//! flash log's record limit, and error handling.
-
 use calypso_core::pb::{self, msg, Record, TRACE_CHUNK_SAMPLES};
 use calypso_core::rep::TracePoint;
 use calypso_core::uuid::fixture_uuid;
 
-/// A summary with every field set, and its identity left to the caller: the uuid
-/// is minted when a rep closes, not with the statistics.
 fn sample_summary() -> msg::RepSummary {
     msg::RepSummary {
         t_start_ms: 12_345,
@@ -96,15 +91,11 @@ fn chunk_count_covers_the_trace() {
     assert_eq!(pb::chunk_count_for(1), 1);
     assert_eq!(pb::chunk_count_for(TRACE_CHUNK_SAMPLES), 1);
     assert_eq!(pb::chunk_count_for(TRACE_CHUNK_SAMPLES + 1), 2);
-    // A full 512-point trace (the device's trace buffer) fits in 11 chunks.
     assert_eq!(pb::chunk_count_for(512), 11);
 }
 
 #[test]
 fn full_chunk_fits_one_flash_sector() {
-    // The flash log's max record payload is one 4 KB sector minus its
-    // headers; a worst-case chunk (extreme values, all fields non-zero) must
-    // fit comfortably.
     let worst = TracePoint {
         t_ms: u32::MAX,
         pos: [f32::MAX, f32::MIN, -1.5e30],
@@ -114,11 +105,7 @@ fn full_chunk_fits_one_flash_sector() {
     let points = vec![worst; TRACE_CHUNK_SAMPLES];
     let mut buf = [0u8; 4096];
     let n = pb::encode_trace_chunk(fixture_uuid(1), 0, 0, 0, &points, &mut buf).unwrap();
-    // flashlog::max_payload for a 4 KB sector: 4096 - 8 (sector header)
-    // - 8 (record header) - 4 (trailer) = 4076.
     assert!(n <= 4076, "chunk encoded to {n} bytes, over the record limit");
-    // ... and the device's per-record scratch must hold it: the firmware
-    // encodes every chunk into one reusable buffer of this size.
     assert!(
         n <= calypso_core::store::RECORD_BUF_BYTES,
         "chunk encoded to {n} bytes, over RECORD_BUF_BYTES"
@@ -137,11 +124,8 @@ fn undersized_buffer_is_reported() {
 
 #[test]
 fn corrupt_bytes_do_not_decode() {
-    // A tag with field number 0 is invalid.
     assert_eq!(pb::decode_record(&[0x00]), Err(pb::Error::Decode));
-    // Truncated length-delimited field.
     assert_eq!(pb::decode_record(&[0x0A, 0x7F]), Err(pb::Error::Decode));
-    // Valid but empty record: no body set.
     assert_eq!(pb::decode_record(&[]), Err(pb::Error::Empty));
 }
 
@@ -153,21 +137,15 @@ fn trace_request_round_trips_in_its_envelope() {
         all_chunks: true,
         chunk_index: 0,
     };
-    // The app writes a `SyncRequest`, not a bare request: one characteristic carries
-    // every request, and this is what a client has to produce to ask for anything.
     let n = pb::encode_trace_request(&request, &mut buf).unwrap();
 
-    // The envelope is decodable on its own terms ...
     let envelope = pb::decode_sync_request(&buf[..n]).unwrap();
     assert!(matches!(envelope.body, Some(msg::SyncRequest_::Body::Trace(_))));
 
-    // ... and the request inside it comes back as it went in.
     let decoded = pb::decode_trace_request(&buf[..n]).unwrap();
     assert_eq!(pb::uuid_from_field(&decoded.rep_uuid), Some(fixture_uuid(42)));
     assert!(decoded.all_chunks);
 
-    // An envelope with no body is not a request: `is_ok()` has to keep meaning
-    // "there is a request here".
     assert_eq!(pb::decode_trace_request(&[]), Err(pb::Error::Empty));
 }
 
@@ -187,8 +165,6 @@ fn sync_message_carries_a_summary() {
 
 #[test]
 fn chunk_container_capacity_matches_the_constant() {
-    // The generated container type encodes the capacity from build.rs; if the
-    // two ever drift apart this assignment stops compiling.
     let chunk = msg::TraceChunk::default();
     let samples: heapless::Vec<msg::TraceSample, TRACE_CHUNK_SAMPLES> = chunk.samples;
     assert_eq!(samples.capacity(), TRACE_CHUNK_SAMPLES);

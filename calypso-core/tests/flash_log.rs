@@ -1,6 +1,3 @@
-//! Host tests for the flash log ring, against the shared mock NOR flash
-//! (see `tests/common/mod.rs`).
-
 mod common;
 
 use calypso_core::flashlog::{Error, FlashLog};
@@ -51,7 +48,6 @@ fn survives_remount() {
         )
     };
 
-    // Remount the same flash and continue where we left off.
     let mut log = FlashLog::mount(&mut flash).unwrap();
     let id3 = log.append(b"after remount").unwrap();
     assert_eq!(id3, id2 + 1);
@@ -67,22 +63,18 @@ fn survives_remount() {
 fn wrap_drops_oldest_sectors() {
     let mut flash = MockFlash::new();
     let mut log = mount(&mut flash);
-    // Payload sized so each sector holds ~2 records; write many to force wraps.
     let payload = [0x42u8; 100];
     let mut ids = Vec::new();
     for _ in 0..30 {
         ids.push(log.append(&payload).unwrap());
     }
-    // Collect what survived.
     let mut live = Vec::new();
     let mut buf = [0u8; 256];
     log.for_each(&mut buf, |id, _| live.push(id)).unwrap();
     assert!(live.len() < ids.len(), "expected some records to be dropped");
-    // Live records are the newest ones, in order.
     assert_eq!(*live.last().unwrap(), *ids.last().unwrap());
     let first_live = live[0];
     assert!(live.iter().copied().eq(first_live..=*ids.last().unwrap()));
-    // Data reads back intact.
     let n = log.read(*live.last().unwrap(), &mut buf).unwrap().unwrap();
     assert_eq!(&buf[..n], &payload[..]);
 }
@@ -96,20 +88,14 @@ fn corrupt_record_is_skipped_on_remount() {
         log.append(b"good2").unwrap();
     }
 
-    // Corrupt the payload region of the second record (simulate a torn write).
-    // Sector layout: 8-byte sector header, then record 1 ("good":
-    // 8 hdr + 4 payload + 4 trailer = 16 bytes), so record 2's payload starts
-    // at byte 8 + 16 + 8 = 32.
+    // Record 2's payload: 8-byte sector header + 16 bytes of record 1 + 8-byte header.
     flash.inner.data[32] ^= 0xFF;
 
     let mut log = FlashLog::mount(&mut flash).unwrap();
-    // The corrupt tail can't be rewritten (bits already programmed), so mount
-    // advances to a fresh sector; the good record in sector 0 survives.
     let mut buf = [0u8; 256];
     let n = log.read(1, &mut buf).unwrap().unwrap();
     assert_eq!(&buf[..n], b"good");
     assert!(log.read(2, &mut buf).unwrap().is_none());
-    // New appends keep working.
     let id = log.append(b"new").unwrap();
     let n = log.read(id, &mut buf).unwrap().unwrap();
     assert_eq!(&buf[..n], b"new");
@@ -119,7 +105,7 @@ fn corrupt_record_is_skipped_on_remount() {
 fn too_large_payload_rejected() {
     let mut flash = MockFlash::new();
     let mut log = mount(&mut flash);
-    let big = vec![0u8; SECTOR]; // way over max_payload for 256-byte sectors
+    let big = vec![0u8; SECTOR];
     assert!(matches!(log.append(&big), Err(Error::TooLarge)));
 }
 
@@ -149,6 +135,6 @@ fn region_too_small_rejected() {
         }
     }
     let mut tiny = Tiny(MockFlash::new());
-    tiny.0.inner.data.truncate(SECTOR); // only one sector
+    tiny.0.inner.data.truncate(SECTOR);
     assert!(matches!(FlashLog::mount(&mut tiny), Err(Error::RegionTooSmall)));
 }

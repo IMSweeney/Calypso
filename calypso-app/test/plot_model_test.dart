@@ -1,6 +1,3 @@
-// The plot model, tested without a canvas: axis fit, decimation, the speed
-// ramp, the camera and the projection/hit test.
-
 import 'dart:math' as math;
 import 'dart:ui' show Offset, Size;
 
@@ -9,7 +6,6 @@ import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vector_math/vector_math_64.dart';
 
-/// A squat-like trace: down to -[depth] and back, `count` points, 10 ms apart.
 List<pb.TraceSample> squatTrace({int count = 100, double depth = 0.4}) => [
       for (var i = 0; i < count; i++)
         pb.TraceSample(
@@ -33,8 +29,6 @@ void main() {
     expect(path.bounds.center.z, closeTo(-0.2, 0.01));
     expect(path.bounds.halfExtent, greaterThanOrEqualTo(0.2 - 0.01));
 
-    // A rep that barely moved still gets a usable cube, so it isn't stretched
-    // into a misleading shape.
     final flat = PlotPath.from([
       pb.TraceSample(
         tOffsetMs: 0,
@@ -72,8 +66,6 @@ void main() {
 
     expect(path.length, lessThanOrEqualTo(200));
     expect(path.length, greaterThan(150));
-    // Anchored at the end, like the firmware's own decimation: the rep's end is
-    // what you want to see.
     expect(path.points.last.tOffsetMs, trace.last.tOffsetMs,
         reason: 'the rep\'s end is what you plot');
     expect(path.points.first.tOffsetMs, trace[0].tOffsetMs,
@@ -100,7 +92,6 @@ void main() {
   });
 
   test('speed is derived from consecutive positions', () {
-    // 10 ms apart, 0.01 m apart on x: 1 m/s.
     final trace = [
       for (var i = 0; i < 5; i++)
         pb.TraceSample(
@@ -133,9 +124,6 @@ void main() {
     final quarter = path.length ~/ 4;
     final half = path.length ~/ 2;
 
-    // The trace is one full cosine period: down to the deepest point and back,
-    // so speed peaks a quarter of the way in and a quarter from the end, and is
-    // near zero at the turn in the middle.
     expect(path.speeds[quarter], greaterThan(path.speeds[1]));
     expect(path.speeds[quarter], greaterThan(path.speeds[half]));
 
@@ -144,8 +132,6 @@ void main() {
       if (path.speeds[i] < path.speeds[slowest]) slowest = i;
       if (path.speeds[i] > path.speeds[fastest]) fastest = i;
     }
-    // The descent and the ascent are symmetric, so the peak is at either
-    // quarter; discretisation picks whichever sample lands closest.
     final nearQuarter = (fastest - quarter).abs() <= path.length ~/ 10;
     final nearThreeQuarters = (fastest - 3 * quarter).abs() <= path.length ~/ 10;
     expect(nearQuarter || nearThreeQuarters, isTrue,
@@ -163,7 +149,6 @@ void main() {
     expect(camera.target.z, closeTo(path.bounds.center.z, 1e-9));
     expect(camera.eye.z, greaterThan(camera.target.z), reason: 'looking down');
 
-    // Elevation and zoom are clamped so the view can't invert or collapse.
     camera.orbitBy(0, 1000);
     expect(camera.elevationDeg, OrbitCamera.maxElevationDeg);
     camera.orbitBy(0, -10000);
@@ -183,10 +168,8 @@ void main() {
     expect(centre!.dx, closeTo(200, 1e-6));
     expect(centre.dy, closeTo(150, 1e-6));
 
-    // A point behind the camera has no screen position.
     final behind = camera.eye + (camera.eye - camera.target);
     expect(projection.toScreen(behind), isNull);
-    // Depth grows as you move away from the eye, along the view direction.
     final forward = (camera.target - camera.eye).normalized();
     expect(projection.depth(camera.target),
         lessThan(projection.depth(camera.target + forward)));
@@ -206,7 +189,6 @@ void main() {
     expect(hit, isNotNull);
     expect(path.points[hit!].tOffsetMs, target.tOffsetMs);
 
-    // Tapping well away from the path hits nothing.
     expect(projection.nearestPoint(path, const Offset(1, 1)), isNull);
   });
 }

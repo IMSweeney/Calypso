@@ -1,18 +1,9 @@
-/// A calibration status notification, as the device sends one.
-///
-/// Shared by the transport tests and the widget tests, so the wire form of the
-/// message is defined in one place rather than re-spelled per test file.
 library;
 
 import 'dart:typed_data';
 
 import 'package:calypso/protocol/calypso.pb.dart' as pb;
 
-/// A `SyncMessage` carrying a `CalibrationStatus`, encoded as the device sends it.
-///
-/// [ready] defaults to the device's own rule — accel, gyro and sys at 3, with the
-/// magnetometer unused in IMU mode — and can be forced, so a test can pin what
-/// happens if the two ever disagree.
 Uint8List calibrationMessage({
   int sys = 3,
   int accel = 3,

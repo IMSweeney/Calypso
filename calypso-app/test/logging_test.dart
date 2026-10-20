@@ -1,9 +1,3 @@
-// Logging: the pipeline is `package:logging`, and what is ours is the rotating file
-// appender and the one function that turns it on. The failure cases here matter as
-// much as the happy one — a debug log that throws while you are debugging the thing
-// it is watching is worse than no log, and a log that is silently empty is worse
-// still, because "nothing happened" and "logging is broken" then look identical.
-
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -32,12 +26,6 @@ void main() {
 
   File logFile(String name) => File('${dir.path}/$name');
 
-  /// The `ble` lines of a file, split into fields:
-  /// `<timestamp> <LEVEL> <logger> <rx|tx|raw> <uuid> <n>B <hex…>`.
-  ///
-  /// The startup line (logger `app`) is left out: it is there so that an empty log
-  /// is unambiguous, not to take part in what these tests are about. Split on runs of
-  /// whitespace, not on single spaces, because the level is padded to hold a column.
   Future<List<List<String>>> bleLines(String name) async {
     final file = logFile(name);
     if (!await file.exists()) return const [];
@@ -47,18 +35,10 @@ void main() {
     ];
   }
 
-  /// A message as the BLE transport logs one, for the rep numbered [i].
   String message(int i) => 'rx ca21 1B ${i.toRadixString(16).padLeft(2, '0')}';
 
-  /// The log line a message should appear as, spelled out rather than built with the
-  /// appender's own formatter: it is the file's contract, so a change to the shape
-  /// should fail here. The *bytes* are taken from what the test sent, because the same
-  /// logical message is a different number of bytes on each side (the device's
-  /// encoder omits zero-valued fields, Dart's protobuf does not).
   String line(String direction, String characteristic, List<int> bytes) {
     final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
-    // An empty payload ends at its `0B` rather than trailing a space — the shape the
-    // appender is written to produce.
     return hex.isEmpty
         ? '$direction $characteristic ${bytes.length}B'
         : '$direction $characteristic ${bytes.length}B $hex';
@@ -66,9 +46,6 @@ void main() {
 
   group('startFileLogging', () {
     test('says so at startup, so a quiet file is never ambiguous', () async {
-      // One record through the whole pipeline before anything else can go wrong: if
-      // this is all there is, logging works and nothing else happened; if the file is
-      // empty, logging is what is broken, not the device's silence.
       final logging = startFileLogging(() async => dir);
       await logging.close();
 
@@ -79,9 +56,6 @@ void main() {
     });
 
     test('records below the root level still reach the file', () async {
-      // The trap this exists for: `Logger.root.level` defaults to `Level.INFO`, so a
-      // debug-level line is dropped *before* any appender sees it — and the file is
-      // created anyway, leaving a log that looks fine and is empty.
       final logging = startFileLogging(() async => dir);
       Logger('ble').fine(message(0));
       await logging.close();
@@ -120,11 +94,9 @@ void main() {
       }
       await logging.close();
 
-      // Rotations shift up, so anything past `keep - 1` is gone...
       expect(await logFile('calypso.log').exists(), isTrue);
       expect(await logFile('calypso.log.$keep').exists(), isFalse);
 
-      // ...and what survives is whole lines, in order, ending with the last write.
       final payloads = <int>[];
       for (final name in ['calypso.log.2', 'calypso.log.1', 'calypso.log']) {
         for (final fields in await bleLines(name)) {
@@ -155,19 +127,16 @@ void main() {
     });
 
     test('a log it cannot open is dropped, and never thrown', () async {
-      // A *file* where the directory should be: `create(recursive: true)` fails.
       final blocker = File('${dir.path}/blocker')
         ..writeAsStringSync('not a directory');
       final logging = startFileLogging(() async => Directory('${blocker.path}/nested'));
 
-      Logger('ble').fine(message(1)); // queued, then dropped when the write fails
+      Logger('ble').fine(message(1));
       await logging.close();
     });
   });
 
   test('the transport reports the session, and every message in it', () async {
-    // No logger is passed in anywhere: the transport and the link log through the
-    // global pipeline, which is also why a test that does not capture writes no file.
     final records = captureLogs();
     final link = FakeBleLink();
     final transport = BleTransport(
@@ -186,7 +155,6 @@ void main() {
     link.notify(CalypsoGatt.messages, Uint8List(0));
     await pumpEventQueue();
 
-    // A trace request is the app's half of the conversation, logged as it goes out.
     await expectLater(
       transport.trace(u(1)),
       throwsA(isA<TraceUnavailableException>()),
@@ -196,8 +164,6 @@ void main() {
     await pumpEventQueue();
     await transport.close();
 
-    // The session, in order, so a file holding only these still says what happened:
-    // "nothing arrived" has three shapes and this is what tells them apart.
     final session = [
       for (final record in records)
         if (record.level >= Level.INFO) record.message,
@@ -208,8 +174,6 @@ void main() {
     expect(session, contains('connected to device-1'));
     expect(session, contains('connection lost: out of range'));
 
-    // And the conversation itself: one line per message, under `ble`, with the
-    // characteristic it was on.
     expect(records.map((r) => r.loggerName), everyElement('ble'));
     final messages = [for (final record in records) record.message];
     expect(

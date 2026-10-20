@@ -1,8 +1,3 @@
-/// A scriptable [RepTransport] for tests: no device, no fixtures, no timing.
-///
-/// Everything the sync client has to survive can be staged here: summaries
-/// arriving live, a trace that the device has forgotten, a trace that never
-/// answers, and chunks that arrive out of order or twice.
 library;
 
 import 'dart:async';
@@ -15,7 +10,6 @@ import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:calypso/sync/trace_reassembly.dart';
 import 'package:calypso/transport/transport.dart';
 
-/// Builds a summary with sensible defaults, so tests only state what matters.
 pb.RepSummary summary(
   int index, {
   int durationMs = 1400,
@@ -43,7 +37,6 @@ pb.RepSummary summary(
       decimated: decimated,
     );
 
-/// Builds a trace of [count] points, 10 ms apart, sinking to -0.4 m.
 List<pb.TraceSample> tracePoints(int count, {int startMs = 0}) => [
       for (var i = 0; i < count; i++)
         pb.TraceSample(
@@ -61,10 +54,6 @@ List<pb.TraceSample> tracePoints(int count, {int startMs = 0}) => [
         ),
     ];
 
-/// Splits points into protocol chunks of [perChunk], the way the device streams
-/// them over BLE: every chunk carries the total, so a client knows which is last.
-///
-/// The chunks carry [uuid], so they belong to the rep a test named.
 List<pb.TraceChunk> chunksFor(String uuid, List<pb.TraceSample> points, {int perChunk = 4}) {
   final chunks = <pb.TraceChunk>[];
   for (var start = 0; start < points.length; start += perChunk) {
@@ -112,13 +101,10 @@ class FakeTransport implements RepTransport {
 
   List<pb.RepSummary> _stored;
 
-  /// Traces keyed by the uuid the transport API uses, built from test indices.
   final Map<String, List<pb.TraceSample>> _points;
 
-  /// Reps whose trace the device no longer has (the ring overwrote them).
   final Set<String> _missing;
 
-  /// Simulates a device that accepts a request and never answers.
   final Duration traceDelay;
   final bool failSummaries;
 
@@ -126,16 +112,13 @@ class FakeTransport implements RepTransport {
   int summariesCalls = 0;
   int traceCalls = 0;
 
-  /// What the transport is holding now — mutate to simulate a device-side wrap.
   void setStored(List<pb.RepSummary> stored) => _stored = stored;
 
-  /// Pushes a summary as if the device had just recorded it.
   void emit(pb.RepSummary s) {
     _stored = [..._stored, s];
     _live.add(s);
   }
 
-  /// Drops the live stream, as a disconnect would.
   void dropConnection() => _live.close();
 
   @override
@@ -163,8 +146,6 @@ class FakeTransport implements RepTransport {
   @override
   Future<void> close() async => _live.close();
 
-  /// Reassembles a trace from protocol chunks, mirroring what the BLE transport
-  /// will do with notifications.
   static List<pb.TraceSample> reassemble(String uuid, Iterable<pb.TraceChunk> chunks) {
     final assembler = TraceAssembler(uuid);
     for (final chunk in chunks) {
