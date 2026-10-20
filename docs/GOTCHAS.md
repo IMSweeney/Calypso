@@ -353,6 +353,21 @@ message kind, and the three senders encode into one shared buffer. The remaining
 to get this wrong is the *other* direction: a request the app writes is rejected by the
 stack if it does not fit `sync.requests`, and the app sees the failure.
 
+### The app's trace timeout is about silence, not the size of the rep
+
+**Symptom.** A long rep's trace stops part-way and the rep lands in the archive without
+one, while the device is streaming it perfectly well.
+
+**Cause.** The budget is *per gap*, not per stream. `BleTransport` restarts the timer on
+every chunk, because how long a trace takes is a function of its length and the link, and
+a whole-stream budget fails the large reps it was meant to protect. The log has a request
+whose first chunk arrived 22 s after it was sent: inside a 30 s budget only because the
+budget restarts, and a whole-stream one would have given up on a healthy device.
+
+**Fix.** Leave it restarting. A stream that has gone *quiet* is the separate case, and
+`chunkIdleTimeout` (700 ms) is what closes it — that is what ends a stream from firmware
+that never set `total_chunks`.
+
 ## Types
 
 ### The device keeps two types off the wire, on purpose
@@ -438,3 +453,39 @@ tests without `protoc`. Re-run `calypso-app/tool/gen_proto.sh` only when
 `proto/calypso.proto` changes, and commit the result. Regenerating adds new
 `SyncMessage` oneof arms, which makes the app's `switch` over them
 non-exhaustive — the analyzer will say where.
+
+### The Dart test uuid generator is a port of the Rust one
+
+Tests name a rep by index — `u(1)` in Dart, `fixture_uuid(1)` in Rust — and the two must
+mint the same bytes, because a checked-in fixture carries the uuids the generator wrote
+and the Dart suite asserts on them by index (`summary.uuid == u(i)`).
+`calypso-app/test/support/test_uuid.dart` is a byte-for-byte port of
+`calypso_core::uuid::fixture_uuid`: SplitMix64, four 32-bit words most significant byte
+first, then RFC 4122 version and variant bits. **Change one, change the other**, or every
+fixture-named test fails at once and the port stops being checkable.
+
+### Attach an expectation before the failure it expects
+
+**Symptom.** A test that drops a connection to fail an in-flight request reports an
+*unhandled* error, or its `expectLater` never sees the error at all.
+
+**Cause.** `expectLater` is what attaches the matcher to the future. If the future
+completes with an error before anything is listening, the framework reports it as
+unhandled rather than delivered to the test.
+
+**Fix.** `final expectation = expectLater(pending, throwsA(…));` *before* triggering the
+failure, then `await expectation;` — `ble_transport_test.dart`, the dropped connection.
+
+### A widget test restarts nothing unless it unmounts first
+
+Pumping the same widget type again matches the existing element, so the `State` is reused
+and `initState` — and any sync it kicks off — never runs. A test that means "the app was
+reopened" has to `await tester.pumpWidget(const SizedBox.shrink())` first
+(`rep_list_test.dart`).
+
+### A host GATT table cannot check a characteristic's properties
+
+`trouble-host`'s table exposes a characteristic's value and type, not its properties, and
+`table.set` does not consult them either. So nothing in `tests/gatt_table.rs` can tell a
+read-only characteristic from a writable one: the device name's read-only-ness is pinned
+by `build_gatt_table`, and the test there can only pin the value.
