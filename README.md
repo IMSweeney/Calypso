@@ -34,3 +34,19 @@ cd calypso-app && flutter test
 test harness needs `std`. Testable logic lives in `calypso-core`, which is where
 the firmware tests run from.
 
+## Formatting
+
+Rust is formatted with `cargo fmt`, Dart with `dart format` — the ones the
+toolchains ship, with no project config to disagree about. A pre-commit hook
+checks the components a commit touches, and blocks on drift:
+
+```sh
+git config core.hooksPath .githooks   # once per clone
+```
+
+It only *checks*. Run `cargo fmt` in the crate (or `dart format .` in
+`calypso-app`), re-stage, and commit again — a hook that rewrote the files would
+leave the index holding the bytes it just replaced, so the commit would go in
+unformatted while the working tree looked right. `git commit --no-verify` skips
+it; so does a clone that has not run the config above.
+

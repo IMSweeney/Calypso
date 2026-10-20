@@ -1,0 +1,62 @@
+#!/bin/sh
+# Runs each component's own formatter, but only for the components a commit
+# touches. Check-only by design: a hook that rewrote the files would leave the
+# index holding the bytes it just replaced, so the commit would go in unformatted
+# while the working tree looked fine.
+#
+# Enable once per clone: `git config core.hooksPath .githooks` (see README.md).
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+fail=0
+
+check_rust() {
+	dir=$1
+	printf '%s\n' "$staged" | grep -q "^$dir/.*\.rs$" || return 0
+	[ -d "$dir" ] || return 0
+
+	printf 'formatter: cargo fmt --check in %s\n' "$dir"
+	if out=$(cd "$dir" && cargo fmt --check 2>&1); then
+		return 0
+	fi
+
+	# A crate with no toolchain (the pin is `esp`, which is not every machine)
+	# is not a formatting failure: say so and let the commit through.
+	if printf '%s' "$out" | grep -qi 'not installed\|no such command'; then
+		printf 'warning: %s not checked: %s\n' "$dir" "$(printf '%s' "$out" | head -1)"
+		return 0
+	fi
+
+	if printf '%s' "$out" | grep -q '^Diff in'; then
+		repo_root=$(git rev-parse --show-toplevel)/
+		printf '%s\n' "$out" | grep '^Diff in' \
+			| sed -e 's/^Diff in //' -e 's/ at line [0-9]*:$//' -e 's/:[0-9]*:$//' \
+				-e "s|^$repo_root||" \
+			| sort -u | sed 's/^/  /'
+		printf '%s is not formatted: run `cargo fmt` in %s, re-stage, and commit again.\n' \
+			"$dir" "$dir"
+	else
+		printf '%s\n' "$out"
+		printf 'could not check %s: run `cargo fmt` there to see why.\n' "$dir"
+	fi
+	fail=1
+}
+
+check_rust calypso-core
+check_rust calypso-esp32
+
+if printf '%s\n' "$staged" | grep -q '^calypso-app/.*\.dart$'; then
+	if command -v dart >/dev/null 2>&1; then
+		printf 'formatter: dart format --set-exit-if-changed in calypso-app\n'
+		if ! out=$(cd calypso-app && dart format --output=none --set-exit-if-changed . 2>&1); then
+			printf '%s\n' "$out"
+			printf 'calypso-app is not formatted: run `dart format .` in calypso-app, re-stage, and commit again.\n'
+			fail=1
+		fi
+	else
+		printf 'warning: calypso-app not checked: no `dart` on PATH\n'
+	fi
+fi
+
+exit $fail

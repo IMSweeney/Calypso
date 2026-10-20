@@ -4,3 +4,4 @@
 - When you can, test each interface against a recording of real or synthetic data
 - Fail fast. Unexpected errors should cause a crash in dev, expected errors should warn and retry. Never swallow an error silently
 - One source of schema; any data schema used across client and device goes in proto. Use generated proto objects rather than converting to language specific types where possible (unless performance dictates otherwise)
+- Format with the toolchain's formatter before committing: `cargo fmt` in the Rust crates, `dart format .` in calypso-app. The pre-commit hook checks the components a commit touches; there is no CI to catch it later
