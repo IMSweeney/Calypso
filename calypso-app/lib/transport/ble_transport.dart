@@ -26,16 +26,15 @@ import 'transport.dart';
 
 /// The device's GATT layout, from `calypso-core::ble`.
 ///
-/// A single sync service with three characteristics: a summary notification, a
-/// trace-request write, and a trace-chunk notification. Both notification
-/// characteristics carry `SyncMessage` envelopes; the *request* is a bare
-/// `TraceRequest` (the firmware decodes it directly), which is a small asymmetry
-/// worth remembering when reading the two directions side by side.
+/// One service and one characteristic each way: everything the device says is a
+/// `SyncMessage` on [messages], and everything the app asks for is a `SyncRequest`
+/// on [requests]. The body of the message says what it is — a calibration status,
+/// a summary, a trace chunk — so a new kind of message is a new arm of the oneof,
+/// not a new characteristic.
 class CalypsoGatt {
   static const String service = '0000ca20-b0cd-11ec-871f-d45ddf138840';
-  static const String summary = '0000ca21-b0cd-11ec-871f-d45ddf138840';
-  static const String traceRequest = '0000ca22-b0cd-11ec-871f-d45ddf138840';
-  static const String traceChunk = '0000ca23-b0cd-11ec-871f-d45ddf138840';
+  static const String messages = '0000ca21-b0cd-11ec-871f-d45ddf138840';
+  static const String requests = '0000ca22-b0cd-11ec-871f-d45ddf138840';
 }
 
 /// Which way a logged message went: the first word of its log line.
@@ -76,8 +75,7 @@ class BleTransport implements RepTransport {
   final CalibrationNotifier calibration = CalibrationNotifier();
 
   String? _deviceId;
-  StreamSubscription<Uint8List>? _summarySub;
-  StreamSubscription<Uint8List>? _chunkSub;
+  StreamSubscription<Uint8List>? _messagesSub;
   final StreamController<RepSummary> _summaryCtrl = StreamController<RepSummary>.broadcast();
 
   /// Summaries the device has told us about, by rep id.
@@ -157,7 +155,7 @@ class BleTransport implements RepTransport {
       // its side (`sync service uuid …`) at boot.
       debugPrint(
         'calypso: device offers ${_describe(services)}; '
-        'want ${CalypsoGatt.service}[${CalypsoGatt.summary}, ${CalypsoGatt.traceChunk}]',
+        'want ${CalypsoGatt.service}[${CalypsoGatt.messages}, ${CalypsoGatt.requests}]',
       );
       if (!_offersSync(services)) {
         // CoreBluetooth's tree can still be filling in when discovery returns, so
@@ -187,23 +185,17 @@ class BleTransport implements RepTransport {
         // this names the characteristic we asked for, which is correct — so it
         // reads as a device fault while telling us nothing about the device.
         throw StateError(
-          'device offers ${_describe(services)}, not ${CalypsoGatt.summary} '
-          'under ${CalypsoGatt.service}',
+          'device offers ${_describe(services)}, not both characteristics of '
+          '${CalypsoGatt.service} (${CalypsoGatt.messages}, ${CalypsoGatt.requests})',
         );
       }
-      await _link.subscribe(deviceId, CalypsoGatt.service, CalypsoGatt.summary);
-      await _link.subscribe(deviceId, CalypsoGatt.service, CalypsoGatt.traceChunk);
+      await _link.subscribe(deviceId, CalypsoGatt.service, CalypsoGatt.messages);
       // Instrumentation: subscribing is the half of this link the app initiates. A
       // hint that never appears has three shapes — never sent, notifications never
       // enabled, or received and ignored — and the device logs the first, this logs
       // the second, and `calypso: rx` logs the third.
-      debugPrint(
-        'calypso: notifications enabled for ${CalypsoGatt.summary} and '
-        '${CalypsoGatt.traceChunk}',
-      );
-      bleLog.info(
-        'subscribed to ${CalypsoGatt.summary} and ${CalypsoGatt.traceChunk}',
-      );
+      debugPrint('calypso: notifications enabled for ${CalypsoGatt.messages}');
+      bleLog.info('subscribed to ${CalypsoGatt.messages}');
     } catch (e) {
       bleLog.warning('could not connect to $deviceId: $e');
       status.set(BleStatus.failed, deviceId: deviceId, error: '$e');
@@ -218,12 +210,12 @@ class BleTransport implements RepTransport {
     // Inside a guard too: a stream that cannot be opened is a failed connection,
     // not something to leak into the widget tree as an unhandled error.
     try {
-      _summarySub = _link
-          .valueStream(deviceId, CalypsoGatt.summary)
-          .listen((bytes) => _onMessage(bytes, CalypsoGatt.summary));
-      _chunkSub = _link
-          .valueStream(deviceId, CalypsoGatt.traceChunk)
-          .listen((bytes) => _onMessage(bytes, CalypsoGatt.traceChunk));
+      // One stream, one listener: summaries, calibration and trace chunks all
+      // arrive here, and ordering between them is BLE's to keep rather than two
+      // independent plugin streams'.
+      _messagesSub = _link
+          .valueStream(deviceId, CalypsoGatt.messages)
+          .listen(_onMessage);
     } catch (e) {
       bleLog.warning('could not listen to $deviceId: $e');
       status.set(BleStatus.failed, deviceId: deviceId, error: '$e');
@@ -235,12 +227,13 @@ class BleTransport implements RepTransport {
     status.set(BleStatus.connected, deviceId: deviceId);
   }
 
-  /// Whether a discovered tree holds the sync service and its summary
-  /// characteristic, the minimum needed to talk to a device.
+  /// Whether a discovered tree holds the sync service with the characteristic each
+  /// way: without both, the device can neither be heard nor asked anything.
   static bool _offersSync(List<DiscoveredService> services) => services.any(
         (service) =>
             _sameUuid(service.uuid, CalypsoGatt.service) &&
-            service.characteristics.any((c) => _sameUuid(c, CalypsoGatt.summary)),
+            service.characteristics.any((c) => _sameUuid(c, CalypsoGatt.messages)) &&
+            service.characteristics.any((c) => _sameUuid(c, CalypsoGatt.requests)),
       );
 
   /// UUIDs arrive in whatever case the platform prefers — CoreBluetooth gives
@@ -280,10 +273,8 @@ class BleTransport implements RepTransport {
     // wedged platform channel), and nothing here needs confirmation that the
     // cancel finished: the listeners are nulled below and `_onMessage` drops
     // anything that still arrives.
-    _summarySub?.cancel();
-    _chunkSub?.cancel();
-    _summarySub = null;
-    _chunkSub = null;
+    _messagesSub?.cancel();
+    _messagesSub = null;
     final deviceId = _deviceId;
     _deviceId = null;
     if (deviceId != null) {
@@ -357,20 +348,25 @@ class BleTransport implements RepTransport {
     _requestTimers.remove(uuid)?.cancel();
     _requestTimers[uuid] = Timer(traceTimeout, () => _timeoutRequest(uuid));
 
-    final request = pb.TraceRequest(
-      repUuid: uuidToBytes(uuid) ?? Uint8List(0),
-      allChunks: true,
+    // The request goes in a `SyncRequest` envelope: one characteristic carries every
+    // request the app makes, so asking for something new (clearing the device's log,
+    // say) is a new arm of the oneof rather than a new characteristic.
+    final request = pb.SyncRequest(
+      trace: pb.TraceRequest(
+        repUuid: uuidToBytes(uuid) ?? Uint8List(0),
+        allChunks: true,
+      ),
     );
     final payload = request.writeToBuffer();
     // Logged before the write, not after: a write that fails is exactly the thing
     // the log is for, and "requested but never sent" is worth telling apart from
     // "never requested".
-    _logMessage(_Direction.tx, CalypsoGatt.traceRequest, payload);
+    _logMessage(_Direction.tx, CalypsoGatt.requests, payload);
     try {
       await _link.write(
         deviceId,
         CalypsoGatt.service,
-        CalypsoGatt.traceRequest,
+        CalypsoGatt.requests,
         payload,
       );
     } catch (e) {
@@ -436,11 +432,11 @@ class BleTransport implements RepTransport {
   /// [characteristic] is which of the two notification characteristics carried
   /// it: the streams are merged here, and only the caller knows which is which, so
   /// the log can say.
-  void _onMessage(Uint8List bytes, String characteristic) {
+  void _onMessage(Uint8List bytes) {
     // Logged before the guards below: the point of the file is what the radio
     // actually delivered, including a straggler from a connection already torn
     // down.
-    _logMessage(_Direction.rx, characteristic, bytes);
+    _logMessage(_Direction.rx, CalypsoGatt.messages, bytes);
     // Also dropped: a straggling notification from a connection we have already
     // torn down (the subscription cancel above is not awaited).
     if (_closed || _deviceId == null) return;

@@ -1,7 +1,6 @@
 //! Host tests for the BLE sync streaming logic: BLE-sized trace chunks, the
 //! summary cursor, and request decoding. No radio involved.
 
-use calypso_core::ble::SYNC_MSG_MAX;
 use calypso_core::calibration::Calibration;
 use calypso_core::pb::{self, msg, Record};
 use calypso_core::rep::{RepSummary, TracePoint};
@@ -196,9 +195,21 @@ fn worst_case_summary_fits_the_summary_characteristic() {
     );
     let mut buf = [0u8; 512];
     let n = encode_summary_message(summary, &mut buf).unwrap();
+    // Asserted against the *notify characteristic's* ceiling rather than a
+    // summary-shaped one: a summary, a calibration status and a trace chunk all go
+    // out on the same characteristic now, and a payload that does not fit it fails to
+    // notify in silence (see `docs/GOTCHAS.md`).
     assert!(
-        n <= SYNC_MSG_MAX,
-        "worst-case summary is {n} bytes, over the {SYNC_MSG_MAX}-byte characteristic"
+        n <= SYNC_CHUNK_MAX,
+        "worst-case summary is {n} bytes, over the {SYNC_CHUNK_MAX}-byte characteristic"
+    );
+
+    // The third body sharing that characteristic. It is small, but it is the one that
+    // goes out once a second, so it is worth pinning where the others are.
+    let n = encode_calibration_message(&Calibration::new(3, 3, 3, 0), &mut buf).unwrap();
+    assert!(
+        n <= SYNC_CHUNK_MAX,
+        "worst-case calibration status is {n} bytes, over the {SYNC_CHUNK_MAX}-byte characteristic"
     );
 }
 

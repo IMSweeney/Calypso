@@ -8,8 +8,8 @@ each one is symptom → cause → what to do.
 ### A flash write or erase needs the other core parked
 
 **Symptom.** Every erase and write fails — including the log partition's first
-format — while reads work perfectly. The stored calibration and device name read
-back fine, so it looks like broken flash or a bad partition.
+format — while reads work perfectly. The stored calibration reads back fine, so it
+looks like broken flash or a bad partition.
 
 **Cause.** `esp-storage`'s default `MultiCoreStrategy::Error` refuses every write
 and erase while CPU1 is running, and on this build CPU1 is up from the
@@ -79,12 +79,14 @@ it to "a read in sector 6", and the probe reading that whole sector end to end f
 shallower frame is what proved the bytes were fine and pointed at the shape of the call
 rather than the flash.
 
-### NVS is not one big blob
+### NVS holds one thing, in one sector
 
-Two separate regions, deliberately: the BNO055 calibration profile starts at
-offset `0x00`, the BLE device name blob at `0x1000` — the second flash sector — so
-erasing one can never touch the other. NOR flash bits only go from 1 to 0, so a
-save is erase-then-write, not an overwrite.
+The BNO055 calibration profile starts at offset `0x00`, and that is the whole of
+it now. It used to share the partition with a BLE device-name blob at `0x1000`
+— a second sector, so that erasing either could never touch the other — until the
+name became a compile-time constant (the app can no longer rename the device).
+NOR flash bits only go from 1 to 0, so a save is erase-then-write, not an
+overwrite, and the sector erase is why one region per sector was ever the layout.
 
 ## Stack and heap
 
@@ -231,6 +233,24 @@ stores **wire order in both places** and a client reverses both — `40 88 13 df
 Getting this wrong the other way round is how the device once exposed every
 service as `408813df-…` while the app looked for `0000ca20-…`.
 
+### trouble-host's `GapConfig` builds GAP once per process, not once per table
+
+**Symptom.** A test that builds the GATT table panics with `StaticCell is already
+full, it can't be initialized twice`, but only when another test in the same
+process built one first. The firmware — which builds one table, once — is fine.
+
+**Cause.** `GapConfig::Peripheral(name, appearance).build(&mut table)` is exactly
+what a device with a read-only name wants, and it replaces the hand-built GAP
+service. But it keeps the name in a **function-local `static
+StaticCell<String<22>>`** (`trouble-host/src/gap.rs`), initialised with `.init()`,
+and `static_cell` panics when a cell is initialised twice. One table per process is
+assumed, and a host test suite is many tables in one process.
+
+**Fix.** GAP stays hand-built in `calypso_core::ble` — four lines, with the device
+name at `&[CharacteristicProp::Read]`. Using the library's config would have made
+`tests/gatt_table.rs` unrunnable, which is worth more than those four lines: that
+suite is how the table is checked at all.
+
 ### A client must discover services before subscribing
 
 CoreBluetooth's peripheral has no characteristics until `discoverServices` has
@@ -280,18 +300,21 @@ evidence, unlike a notification's result (see below).
 
 **Symptom.** A client subscribes, the write is accepted, the device logs that the
 notification was delivered — and nothing ever arrives. Both our app and an
-off-the-shelf scanner saw the silence, while the *gravity* characteristic notified
-happily.
+off-the-shelf scanner saw the silence, while another characteristic (the gravity
+one the table had then) notified happily.
 
 **Cause.** `AttributeServer`'s `CCCD_MAX` is how many characteristics a client can
 subscribe to, and the firmware passed `1`. The server keeps one CCCD table per client
 with exactly that many entries, fills it with the first CCCDs it finds in the
 attribute table, and **drops the rest without a word**: `set_notify` matches no
 handle and does nothing, `should_notify` is then false, and
-`Characteristic::notify` returns `Ok(())` *without sending anything*. The one slot
-went to gravity, added before the sync service — so `0xca11` worked and `0xca21` /
-`0xca23` (calibration, summaries, traces) were dead. Every host test passed: they
-check the table and the encoders, not that a subscription survives.
+`Characteristic::notify` returns `Ok(())` *without sending anything*. That one slot
+went to the gravity characteristic, which came before the sync service in the table
+— so it worked and `0xca21` / `0xca23` (calibration, summaries, traces) were dead.
+Every host test passed: they check the table and the encoders, not that a
+subscription survives. (The gravity characteristic is gone now, and the sync service
+has one notifiable characteristic rather than two — so the count cannot be got wrong
+in the same way again. It is still derived, and still checked against the table.)
 
 **Fix.** `calypso_core::ble::NOTIFIABLE_CHARACTERISTICS`, passed as the server's
 `CCCD_MAX`, with a host test asserting the constant equals the number of CCCDs
@@ -311,18 +334,24 @@ stopping part-way. Nothing is logged at either end.
 
 **Cause.** A payload that does not fit the characteristic it is notified on fails to
 notify *silently*: `Characteristic::notify` is never reached, because the payload cannot
-be built. The trace-chunk characteristic was typed `BleVec<SYNC_MSG_MAX>` (128 bytes,
-sized for a *summary*) while `sync::SYNC_CHUNK_MAX` is 193 for a 3-sample chunk — so a
-chunk past 128 bytes simply ended the stream. Two things hid it: the notification was
-never attempted, so no radio-level error was possible; and the worst-case test bounded
-chunks against the MTU (244) rather than against the characteristic (128).
+be built. The trace-chunk characteristic was typed for a *summary* (128 bytes) while
+`sync::SYNC_CHUNK_MAX` is 193 for a 3-sample chunk — so a chunk past 128 bytes simply
+ended the stream. Two things hid it: the notification was never attempted, so no
+radio-level error was possible; and the worst-case test bounded chunks against the MTU
+(244) rather than against the characteristic (128).
 
 **Fix.** The characteristic is sized to `SYNC_CHUNK_MAX`, the firmware's store for it
 with that, and `stream_trace`'s payload too — plus tests that make the sizes impossible
-to get wrong quietly: the GATT table test types the chunk characteristic as
-`BleVec<SYNC_CHUNK_MAX>`, and the encoder test bounds a worst-case chunk *and* a
-worst-case summary against the characteristic each is notified on. `stream_trace` now also
-*says* when a chunk does not fit, rather than returning in silence.
+to get wrong quietly: the GATT table test types the notify characteristic as
+`BleVec<SYNC_CHUNK_MAX>`, and the encoder test bounds a worst-case chunk, summary *and*
+calibration status against it. `stream_trace` now also *says* when a chunk does not fit,
+rather than returning in silence.
+
+**Since.** There is one notify characteristic for everything the device sends
+(`sync.messages`), so there is one ceiling to keep ahead of rather than one per
+message kind, and the three senders encode into one shared buffer. The remaining way
+to get this wrong is the *other* direction: a request the app writes is rejected by the
+stack if it does not fit `sync.requests`, and the app sees the failure.
 
 ## Tests and tooling
 

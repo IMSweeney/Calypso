@@ -98,6 +98,11 @@ message RepRecord {
 }
 
 // --- BLE sync -------------------------------------------------------------
+//
+// Two characteristics carry this protocol, one in each direction: `requests`
+// (app -> device, a `SyncRequest`) and `messages` (device -> app, a
+// `SyncMessage`). One of each, so a new operation is a new arm of these oneofs
+// rather than a new characteristic and a new UUID.
 
 // Sent by the app to request a rep's trace. `chunk_index` is ignored unless
 // `all_chunks` is false.
@@ -107,7 +112,19 @@ message TraceRequest {
   uint32 chunk_index = 3;
 }
 
+// Everything sent app -> device on the sync service.
+message SyncRequest {
+  oneof body {
+    TraceRequest trace = 1;  // answered by `SyncMessage.trace`, in chunks
+  }
+}
+
 // Everything sent device -> app on the sync service.
+//
+// A response and a push look alike here, and the client tells them apart by the
+// body: a `trace` belongs to the `TraceRequest` that asked for it (its chunks
+// carry the rep's UUID), while `summary` and `calibration` arrive because the
+// client subscribed, not because it asked.
 message SyncMessage {
   oneof body {
     RepSummary summary = 1;  // auto-streamed as reps are recorded

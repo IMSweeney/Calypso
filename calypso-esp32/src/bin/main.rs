@@ -34,7 +34,7 @@ use embedded_storage::nor_flash::NorFlash;
 
 use bno055::{BNO055OperationMode, BNO055Calibration, BNO055_CALIB_SIZE};
 use bno055::Bno055;
-use calypso_core::ble::{BleVec, SYNC_MSG_MAX};
+use calypso_core::ble::{BleVec, SYNC_REQUEST_MAX};
 use calypso_core::calibration::Calibration;
 use calypso_core::flashlog::{self, FlashLog};
 use calypso_core::pb::msg;
@@ -67,15 +67,10 @@ const L2CAP_CHANNELS_MAX: usize = 2;
 
 const BNO055_CALIBRATION_ADDR: u32 = 0x00;
 
-/// Offset of the BLE device name blob inside the NVS partition. Lives in the
-/// partition's second flash sector so erasing it never touches the calibration
-/// blob in the first sector.
-const BLE_DEVICE_NAME_ADDR: u32 = 0x1000;
-const DEFAULT_DEVICE_NAME: &str = "Calypso";
-
-/// Latest X-axis gravity reading (m/s^2), shared between the IMU loop and the
-/// BLE task as raw f32 bits.
-static GRAVITY_X_BITS: AtomicU32 = AtomicU32::new(0);
+/// The BLE device name. A compile-time constant, and read-only over GATT: the app
+/// used to be able to rename the device, which meant a name blob in NVS, a
+/// writable characteristic and a second thing to persist. One sensor, one name.
+const DEVICE_NAME: &str = "Calypso";
 
 /// The IMU's calibration levels (`Calibration::to_bits`), written by the 1 Hz
 /// poll in the sampler task and read by the BLE task to tell the app. Zero (every
@@ -271,9 +266,7 @@ async fn main(spawner: Spawner) -> ! {
     // fully and says what it is waiting for (see docs/CALIBRATION.md).
     load_calibration(&mut bno055, &mut store);
 
-    // Load the persisted BLE device name, falling back to the default.
-    let device_name = load_device_name(&mut store);
-    info!("BLE device name: {}", device_name.as_str());
+    info!("BLE device name: {}", DEVICE_NAME);
 
     // The UUIDs this build exposes, in both orders, as hex. One line, and it answers
     // the question that cost several flashes: *which* firmware is on this board, as
@@ -323,10 +316,11 @@ async fn main(spawner: Spawner) -> ! {
         Box::leak(alloc::vec![0u8; RECORD_BUF_BYTES].into_boxed_slice());
     info!("Rep detector ready, heap free {} B", esp_alloc::HEAP.free());
 
-    // The one flash peripheral, shared by the BLE task (device name) and the
-    // sampler task (rep log). An async mutex, not a critical section: erasing
-    // a sector takes tens of milliseconds and must not block interrupts. All
-    // three futures below run in this task, so a no-op raw mutex suffices.
+    // The one flash peripheral, shared by the sampler task (appending reps) and
+    // the BLE task (reading a rep's trace back out to stream it). An async mutex,
+    // not a critical section: erasing a sector takes tens of milliseconds and must
+    // not block interrupts. All three futures below run in this task, so a no-op
+    // raw mutex suffices.
     let store: &'static AsyncMutex<NoopRawMutex, FlashStore> =
         Box::leak(Box::new(AsyncMutex::new(store)));
 
@@ -353,32 +347,27 @@ async fn main(spawner: Spawner) -> ! {
         ..
     } = stack.build();
 
-    // GATT table: GAP service with a *writable* Device Name characteristic
-    // (0x2A00), a read-only Appearance characteristic, the mandatory GATT
-    // service declaration, and a custom gravity service. Built in
-    // calypso-core so host integration tests can exercise the exact same
-    // table (see calypso-core/tests/gatt_table.rs).
+    // GATT table: GAP with a read-only Device Name characteristic (0x2A00) and a
+    // read-only Appearance characteristic, the mandatory GATT service declaration,
+    // and the sync service. Built in calypso-core so host integration tests can
+    // exercise the exact same table (see calypso-core/tests/gatt_table.rs).
     let mut name_store = [0u8; DEVICE_NAME_MAX];
-    let mut gravity_x_store = [0u8; 4];
-    let mut sync_msg_store = [0u8; calypso_core::ble::SYNC_MSG_MAX];
-    let mut sync_request_store = [0u8; calypso_core::ble::SYNC_REQUEST_MAX];
-    // The chunk characteristic is sized for a streamed chunk, not a summary: see
-    // `calypso_core::ble`. A too-small store here is the same silent truncation.
-    let mut sync_chunk_store = [0u8; SYNC_CHUNK_MAX];
+    // One characteristic each way: `messages` has to hold the largest thing the
+    // device ever sends (a streamed trace chunk — see `calypso_core::sync`), and
+    // `requests` the largest thing the app sends. A store smaller than its
+    // characteristic is the same silent truncation as a characteristic smaller than
+    // its payload.
+    let mut messages_store = [0u8; SYNC_CHUNK_MAX];
+    let mut requests_store = [0u8; SYNC_REQUEST_MAX];
     let gatt = calypso_core::ble::build_gatt_table::<NoopRawMutex>(
-        device_name.as_str(),
+        DEVICE_NAME,
         &mut name_store[..],
-        &mut gravity_x_store[..],
-        &mut sync_msg_store[..],
-        &mut sync_request_store[..],
-        &mut sync_chunk_store[..],
+        &mut messages_store[..],
+        &mut requests_store[..],
     )
     .unwrap();
-    let name_char = gatt.device_name;
-    let gravity_x_char = gatt.gravity_x;
-    let summary_char = gatt.summary;
-    let trace_request_char = gatt.trace_request;
-    let trace_chunk_char = gatt.trace_chunk;
+    let messages_char = gatt.messages;
+    let requests_char = gatt.requests;
 
     // Buffers for the sync path: a trace read back from the log, and a
     // reusable record scratch (both heap: too big for the stack/static RAM).
@@ -396,17 +385,28 @@ async fn main(spawner: Spawner) -> ! {
     // ~1.2 KB, which has no business sitting in a task's future.
     let sync_batch: &'static mut AllocVec<msg::RepSummary> =
         Box::leak(Box::new(AllocVec::with_capacity(SUMMARY_BATCH)));
+    // **One characteristic means one payload buffer.** Every notification goes out on
+    // `messages` now, so every sender has to build the same `BleVec` — sized for the
+    // largest message, which is a trace chunk, on a task stack that has none to
+    // spare. One buffer, on the heap, and the senders encode straight into it (they
+    // are awaited from the same loop, so they never overlap).
+    let notify_payload: &'static mut BleVec<SYNC_CHUNK_MAX> =
+        Box::leak(Box::new(BleVec::new()));
+    let mut notify = Notify {
+        characteristic: &messages_char,
+        payload: notify_payload,
+    };
     info!("Sync buffers ready, heap free {} B", esp_alloc::HEAP.free());
-    // **That is the number of CCCD slots, and it was hard-coded to 1 here.** The
-    // server keeps one CCCD table per client with exactly this many entries and
-    // drops any CCCD that does not fit without a word, so the single slot went to
-    // the first CCCD in the table — gravity's. Subscribing to the sync service was
+    // **That is the number of CCCD slots, and it was hard-coded to 1 here once.**
+    // The server keeps one CCCD table per client with exactly this many entries and
+    // drops any CCCD that does not fit without a word, so that single slot went to
+    // whichever CCCD came first in the table. Subscribing to the sync service was
     // then accepted by the ATT layer, forgotten by the server, and "notified" into
     // the void: `should_notify` false means `Characteristic::notify` returns `Ok`
     // without sending anything, which is why the device could log `calibration
     // status delivered to the app` once a second while the app — and an off-the-shelf
-    // client — saw nothing at all. See `calypso_core::ble` for the count and the host
-    // test that keeps it equal to the table.
+    // client — saw nothing at all. See `calypso_core::ble` for the count, the host
+    // test that keeps it equal to the table, and `docs/GOTCHAS.md` for the story.
     let server = AttributeServer::<
         NoopRawMutex,
         DefaultPacketPool,
@@ -432,14 +432,13 @@ async fn main(spawner: Spawner) -> ! {
         },
         // Advertising + GATT event handling.
         async {
-            let mut name = device_name;
             loop {
-                // (Re)advertise with the current name. A name written over GATT
-                // shows up in advertising on the next advertising cycle (i.e.
-                // after the current connection closes). The payloads are built in
-                // `calypso-core` so that what a client sees is host-tested — see
-                // `build_advertising` for the layout and why it is that way.
-                let advertising = calypso_core::ble::build_advertising(name.as_str());
+                // The name is fixed, so the advertisement never changes: rebuilt
+                // here only because `advertise` borrows the payload. The payloads
+                // are built in `calypso-core` so that what a client sees is
+                // host-tested — see `build_advertising` for the layout and why it
+                // is that way.
+                let advertising = calypso_core::ble::build_advertising(DEVICE_NAME);
                 if advertising.adv_len == 0 {
                     // An empty advertisement is invisible to every client, so it is
                     // worth saying out loud rather than debugging on the phone.
@@ -479,11 +478,12 @@ async fn main(spawner: Spawner) -> ! {
                 // success — so the caller has to know whether anybody is listening
                 // (see `is_subscribed`).
                 let mut cursor = SummaryCursor::new();
-                let mut summary_subscribed = false;
+                let mut subscribed = false;
 
                 loop {
-                    // Service GATT events; once a second, push the latest
-                    // gravity reading to the client (no-op unless subscribed).
+                    // Service GATT events; once a second, tell the app the IMU's
+                    // calibration levels (a no-op unless it subscribed, in which
+                    // case it is what turns the hint on screen into progress).
                     let event = match select(conn.next(), Timer::after(Duration::from_secs(1))).await {
                         Either::First(event) => event,
                         Either::Second(()) => {
@@ -491,25 +491,19 @@ async fn main(spawner: Spawner) -> ! {
                             // inferred from a notify result, because a notify result
                             // says nothing (see `is_subscribed`). Once a tick is
                             // often enough to say when it changes.
-                            let subscribed = is_subscribed(&server, &conn, summary_char.cccd_handle);
-                            if subscribed != summary_subscribed {
-                                summary_subscribed = subscribed;
+                            let listening = is_subscribed(&server, &conn, messages_char.cccd_handle);
+                            if listening != subscribed {
+                                subscribed = listening;
                                 if subscribed {
-                                    info!("app subscribed to summary notifications (calibration, reps)");
+                                    info!("app subscribed to sync notifications (calibration, summaries, traces)");
                                 } else {
-                                    info!("app unsubscribed from summary notifications");
+                                    info!("app unsubscribed from sync notifications");
                                 }
                             }
                             // Calibration first: it is what tells the app whether
                             // to expect reps at all, so it should not queue behind
                             // a burst of summaries.
-                            notify_calibration(&summary_char, &conn).await;
-                            let value = f32::from_bits(GRAVITY_X_BITS.load(Ordering::Relaxed));
-                            // Not `let _ =` for the error alone: gravity is what a
-                            // client can watch to see the link is alive.
-                            if gravity_x_char.notify(&conn, &value).await.is_err() {
-                                warn!("gravity notify failed");
-                            }
+                            notify_calibration(&mut notify, &conn).await;
                             // Auto-sync, but only while somebody is listening: the
                             // cursor advances on every send, and a send to nobody is
                             // a "success", so streaming with no subscriber would
@@ -521,7 +515,7 @@ async fn main(spawner: Spawner) -> ! {
                                     sync_rec_buf,
                                     sync_rec_msg,
                                     sync_batch,
-                                    &summary_char,
+                                    &mut notify,
                                     &conn,
                                     &mut cursor,
                                 )
@@ -536,28 +530,26 @@ async fn main(spawner: Spawner) -> ! {
                             break;
                         }
                         GattConnectionEvent::Gatt { event } => {
-                            let wrote_name =
-                                matches!(&event, GattEvent::Write(w) if w.handle() == name_char.handle);
                             let wrote_request = matches!(&event, GattEvent::Write(w)
-                                if w.handle() == trace_request_char.handle);
+                                if w.handle() == requests_char.handle);
                             if let Ok(reply) = event.accept() {
                                 let _ = reply.send().await;
                             }
                             if wrote_request {
                                 // The app asked for a rep's trace: read it
                                 // back from the log and stream it.
-                                if let Ok(request) = server.table().get(&trace_request_char)
+                                if let Ok(request) = server.table().get(&requests_char)
                                     && let Some(request) = decode_trace_request(&request)
                                 {
                                     let wanted = calypso_core::pb::uuid_from_field(&request.rep_uuid);
                                     info!("trace request: rep {}", UuidShort(wanted.as_ref()));
-                                    if is_subscribed(&server, &conn, trace_chunk_char.cccd_handle) {
+                                    if is_subscribed(&server, &conn, messages_char.cccd_handle) {
                                         stream_trace(
                                             store,
                                             sync_rec_buf,
                                             sync_rec_msg,
                                             &mut *sync_trace_storage,
-                                            &trace_chunk_char,
+                                            &mut notify,
                                             &conn,
                                             request,
                                         )
@@ -569,27 +561,13 @@ async fn main(spawner: Spawner) -> ! {
                                     }
                                 }
                             }
-                            if wrote_name {
-                                // The write has been applied to the attribute
-                                // store by `accept`; read the new name back,
-                                // keep it in memory and persist it to flash.
-                                if let Ok(new_name) = server.table().get(&name_char)
-                                    && new_name != name
-                                {
-                                    name = new_name;
-                                    info!("device name set to {}", name.as_str());
-                                    let mut guard = store.lock().await;
-                                    save_device_name(&mut guard, name.as_str());
-                                }
-                            }
                         }
                         _ => {}
                     }
                 }
             }
         },
-        // Sampler loop: 100 Hz IMU samples into the RAM ring buffer. The
-        // gravity-x BLE characteristic is fed off the same samples, decimated.
+        // Sampler loop: 100 Hz IMU samples into the RAM ring buffer.
         async {
             let start = Instant::now();
             // Rep identities come from the hardware RNG: the device has no RTC and
@@ -752,19 +730,13 @@ async fn main(spawner: Spawner) -> ! {
                 }
 
                 n += 1;
-                // Gravity-x: update at 10 Hz (BLE pushes it at 1 Hz).
-                if n.is_multiple_of(10)
-                    && let Ok(g) = bno055.gravity_fixed()
-                {
-                    let x = g.x as f32 / 100.0;
-                    GRAVITY_X_BITS.store(x.to_bits(), Ordering::Relaxed);
-                }
-                // Still *read* at 1 Hz, but logged only when something changes, or
-                // once a minute. Two lines a second used to say the same thing
-                // forever: the calibration levels and the level verdict only move
-                // when the sensor does, and the ring and heap figures are there to
-                // spot a leak, not to be watched. The minute keeps the boot-log
-                // figures this device is debugged from (see docs/GOTCHAS.md).
+                // The level verdict and the calibration levels are *read* at
+                // 1 Hz, but logged only when they change, or once a minute. Two
+                // lines a second used to say the same thing forever: the levels and
+                // the verdict only move when the sensor does, and the ring and heap
+                // figures are there to spot a leak, not to be watched. The minute
+                // keeps the boot-log figures this device is debugged from (see
+                // docs/GOTCHAS.md).
                 if n.is_multiple_of(SAMPLE_RATE_HZ) {
                     let level = level_sense(&mut bno055);
                     // Compared on the verdict, not the reading: X-grav moves by a
@@ -1057,6 +1029,18 @@ fn log_partition_table(pt: &partitions::PartitionTable<'_>) {
     }
 }
 
+/// The notification side of the sync service: the one characteristic the device talks
+/// on, and the buffer its payloads are built in.
+///
+/// They travel together because the interface is *one* characteristic: a summary, a
+/// trace chunk and a calibration status are the same type on the wire, so they are one
+/// buffer on the stack — sized for the largest of them, a trace chunk. The buffer
+/// itself is on the heap (see `main`), and the senders encode straight into it.
+struct Notify<'a> {
+    characteristic: &'a Characteristic<BleVec<SYNC_CHUNK_MAX>>,
+    payload: &'a mut BleVec<SYNC_CHUNK_MAX>,
+}
+
 /// Push any log summaries the subscriber hasn't been sent yet, oldest first.
 ///
 /// **Call this only while the peer is subscribed** ([`is_subscribed`]). The cursor
@@ -1071,10 +1055,14 @@ async fn stream_new_summaries(
     rec_buf: &mut [u8],
     rec: &mut msg::RepRecord,
     batch: &mut AllocVec<msg::RepSummary>,
-    summary_char: &Characteristic<BleVec<SYNC_MSG_MAX>>,
+    notify: &mut Notify<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     cursor: &mut SummaryCursor,
 ) {
+    let Notify {
+        characteristic,
+        payload,
+    } = notify;
     // Collect the next batch, then notify them one at a time: notifications are
     // async, so they cannot happen inside the log's sync iteration.
     let total = {
@@ -1087,23 +1075,21 @@ async fn stream_new_summaries(
     // Reps fall off the ring as it wraps; never point past the end.
     cursor.clamp_to(total);
 
-    let mut payload: BleVec<SYNC_MSG_MAX> = BleVec::new();
     for summary in batch.iter() {
-        // Encoded straight into the notification buffer: one buffer instead of a
-        // scratch and a copy, which matters because this frame is a future. A
-        // summary too large to fit here would not have fitted the characteristic
-        // either, so nothing is lost by failing at the encode.
+        // Encoded straight into the shared notification buffer: no scratch, no copy,
+        // and nothing on this frame. A summary too large to fit would not have fitted
+        // the characteristic either, so nothing is lost by failing at the encode.
         //
         // A `RepSummary` carries a uuid container now, so it is not `Copy`.
         payload.clear();
-        if payload.resize(SYNC_MSG_MAX, 0).is_err() {
+        if payload.resize(SYNC_CHUNK_MAX, 0).is_err() {
             return;
         }
         let Some(n) = sync::encode_summary_message(summary.clone(), &mut payload[..]) else {
             return;
         };
         payload.truncate(n);
-        if summary_char.notify(conn, &payload).await.is_err() {
+        if characteristic.notify(conn, payload).await.is_err() {
             return; // nobody subscribed (yet)
         }
         cursor.advance(1);
@@ -1149,30 +1135,30 @@ fn collect_summaries(
 /// Read a requested rep's trace back from the log and notify it to the app in
 /// MTU-sized chunks.
 ///
-/// The one frame in this firmware that is knowingly over the crate's
-/// `clippy::large_stack_frames` threshold, hence the exemption. It is 1476 bytes,
-/// of which the largest locals are the 193-byte encode scratch and the 193-byte
-/// notification payload — both [`sync::SYNC_CHUNK_MAX`], the worst case for three
-/// samples. (The payload is sized to the *characteristic* rather than to a summary
-/// because a chunk that does not fit it fails to notify in silence; see
-/// `docs/GOTCHAS.md`.) The rest is the inlined MIR of the encoder and the log
-/// calls. There is no buffer left to move to the heap — extracting the log work is
-/// already done (see [`read_trace_from_log`]) — and suppressing inlining across
-/// `calypso-core` to satisfy the lint would trade a bounded, once-per-trace cost
-/// for a real one.
+/// Still the widest frame in the firmware, and knowingly so — hence the exemption.
+/// It is 1086 bytes, down from 1476: the encode scratch and the notification payload
+/// used to live here and are now one heap buffer shared by every sender (see
+/// [`Notify`]). What is left is the inlined MIR of the chunk encoder and the log
+/// calls. There is no buffer left to move — extracting the log work is already done
+/// (see [`read_trace_from_log`]) — and suppressing inlining across `calypso-core` to
+/// satisfy the lint would trade a bounded, once-per-trace cost for a real one.
 #[allow(
     clippy::large_stack_frames,
-    reason = "1476 B: a 193 B encode scratch, a 193 B notification payload, and the inlined encoder/log frames"
+    reason = "1086 B: the inlined chunk encoder and the log/notify frames; the buffers are the caller's now"
 )]
 async fn stream_trace(
     store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
     rec_buf: &mut [u8],
     rec: &mut msg::RepRecord,
     trace_storage: &mut [TracePoint],
-    chunk_char: &Characteristic<BleVec<SYNC_CHUNK_MAX>>,
+    notify: &mut Notify<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     request: msg::TraceRequest,
 ) {
+    let Notify {
+        characteristic,
+        payload,
+    } = notify;
     let Some(rep_uuid) = calypso_core::pb::uuid_from_field(&request.rep_uuid) else {
         warn!("trace request with a malformed uuid");
         return;
@@ -1195,19 +1181,21 @@ async fn stream_trace(
         TraceStreamer::one(rep_uuid, t0_ms, points, request.chunk_index)
     };
 
-    let mut scratch = [0u8; sync::SYNC_CHUNK_MAX];
-    // Sized to the characteristic, which is sized to the worst case a chunk can encode
-    // to. It used to be a summary's size, and a chunk that did not fit was dropped here
-    // in silence: the stream stopped part-way and the app timed out with a rep whose
-    // trace was missing, with nothing said at either end (see `docs/GOTCHAS.md`).
-    let mut payload: BleVec<SYNC_CHUNK_MAX> = BleVec::new();
-    while let Some(n) = streamer.next_message(&mut scratch) {
+    // Encoded straight into the shared notification buffer, which is sized to the
+    // worst case a chunk can encode to. It used to be sized to a summary, and a chunk
+    // that did not fit was dropped here in silence: the stream stopped part-way and
+    // the app timed out with a rep whose trace was missing, with nothing said at
+    // either end (see `docs/GOTCHAS.md`).
+    loop {
         payload.clear();
-        if payload.extend_from_slice(&scratch[..n]).is_err() {
-            warn!("trace chunk of {} bytes does not fit its characteristic", n);
+        if payload.resize(SYNC_CHUNK_MAX, 0).is_err() {
             return;
         }
-        if chunk_char.notify(conn, &payload).await.is_err() {
+        let Some(n) = streamer.next_message(&mut payload[..]) else {
+            return;
+        };
+        payload.truncate(n);
+        if characteristic.notify(conn, payload).await.is_err() {
             warn!("trace stream interrupted (unsubscribed?)");
             return;
         }
@@ -1309,71 +1297,6 @@ fn store_rep(
     }
 }
 
-/// Load the BLE device name from the NVS partition, falling back to the default.
-///
-/// Blob layout at [`BLE_DEVICE_NAME_ADDR`]: 1 length byte followed by up to
-/// [`DEVICE_NAME_MAX`] name bytes, padded to a 4-byte boundary.
-fn load_device_name(store: &mut FlashStore) -> HeaplessString<DEVICE_NAME_MAX> {
-    let (flash, pt_mem) = store.split();
-    let mut fallback: HeaplessString<DEVICE_NAME_MAX> = HeaplessString::new();
-    let _ = fallback.push_str(DEFAULT_DEVICE_NAME);
-
-    let Ok(pt) = partitions::read_partition_table(flash, pt_mem) else {
-        return fallback;
-    };
-    let Ok(Some(nvs)) = pt.find_partition(partitions::PartitionType::Data(
-        partitions::DataPartitionSubType::Nvs,
-    )) else {
-        return fallback;
-    };
-    let mut nvs_partition = nvs.as_embedded_storage(flash);
-
-    let mut buf = [0u8; calypso_core::DEVICE_NAME_BLOB_SIZE];
-    if nvs_partition.read(BLE_DEVICE_NAME_ADDR, &mut buf).is_err() {
-        return fallback;
-    }
-    match calypso_core::decode_device_name(&buf) {
-        Some(s) => {
-            let mut name = HeaplessString::new();
-            if name.push_str(s).is_ok() { name } else { fallback }
-        }
-        None => fallback,
-    }
-}
-
-/// Persist the BLE device name to the NVS partition. Flash bits only go from
-/// 1 to 0 when writing, so the sector is erased first. The name lives in its
-/// own sector, leaving the calibration blob in the first sector untouched.
-fn save_device_name(store: &mut FlashStore, name: &str) {
-    let (flash, pt_mem) = store.split();
-    let Ok(pt) = partitions::read_partition_table(flash, pt_mem) else {
-        warn!("NVS: partition table read failed");
-        return;
-    };
-    let Ok(Some(nvs)) = pt.find_partition(partitions::PartitionType::Data(
-        partitions::DataPartitionSubType::Nvs,
-    )) else {
-        warn!("NVS: partition not found");
-        return;
-    };
-    let mut nvs_partition = nvs.as_embedded_storage(flash);
-
-    if nvs_partition
-        .erase(BLE_DEVICE_NAME_ADDR, BLE_DEVICE_NAME_ADDR + 0x1000)
-        .is_err()
-    {
-        warn!("NVS: erase failed");
-        return;
-    }
-    let Some(buf) = calypso_core::encode_device_name(name) else {
-        warn!("NVS: device name is empty or too long");
-        return;
-    };
-    if Storage::write(&mut nvs_partition, BLE_DEVICE_NAME_ADDR, &buf).is_err() {
-        warn!("NVS: write failed");
-    }
-}
-
 /// Apply the stored BNO055 calibration profile, if there is a usable one.
 ///
 /// Deliberately does **not** wait for the IMU to calibrate. This is the routine
@@ -1465,10 +1388,10 @@ fn read_calibration(store: &mut FlashStore) -> Option<BNO055Calibration> {
 /// calibrated instead of putting the user through it again.
 ///
 /// Returns whether the write succeeded. The profile lives at offset 0 of the NVS
-/// partition's first sector (the device name is in the second, see
-/// [`BLE_DEVICE_NAME_ADDR`]), and that sector is erased first: NOR flash bits only
-/// go from 1 to 0 when written, so a second save over an older profile would AND
-/// the two together.
+/// partition's first sector — it is the only thing in there now that the device
+/// name is a compile-time constant — and that sector is erased first: NOR flash
+/// bits only go from 1 to 0 when written, so a second save over an older profile
+/// would AND the two together.
 fn save_calibration(store: &mut FlashStore, profile: &BNO055Calibration) -> bool {
     let (flash, pt_mem) = store.split();
     let Ok(pt) = partitions::read_partition_table(flash, pt_mem) else {
@@ -1597,27 +1520,32 @@ fn is_subscribed(
 /// notification means nothing — see [`is_subscribed`], which is also where the
 /// "did anybody hear it" line is logged.
 async fn notify_calibration(
-    summary_char: &Characteristic<BleVec<SYNC_MSG_MAX>>,
+    notify: &mut Notify<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
 ) {
+    let Notify {
+        characteristic,
+        payload,
+    } = notify;
     let calibration = Calibration::from_bits(CALIBRATION_BITS.load(Ordering::Relaxed));
-    let mut scratch = [0u8; SYNC_MSG_MAX];
-    let Some(n) = sync::encode_calibration_message(&calibration, &mut scratch) else {
-        return;
-    };
-    let mut payload: BleVec<SYNC_MSG_MAX> = BleVec::new();
-    if payload.extend_from_slice(&scratch[..n]).is_err() {
+    payload.clear();
+    if payload.resize(SYNC_CHUNK_MAX, 0).is_err() {
         return;
     }
+    let Some(n) = sync::encode_calibration_message(&calibration, &mut payload[..]) else {
+        return;
+    };
+    payload.truncate(n);
     // **No success line, and the reason is worth keeping here.** `notify` returns
     // `Ok(())` even when nobody is subscribed — it checks the peer's CCCD table and
     // returns early without sending — so its result cannot distinguish "sent" from
     // "sent nowhere". This function used to log `calibration status delivered to the
     // app` on success, once a second, and did exactly that for a device whose
-    // summary characteristic could not be subscribed to at all (one CCCD slot, taken
-    // by gravity). Whether anybody is listening is reported where it can be known:
+    // subscription could not be established at all (one CCCD slot, and the table's
+    // first CCCD was not ours — see `docs/GOTCHAS.md`). Whether anybody is
+    // listening is reported where it can be known:
     // `is_subscribed`, once a tick, in the caller.
-    if summary_char.notify(conn, &payload).await.is_err() {
+    if characteristic.notify(conn, payload).await.is_err() {
         warn!("calibration notify failed");
     }
 }

@@ -93,7 +93,7 @@ void main() {
 
     expect(link.scans.single, [CalypsoGatt.service]);
     expect(link.scanning, isFalse, reason: 'the scan stops once a device is found');
-    expect(link.subscribed, [CalypsoGatt.summary, CalypsoGatt.traceChunk]);
+    expect(link.subscribed, [CalypsoGatt.messages]);
     expect(transport.status.status, BleStatus.connected);
     expect(transport.status.deviceId, 'device-1');
   });
@@ -109,8 +109,7 @@ void main() {
     expect(link.calls, [
       'connect',
       'discoverServices',
-      'subscribe:${CalypsoGatt.summary}',
-      'subscribe:${CalypsoGatt.traceChunk}',
+      'subscribe:${CalypsoGatt.messages}',
     ]);
     expect(link.discovered, ['device-1']);
     expect(transport.status.status, BleStatus.connected);
@@ -192,11 +191,11 @@ void main() {
     final seen = <String>[];
     final sub = transport.watchSummaries().listen((s) => seen.add(s.uuid));
 
-    link.notify(CalypsoGatt.summary, summaryMessage(u(1)));
-    link.notify(CalypsoGatt.summary, summaryMessage(u(2)));
+    link.notify(CalypsoGatt.messages, summaryMessage(u(1)));
+    link.notify(CalypsoGatt.messages, summaryMessage(u(2)));
     // A re-send (the device streams everything on each subscribe) is not
     // emitted twice, but is still known.
-    link.notify(CalypsoGatt.summary, summaryMessage(u(2)));
+    link.notify(CalypsoGatt.messages, summaryMessage(u(2)));
     await pumpEventQueue();
 
     expect(seen, [u(1), u(2)]);
@@ -210,22 +209,23 @@ void main() {
       () async {
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
-    link.notify(CalypsoGatt.summary, summaryMessage(u(1), traceLen: 7));
+    link.notify(CalypsoGatt.messages, summaryMessage(u(1), traceLen: 7));
     await pumpEventQueue();
 
     final pending = transport.trace(u(1));
     await pumpEventQueue();
 
     // The request is a bare TraceRequest (not wrapped in a SyncMessage).
-    final request = pb.TraceRequest.fromBuffer(link.lastWriteTo(CalypsoGatt.traceRequest));
+    final request =
+        pb.SyncRequest.fromBuffer(link.lastWriteTo(CalypsoGatt.requests)).trace;
     expect(uuidFromBytes(request.repUuid), u(1));
     expect(request.allChunks, isTrue);
 
     // Chunks arrive out of order, with a duplicate, and totalChunks set.
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 2, 3, points: 1, from: 6));
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 0, 3, from: 0));
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 0, 3, from: 0));
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 1, 3, from: 3));
+    link.notify(CalypsoGatt.messages, chunkMessage(u(1), 2, 3, points: 1, from: 6));
+    link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 3, from: 0));
+    link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 3, from: 0));
+    link.notify(CalypsoGatt.messages, chunkMessage(u(1), 1, 3, from: 3));
     await pumpEventQueue();
 
     final trace = await pending;
@@ -242,8 +242,8 @@ void main() {
     final pending = transport.trace(u(1));
     await pumpEventQueue();
 
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(99), 0, 1, from: 0));
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 0, 1, from: 0));
+    link.notify(CalypsoGatt.messages, chunkMessage(u(99), 0, 1, from: 0));
+    link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 1, from: 0));
     await pumpEventQueue();
 
     expect((await pending).length, 3);
@@ -258,7 +258,7 @@ void main() {
     final pending = transport.trace(u(1));
     await pumpEventQueue();
 
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 0, 0, totalOverride: 0));
+    link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 0, totalOverride: 0));
     await pumpEventQueue();
 
     final trace = await pending;
@@ -286,8 +286,8 @@ void main() {
     await pumpEventQueue();
 
     // Two of five chunks, then silence: the device no longer has the rest.
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(3), 0, 5, from: 0));
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(3), 1, 5, from: 3));
+    link.notify(CalypsoGatt.messages, chunkMessage(u(3), 0, 5, from: 0));
+    link.notify(CalypsoGatt.messages, chunkMessage(u(3), 1, 5, from: 3));
     await pumpEventQueue();
 
     await expectLater(
@@ -322,7 +322,7 @@ void main() {
     final transport = await connectedTransport(link);
     final first = transport.trace(u(1));
     await pumpEventQueue();
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 0, 1, from: 0));
+    link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 1, from: 0));
     await first;
 
     final writesBefore = link.writes.length;
@@ -345,9 +345,9 @@ void main() {
 
     final pending = transport.trace(u(1));
     await pumpEventQueue();
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 0, 2));
+    link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 2));
     await Future<void>.delayed(const Duration(milliseconds: 90));
-    link.notify(CalypsoGatt.traceChunk, chunkMessage(u(1), 1, 2));
+    link.notify(CalypsoGatt.messages, chunkMessage(u(1), 1, 2));
     await Future<void>.delayed(const Duration(milliseconds: 90));
 
     expect((await pending).length, 6, reason: 'two 3-point chunks');
@@ -362,7 +362,7 @@ void main() {
     // invent a state it has not been told.
     expect(transport.calibration.latest, isNull);
 
-    link.notify(CalypsoGatt.summary, calibrationMessage(sys: 1, accel: 1, gyro: 2));
+    link.notify(CalypsoGatt.messages, calibrationMessage(sys: 1, accel: 1, gyro: 2));
     await pumpEventQueue();
 
     final latest = transport.calibration.latest!;
@@ -374,11 +374,11 @@ void main() {
     // The device re-sends once a second; an identical reading is not a change.
     var notifications = 0;
     transport.calibration.addListener(() => notifications++);
-    link.notify(CalypsoGatt.summary, calibrationMessage(sys: 1, accel: 1, gyro: 2));
+    link.notify(CalypsoGatt.messages, calibrationMessage(sys: 1, accel: 1, gyro: 2));
     await pumpEventQueue();
     expect(notifications, 0);
 
-    link.notify(CalypsoGatt.summary, calibrationMessage());
+    link.notify(CalypsoGatt.messages, calibrationMessage());
     await pumpEventQueue();
     expect(notifications, 1);
     expect(transport.calibration.isReady, isTrue);
@@ -394,15 +394,15 @@ void main() {
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
 
-    link.notify(CalypsoGatt.summary, Uint8List.fromList([0xFF, 0xFF, 0xFF, 0xFF]));
-    link.notify(CalypsoGatt.traceChunk, Uint8List.fromList([0x00]));
+    link.notify(CalypsoGatt.messages, Uint8List.fromList([0xFF, 0xFF, 0xFF, 0xFF]));
+    link.notify(CalypsoGatt.messages, Uint8List.fromList([0x00]));
     await pumpEventQueue();
 
     expect(await transport.summaries(), isEmpty);
     expect(transport.status.status, BleStatus.connected, reason: 'still connected');
 
     // ...and a good message still gets through afterwards.
-    link.notify(CalypsoGatt.summary, summaryMessage(u(4)));
+    link.notify(CalypsoGatt.messages, summaryMessage(u(4)));
     await pumpEventQueue();
     expect((await transport.summaries()).single.uuid, u(4));
     await transport.close();
@@ -412,8 +412,8 @@ void main() {
     // The whole chain, on the host: notifications → transport → archive → trace.
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
-    link.notify(CalypsoGatt.summary, summaryMessage(u(1), traceLen: 7));
-    link.notify(CalypsoGatt.summary, summaryMessage(u(2), traceLen: 7));
+    link.notify(CalypsoGatt.messages, summaryMessage(u(1), traceLen: 7));
+    link.notify(CalypsoGatt.messages, summaryMessage(u(2), traceLen: 7));
     await pumpEventQueue();
 
     // Play the device: answer each trace request with its chunks.
@@ -422,11 +422,12 @@ void main() {
       while (transport.status.isConnected) {
         await Future<void>.delayed(const Duration(milliseconds: 5));
         if (link.writes.isEmpty) continue;
-        final request = pb.TraceRequest.fromBuffer(link.lastWriteTo(CalypsoGatt.traceRequest));
+        final request =
+        pb.SyncRequest.fromBuffer(link.lastWriteTo(CalypsoGatt.requests)).trace;
         final requested = uuidFromBytes(request.repUuid);
         if (requested == null) continue;
         for (var index = 0; index < 3; index++) {
-          link.notify(CalypsoGatt.traceChunk,
+          link.notify(CalypsoGatt.messages,
               chunkMessage(requested, index, 3, points: index == 2 ? 1 : 3, from: index * 3));
         }
       }

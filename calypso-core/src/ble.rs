@@ -12,17 +12,37 @@ use trouble_host::prelude::*;
 use crate::sync::SYNC_CHUNK_MAX;
 use crate::DEVICE_NAME_MAX;
 
-/// Number of attributes in the table:
-/// GAP service (1) + device name (2) + appearance (2) + GATT service (1)
-/// + gravity service (1) + gravity-x characteristic (2) + its CCCD (1)
-/// + sync service (1) + summary characteristic (2) + CCCD (1)
-/// + trace-request characteristic (2) + trace-chunk characteristic (2)
-/// + its CCCD (1),
-///   plus 2 spare.
-pub const GATT_TABLE_MAX: usize = 23;
+/// Attributes GAP (device name + appearance) and the mandatory GATT service take,
+/// as trouble-host counts them.
+const GAP_ATTRIBUTES: usize = trouble_host::gap::GAP_SERVICE_ATTRIBUTE_COUNT;
+
+/// Attributes the sync service adds: its declaration (1), the messages
+/// characteristic (2) and its CCCD (1), the requests characteristic (2).
+///
+/// The CCCD is counted here and checked against the server's own count in
+/// [`NOTIFIABLE_CHARACTERISTICS`]; both are numbers that fail *silently* when they
+/// are wrong (see that constant).
+const SYNC_SERVICE_ATTRIBUTES: usize = 6;
+
+/// Room to grow without a boot failure.
+const GATT_TABLE_HEADROOM: usize = 4;
+
+/// Number of attributes in the table.
+///
+/// Running past this **panics** — the table pushes into a fixed-capacity
+/// `heapless::Vec` and unwraps — so it is a boot failure rather than a silent
+/// truncation, but it is still a number to keep ahead of: a characteristic added
+/// below needs this raised too, and the host tests build the whole table, so they
+/// are where it would show up.
+pub const GATT_TABLE_MAX: usize = GAP_ATTRIBUTES + SYNC_SERVICE_ATTRIBUTES + GATT_TABLE_HEADROOM;
+
+// The pieces have to add up to what the table actually pushes; the host tests
+// build it, and this keeps the arithmetic honest where a reader can see it.
+const _: () =
+    assert!(GATT_TABLE_MAX > GAP_ATTRIBUTES + SYNC_SERVICE_ATTRIBUTES);
 
 /// How many characteristics in this table a client can subscribe to: every one
-/// built with `Notify` or `Indicate`, i.e. every one with a CCCD.
+/// built with `Notify`, i.e. every one with a CCCD. The sync service's two.
 ///
 /// **This is `AttributeServer`'s `CCCD_MAX`, and getting it wrong is silent.** The
 /// server keeps a per-client CCCD table of exactly this many entries, and its
@@ -31,34 +51,33 @@ pub const GATT_TABLE_MAX: usize = 23;
 /// `Characteristic::notify` then returns `Ok(())` *without sending anything*, so
 /// the device reports success while the client sees nothing at all.
 ///
-/// It was 1 for a while, and that one slot went to the first CCCD in the table:
-/// the gravity characteristic's. Subscribing to gravity worked, which is what made
-/// it look like notifications were fine; subscribing to the sync service's two was
-/// accepted by the ATT layer, forgotten by the server, and answered with a cheerful
-/// `calibration status delivered to the app` once a second. Two clients — the app
-/// and an off-the-shelf one — reported the same silence.
+/// It was 1 for a while, and that one slot went to the first CCCD in the table —
+/// another service's, back when there were three notifiable characteristics.
+/// Subscribing to that one worked, which is what made it look like notifications
+/// were fine, while subscribing to the sync service's two was accepted by the ATT
+/// layer, forgotten by the server, and answered with a cheerful `calibration status
+/// delivered to the app` once a second. Two clients — the app and an off-the-shelf
+/// one — reported the same silence (`docs/GOTCHAS.md`).
 ///
 /// [`build_gatt_table`] counts the CCCDs it actually created (see
 /// [`GattTable::cccd_count`]) and a host test asserts the two agree, so this cannot
 /// drift from the table again.
-pub const NOTIFIABLE_CHARACTERISTICS: usize = 3;
+pub const NOTIFIABLE_CHARACTERISTICS: usize = 1;
 
 /// Byte payload type for the sync characteristics. `heapless::Vec` is what
 /// `trouble-host` implements `AsGatt`/`FromGatt` for, so values can be any
 /// length up to `N` (unlike a fixed-size array, which would pad).
 pub type BleVec<const N: usize> = heapless::Vec<u8, N>;
 
-/// Largest *summary* message sent device -> app. A `RepSummary` encodes to ~120 bytes,
-/// which is what this covers — and only that: a streamed trace chunk is bigger than a
-/// summary, and has its own size ([`SYNC_CHUNK_MAX`]).
+/// Largest `SyncRequest` accepted from the app: a `TraceRequest` and the envelope
+/// around it.
 ///
-/// The two are separate on purpose. A payload that does not fit the characteristic it is
-/// notified on **fails to notify silently** — `Characteristic::notify` is not even
-/// reached, because the payload cannot be built — so the stream simply stops. Sizing
-/// this one for a summary and using it for chunks is exactly what did that
-/// (see `docs/GOTCHAS.md`).
-pub const SYNC_MSG_MAX: usize = 128;
-/// Largest accepted `TraceRequest` from the app.
+/// There is one request characteristic and one message characteristic, so this is
+/// the only other ceiling to keep ahead of. A payload that does not fit the
+/// characteristic it is notified on **fails to notify silently** — the payload
+/// cannot be built, so `Characteristic::notify` is never reached and the stream
+/// simply stops (see `docs/GOTCHAS.md`, and [`SYNC_CHUNK_MAX`] for the other
+/// direction).
 pub const SYNC_REQUEST_MAX: usize = 32;
 
 // Every UUID below is written in **wire order**, which is the reverse of the text
@@ -98,34 +117,24 @@ pub const SYNC_SERVICE_UUID_BYTES: [u8; 16] = [
     0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x20, 0xca, 0x00, 0x00,
 ];
 
-/// Custom GATT service for rep sync (summaries + on-demand traces).
+/// Custom GATT service for rep sync. Everything the device has to say travels one
+/// way over it and everything the app has to ask travels the other.
+///
 /// Text: `0000ca20-b0cd-11ec-871f-d45ddf138840`.
 pub const SYNC_SERVICE_UUID: Uuid = Uuid::new_long(SYNC_SERVICE_UUID_BYTES);
-/// Rep summaries, notify (auto-streamed to a subscriber).
+/// Everything the device sends: a `SyncMessage`, notify. Summaries and
+/// calibration stream to a subscriber; trace chunks answer a request. Sized for
+/// the largest of them ([`SYNC_CHUNK_MAX`]).
+///
 /// Text: `0000ca21-b0cd-11ec-871f-d45ddf138840`.
-pub const SYNC_SUMMARY_UUID: Uuid = Uuid::new_long([
+pub const SYNC_MESSAGES_UUID: Uuid = Uuid::new_long([
     0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x21, 0xca, 0x00, 0x00,
 ]);
-/// Trace requests, write (app -> device).
+/// Everything the app sends: a `SyncRequest`, write (app -> device).
+///
 /// Text: `0000ca22-b0cd-11ec-871f-d45ddf138840`.
-pub const SYNC_REQUEST_UUID: Uuid = Uuid::new_long([
+pub const SYNC_REQUESTS_UUID: Uuid = Uuid::new_long([
     0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x22, 0xca, 0x00, 0x00,
-]);
-/// Trace chunks, notify (on demand).
-/// Text: `0000ca23-b0cd-11ec-871f-d45ddf138840`.
-pub const SYNC_CHUNK_UUID: Uuid = Uuid::new_long([
-    0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x23, 0xca, 0x00, 0x00,
-]);
-
-/// Custom GATT service exposing the IMU's gravity vector.
-/// Text: `0000ca10-b0cd-11ec-871f-d45ddf138840`.
-pub const GRAVITY_SERVICE_UUID: Uuid = Uuid::new_long([
-    0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x10, 0xca, 0x00, 0x00,
-]);
-/// X-axis gravity characteristic (m/s^2, f32, read + notify).
-/// Text: `0000ca11-b0cd-11ec-871f-d45ddf138840`.
-pub const GRAVITY_X_UUID: Uuid = Uuid::new_long([
-    0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x11, 0xca, 0x00, 0x00,
 ]);
 
 /// Longest an advertising packet or scan response can be (legacy BLE).
@@ -163,7 +172,7 @@ const ADV_SERVICES: [[u8; 16]; 1] = [SYNC_SERVICE_UUID_BYTES];
 ///   it fits in 30 of the 31 bytes. A longer name goes in the scan response
 ///   instead, where a client that asks for one will find it.
 ///
-/// `name` is assumed to be at most [`DEVICE_NAME_MAX`].
+/// `name` is assumed to be at most [`crate::DEVICE_NAME_MAX`].
 pub fn build_advertising(name: &str) -> Advertising {
     let mut out = Advertising {
         adv_data: [0; ADV_MAX],
@@ -204,45 +213,44 @@ pub struct GattTable<'d, M: RawMutex> {
     /// How many characteristics here can be subscribed to — what the server's
     /// `CCCD_MAX` has to be. See [`NOTIFIABLE_CHARACTERISTICS`].
     pub cccd_count: usize,
-    /// Device Name (0x2A00), read + write.
+    /// Device Name (0x2A00), read only.
     pub device_name: Characteristic<HeaplessString<DEVICE_NAME_MAX>>,
-    /// X-axis gravity (m/s^2), read + notify.
-    pub gravity_x: Characteristic<f32>,
-    /// Sync messages carrying `RepSummary`, notify.
-    pub summary: Characteristic<BleVec<SYNC_MSG_MAX>>,
-    /// `TraceRequest` from the app, write.
-    pub trace_request: Characteristic<BleVec<SYNC_REQUEST_MAX>>,
-    /// Sync messages carrying `TraceChunk`, notify.
+    /// Everything the device sends (`sync.messages`), notify: one `SyncMessage`
+    /// per notification, whatever its body.
     ///
-    /// Sized for [`SYNC_CHUNK_MAX`] rather than [`SYNC_MSG_MAX`]: a streamed chunk of
-    /// [`crate::sync::BLE_CHUNK_SAMPLES`] points encodes to more than a summary does, and
-    /// a payload that does not fit its characteristic fails to notify *silently* — the
-    /// trace stream just stops part-way, and the app times out with a rep whose trace is
-    /// missing rather than an error from either end.
-    pub trace_chunk: Characteristic<BleVec<SYNC_CHUNK_MAX>>,
+    /// One characteristic for all of them, sized for the largest — a trace chunk of
+    /// [`crate::sync::BLE_CHUNK_SAMPLES`] points ([`SYNC_CHUNK_MAX`]). A payload that
+    /// does not fit fails to notify *silently*: the payload cannot be built, so
+    /// `Characteristic::notify` is never reached and the stream just stops
+    /// (`docs/GOTCHAS.md`).
+    pub messages: Characteristic<BleVec<SYNC_CHUNK_MAX>>,
+    /// Everything the app sends (`sync.requests`), write: one `SyncRequest` per
+    /// write, whatever its body.
+    pub requests: Characteristic<BleVec<SYNC_REQUEST_MAX>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum BuildError {
-    /// The device name is empty or longer than [`DEVICE_NAME_MAX`].
+    /// The device name is empty or longer than [`crate::DEVICE_NAME_MAX`].
     InvalidName,
 }
 
-/// Build the GAP service (writable device name + appearance), the mandatory
-/// GATT service declaration, and the custom gravity service.
+/// Build the table the device serves: GAP with a read-only device name, the
+/// mandatory GATT service declaration, and the sync service.
 ///
-/// `device_name_store` and `gravity_x_store` are the backing buffers the
-/// server reads/writes; they must outlive the table.
+/// `device_name_store` and the two sync stores are the backing buffers the server
+/// reads and writes; they must outlive the table.
 ///
-/// Note: `GapConfig` is intentionally not used here — it only supports a
-/// read-only device name.
+/// The name is **read-only** now, which is the case trouble-host's own [`GapConfig`]
+/// exists for — but that cannot be used here: it keeps the name in a
+/// function-local `static`, and a host process that builds a second table (every
+/// test in `tests/gatt_table.rs` builds one) panics with `StaticCell is already
+/// full`. So GAP stays hand-built, with one property instead of two.
 pub fn build_gatt_table<'d, M: RawMutex>(
     device_name: &str,
     device_name_store: &'d mut [u8],
-    gravity_x_store: &'d mut [u8],
-    summary_store: &'d mut [u8],
-    trace_request_store: &'d mut [u8],
-    trace_chunk_store: &'d mut [u8],
+    messages_store: &'d mut [u8],
+    requests_store: &'d mut [u8],
 ) -> Result<GattTable<'d, M>, BuildError> {
     let mut initial: HeaplessString<DEVICE_NAME_MAX> = HeaplessString::new();
     if device_name.is_empty() || initial.push_str(device_name).is_err() {
@@ -251,11 +259,14 @@ pub fn build_gatt_table<'d, M: RawMutex>(
 
     let mut table: AttributeTable<'d, M, GATT_TABLE_MAX> = AttributeTable::new();
 
+    // GAP: the device name — read-only, which is what a client gets — and the
+    // appearance. The appearance is the sensor one rather than `GapConfig`'s
+    // `UNKNOWN`, so a scanner shows what this is.
     let mut gap = table.add_service(Service::new(service::GAP));
     let device_name = gap
         .add_characteristic(
             characteristic::DEVICE_NAME,
-            &[CharacteristicProp::Read, CharacteristicProp::Write],
+            &[CharacteristicProp::Read],
             initial,
             device_name_store,
         )
@@ -265,41 +276,24 @@ pub fn build_gatt_table<'d, M: RawMutex>(
 
     table.add_service(Service::new(service::GATT)).build();
 
-    let gravity_x = table
-        .add_service(Service::new(GRAVITY_SERVICE_UUID.clone()))
-        .add_characteristic(
-            GRAVITY_X_UUID.clone(),
-            &[CharacteristicProp::Read, CharacteristicProp::Notify],
-            0.0f32,
-            gravity_x_store,
-        )
-        .build();
-
-    // Log sync: summaries notify out, trace requests write in, trace chunks
-    // notify out on demand. See `proto/calypso.proto`.
+    // Log sync: everything the device says goes out on `messages`, everything the
+    // app asks for comes in on `requests`. See `proto/calypso.proto` for the two
+    // messages (and for why one characteristic each is the point).
     let mut sync = table.add_service(Service::new(SYNC_SERVICE_UUID.clone()));
-    let summary = sync
+    let messages = sync
         .add_characteristic(
-            SYNC_SUMMARY_UUID.clone(),
-            &[CharacteristicProp::Read, CharacteristicProp::Notify],
-            BleVec::<SYNC_MSG_MAX>::new(),
-            summary_store,
-        )
-        .build();
-    let trace_request = sync
-        .add_characteristic(
-            SYNC_REQUEST_UUID.clone(),
-            &[CharacteristicProp::Write, CharacteristicProp::WriteWithoutResponse],
-            BleVec::<SYNC_REQUEST_MAX>::new(),
-            trace_request_store,
-        )
-        .build();
-    let trace_chunk = sync
-        .add_characteristic(
-            SYNC_CHUNK_UUID.clone(),
+            SYNC_MESSAGES_UUID.clone(),
             &[CharacteristicProp::Notify],
             BleVec::<SYNC_CHUNK_MAX>::new(),
-            trace_chunk_store,
+            messages_store,
+        )
+        .build();
+    let requests = sync
+        .add_characteristic(
+            SYNC_REQUESTS_UUID.clone(),
+            &[CharacteristicProp::Write, CharacteristicProp::WriteWithoutResponse],
+            BleVec::<SYNC_REQUEST_MAX>::new(),
+            requests_store,
         )
         .build();
     sync.build();
@@ -308,23 +302,16 @@ pub fn build_gatt_table<'d, M: RawMutex>(
     // number of `Notify` props written above, so the two cannot drift: this is the
     // number of CCCD slots a client needs, and a slot too few is silent (see
     // [`NOTIFIABLE_CHARACTERISTICS`]).
-    let cccd_count = [
-        gravity_x.cccd_handle,
-        summary.cccd_handle,
-        trace_request.cccd_handle,
-        trace_chunk.cccd_handle,
-    ]
-    .iter()
-    .filter(|handle| handle.is_some())
-    .count();
+    let cccd_count = [messages.cccd_handle, requests.cccd_handle]
+        .iter()
+        .filter(|handle| handle.is_some())
+        .count();
 
     Ok(GattTable {
         table,
         cccd_count,
         device_name,
-        gravity_x,
-        summary,
-        trace_request,
-        trace_chunk,
+        messages,
+        requests,
     })
 }

@@ -31,8 +31,10 @@ Flash log (ring of 4 KB sectors) ──► BLE sync to the app
   (`REP_WINDOW_SAMPLES` = 900 = 9 s, plus 3 s headroom). The detector never asks
   for more than 9 s, so anything larger is wasted heap — see
   [`GOTCHAS.md`](GOTCHAS.md).
-- The old gravity-X characteristic is still fed from this sampler, decimated to
-  10 Hz updates, and the BLE task notifies it at 1 Hz.
+- The sampler also reads the gravity vector once a second, for the level verdict
+  in the firmware log (`Sensor is level on the X axis` — how the device gets
+  levelled). That reading goes nowhere else: the gravity characteristic it used to
+  feed is gone.
 
 ## Detecting a rep
 

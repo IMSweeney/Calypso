@@ -170,6 +170,30 @@ final $typed_data.Uint8List traceRequestDescriptor = $convert.base64Decode(
     'CgxUcmFjZVJlcXVlc3QSGQoIcmVwX3V1aWQYASABKAxSB3JlcFV1aWQSHQoKYWxsX2NodW5rcx'
     'gCIAEoCFIJYWxsQ2h1bmtzEh8KC2NodW5rX2luZGV4GAMgASgNUgpjaHVua0luZGV4');
 
+@$core.Deprecated('Use syncRequestDescriptor instead')
+const SyncRequest$json = {
+  '1': 'SyncRequest',
+  '2': [
+    {
+      '1': 'trace',
+      '3': 1,
+      '4': 1,
+      '5': 11,
+      '6': '.calypso.TraceRequest',
+      '9': 0,
+      '10': 'trace'
+    },
+  ],
+  '8': [
+    {'1': 'body'},
+  ],
+};
+
+/// Descriptor for `SyncRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List syncRequestDescriptor = $convert.base64Decode(
+    'CgtTeW5jUmVxdWVzdBItCgV0cmFjZRgBIAEoCzIVLmNhbHlwc28uVHJhY2VSZXF1ZXN0SABSBX'
+    'RyYWNlQgYKBGJvZHk=');
+
 @$core.Deprecated('Use syncMessageDescriptor instead')
 const SyncMessage$json = {
   '1': 'SyncMessage',

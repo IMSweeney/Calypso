@@ -33,5 +33,5 @@ A 22-byte BNO055 profile written to the chip's calibration registers restores
 calibration instantly, so a calibrated device does not need the routine again
 after a reboot.
 
-- Stored in the `nvs` partition at offset `0x00` (the device name lives in the second sector, `0x1000`, so erasing one never touches the other).
+- Stored in the `nvs` partition at offset `0x00`, in the first sector — the only thing in there, now that the device name is a compile-time constant rather than a blob alongside it.
 - Saved **once per boot**, on the transition to `is_ready()`, not at boot.

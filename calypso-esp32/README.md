@@ -21,7 +21,7 @@ cargo run                # builds, flashes with espflash, and opens the monitor
 
 That is the normal dev loop. `cargo run --release` for an optimised build.
 
-This writes the partition table along with the bootloader and the app. The firmware's `log` partition (see `partitions.csv`) must exist on the device or the rep log refuses to mount. The first flash repartitions the board. NVS keeps its offsets, so the stored device name and IMU calibration survive.
+This writes the partition table along with the bootloader and the app. The firmware's `log` partition (see `partitions.csv`) must exist on the device or the rep log refuses to mount. The first flash repartitions the board. NVS keeps its offsets, so the stored IMU calibration survives.
 
 For a standalone image to hand to someone else, see [`dist/README.md`](../dist/README.md).
 

@@ -64,7 +64,7 @@ BLE is the only writer so far, at two levels, both under the `ble` logger:
 One line shape for all of them (`describeMessage`, `lib/logging/loggers.dart`):
 
 ```
-2026-10-18T20:41:03.482119 INFO    ble subscribed to 0000ca21-… and 0000ca23-…
+2026-10-18T20:41:03.482119 INFO    ble subscribed to 0000ca21-b0cd-11ec-871f-d45ddf138840
 2026-10-18T20:41:03.631902 FINE    ble raw 0000ca21-b0cd-11ec-871f-d45ddf138840 6B 22 04 10 03 18 03
 2026-10-18T20:41:03.631955 FINE    ble rx 0000ca21-b0cd-11ec-871f-d45ddf138840 6B 22 04 10 03 18 03
 ```
@@ -81,6 +81,15 @@ without `protoc`. Regenerate them only when `proto/calypso.proto` changes:
 
 ```sh
 ./tool/gen_proto.sh          # needs protoc + `dart pub global activate protoc_plugin`
+```
+
+neither of which may be on your `PATH`. The plugin goes to `~/.pub-cache/bin`, and a
+`protoc` the Rust build already fetched is under `~/.cargo/registry`: 
+
+```sh
+PATH="$HOME/.pub-cache/bin:$PATH" \
+PROTOC="$(find ~/.cargo/registry/src -name protoc -path '*macos*' | head -1)" \
+  ./tool/gen_proto.sh
 ```
 
 Fixtures are generated from the core crate, not written by hand:

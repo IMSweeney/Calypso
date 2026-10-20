@@ -270,9 +270,21 @@ pub fn decode_record_into(message: &mut msg::RepRecord, bytes: &[u8]) -> Result<
     Ok(())
 }
 
-/// Encode a trace request (app -> device; used by the app and by tests).
+/// Encode a trace request inside the `SyncRequest` envelope the app writes, which
+/// is one encoding rather than two: the envelope is what the write characteristic
+/// carries, and what a client has to produce to ask for anything.
 pub fn encode_trace_request(request: &msg::TraceRequest, out: &mut [u8]) -> Result<usize, Error> {
-    encode_message(request, out)
+    let envelope = msg::SyncRequest {
+        body: Some(msg::SyncRequest_::Body::Trace(request.clone())),
+    };
+    encode_message(&envelope, out)
+}
+
+/// Decode a `SyncRequest` (app -> device).
+pub fn decode_sync_request(bytes: &[u8]) -> Result<msg::SyncRequest, Error> {
+    let mut message = msg::SyncRequest::default();
+    message.decode_from_bytes(bytes).map_err(|_| Error::Decode)?;
+    Ok(message)
 }
 
 /// Decode a sync message (app -> device or device -> app).
@@ -282,9 +294,11 @@ pub fn decode_sync(bytes: &[u8]) -> Result<msg::SyncMessage, Error> {
     Ok(message)
 }
 
-/// Decode a trace request (app -> device).
+/// The trace request inside a `SyncRequest`, or [`Error::Empty`] if the bytes
+/// carry some other request (or none).
 pub fn decode_trace_request(bytes: &[u8]) -> Result<msg::TraceRequest, Error> {
-    let mut message = msg::TraceRequest::default();
-    message.decode_from_bytes(bytes).map_err(|_| Error::Decode)?;
-    Ok(message)
+    Ok(match decode_sync_request(bytes)?.body {
+        Some(msg::SyncRequest_::Body::Trace(trace)) => trace,
+        None => return Err(Error::Empty),
+    })
 }

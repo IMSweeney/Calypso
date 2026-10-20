@@ -141,24 +141,29 @@ fn corrupt_bytes_do_not_decode() {
 }
 
 #[test]
-fn trace_request_round_trips() {
+fn trace_request_round_trips_in_its_envelope() {
     let mut buf = [0u8; 32];
     let request = msg::TraceRequest {
         rep_uuid: pb::uuid_to_field(&fixture_uuid(42)),
         all_chunks: true,
         chunk_index: 0,
     };
-    let capacity = buf.len();
-    let mut writer: &mut [u8] = &mut buf;
-    {
-        let mut encoder = micropb::PbEncoder::new(&mut writer);
-        micropb::MessageEncode::encode(&request, &mut encoder).unwrap();
-    }
-    let n = capacity - writer.len();
+    // The app writes a `SyncRequest`, not a bare request: one characteristic carries
+    // every request, and this is what a client has to produce to ask for anything.
+    let n = pb::encode_trace_request(&request, &mut buf).unwrap();
 
+    // The envelope is decodable on its own terms ...
+    let envelope = pb::decode_sync_request(&buf[..n]).unwrap();
+    assert!(matches!(envelope.body, Some(msg::SyncRequest_::Body::Trace(_))));
+
+    // ... and the request inside it comes back as it went in.
     let decoded = pb::decode_trace_request(&buf[..n]).unwrap();
     assert_eq!(pb::uuid_from_field(&decoded.rep_uuid), Some(fixture_uuid(42)));
     assert!(decoded.all_chunks);
+
+    // An envelope with no body is not a request: `is_ok()` has to keep meaning
+    // "there is a request here".
+    assert_eq!(pb::decode_trace_request(&[]), Err(pb::Error::Empty));
 }
 
 #[test]

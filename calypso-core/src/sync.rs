@@ -161,7 +161,12 @@ pub fn encode_calibration_message(calibration: &Calibration, out: &mut [u8]) -> 
     .ok()
 }
 
-/// Decode a `TraceRequest` written by the app, rejecting anything absurd.
+/// The trace request inside the `SyncRequest` the app wrote, rejecting anything
+/// absurd.
+///
+/// The envelope is why the write characteristic carries one kind of message and can
+/// carry more later — a request to clear the log, say — without a characteristic,
+/// and a UUID, of its own.
 pub fn decode_trace_request(bytes: &[u8]) -> Option<msg::TraceRequest> {
     let request = pb::decode_trace_request(bytes).ok()?;
     // A short uuid is not an identity.
@@ -173,6 +178,13 @@ pub fn decode_trace_request(bytes: &[u8]) -> Option<msg::TraceRequest> {
 }
 
 /// Largest encoded `SyncMessage` we may need to build: a full BLE chunk.
+///
+/// This is the notify characteristic's ceiling. Every message the device sends goes
+/// out on that one characteristic and the largest of them is a trace chunk of
+/// [`BLE_CHUNK_SAMPLES`] points, so the summaries and the calibration status have to
+/// fit here too — `tests/sync.rs` asserts that rather than assuming it, because a
+/// payload that does not fit the characteristic it is notified on fails to notify
+/// *silently* (see `docs/GOTCHAS.md`).
 pub const SYNC_CHUNK_MAX: usize = 1 + BLE_CHUNK_SAMPLES * 64;
 
 /// Compile-time sanity: the BLE chunk max is what the record buffer holds.

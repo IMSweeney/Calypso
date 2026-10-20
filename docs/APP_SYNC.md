@@ -12,18 +12,27 @@ Service `0000ca20-b0cd-11ec-871f-d45ddf138840` — advertised, so a scan can fil
 
 | UUID | Direction | Carries |
 |---|---|---|
-| `0000ca21-…` | notify + read | `SyncMessage` with a `summary` body, auto-streamed to a subscriber |
-| `0000ca22-…` | write (+ write-without-response) | a **bare** `TraceRequest` |
-| `0000ca23-…` | notify | `SyncMessage` with a `trace` body, on demand |
+| `0000ca21-…` | notify | everything the device says: a `SyncMessage`, whatever its body |
+| `0000ca22-…` | write (+ write-without-response) | everything the app asks for: a `SyncRequest` |
 
-Alongside it:
+**One characteristic each way, and that is the design.** The body of the message
+says what it is — a `summary`, a `trace` chunk, a `calibration` status — so nothing
+here distinguishes a response from a push, and a new kind of message is a new arm of
+the oneof rather than a new characteristic, a new UUID and a new subscription. The
+notify side is sized for the largest message (a trace chunk); the requests side is
+sized for a `TraceRequest` and its envelope.
 
-| UUID | Direction | Carries |
-|---|---|---|
-| `0000ca10-…` / `0000ca11-…` | read + notify | the IMU's gravity vector, X axis only (m/s²) |
-| GAP `0x2A00` | read + write | the device name: rename from the app, persisted in NVS |
+They were three characteristics once: summaries, trace chunks and a bare
+`TraceRequest` each had their own. Collapsing them removed the asymmetry between the
+two directions, the two subscriptions the app had to make, and a CCCD-slot count
+that could be got wrong in silence (`docs/GOTCHAS.md`).
 
-Calibration rides the summary characteristic as `SyncMessage.calibration` rather
+GAP is the other service: `0x2A00` (the device name) and `0x2A01` (the
+appearance), both **read only**. The name is a compile-time constant in the
+firmware — the app could rename the device once, which meant a writable
+characteristic and a name blob in NVS, and it does not any more.
+
+Calibration rides the messages characteristic as `SyncMessage.calibration` rather
 than having a characteristic of its own — see [`CALIBRATION.md`](CALIBRATION.md).
 
 The advertisement carries the flags, the **service UUID** and the local name (30

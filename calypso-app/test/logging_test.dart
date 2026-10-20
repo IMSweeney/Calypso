@@ -182,8 +182,8 @@ void main() {
     await connecting;
 
     final calibration = calibrationMessage(sys: 1, accel: 1, gyro: 2);
-    link.notify(CalypsoGatt.summary, calibration);
-    link.notify(CalypsoGatt.traceChunk, Uint8List(0));
+    link.notify(CalypsoGatt.messages, calibration);
+    link.notify(CalypsoGatt.messages, Uint8List(0));
     await pumpEventQueue();
 
     // A trace request is the app's half of the conversation, logged as it goes out.
@@ -204,10 +204,7 @@ void main() {
     ];
     expect(session, contains('scanning for ${CalypsoGatt.service}'));
     expect(session, contains('connecting to device-1'));
-    expect(
-      session,
-      contains('subscribed to ${CalypsoGatt.summary} and ${CalypsoGatt.traceChunk}'),
-    );
+    expect(session, contains('subscribed to ${CalypsoGatt.messages}'));
     expect(session, contains('connected to device-1'));
     expect(session, contains('connection lost: out of range'));
 
@@ -217,16 +214,16 @@ void main() {
     final messages = [for (final record in records) record.message];
     expect(
       messages,
-      contains(line('rx', CalypsoGatt.summary, calibration)),
+      contains(line('rx', CalypsoGatt.messages, calibration)),
       reason: 'inbound, on the characteristic it arrived on, bytes and all',
     );
     expect(
       messages,
-      contains(line('rx', CalypsoGatt.traceChunk, Uint8List(0))),
+      contains(line('rx', CalypsoGatt.messages, Uint8List(0))),
       reason: 'the other stream is named separately',
     );
     expect(
-      messages.where((m) => m.startsWith('tx ${CalypsoGatt.traceRequest} ')),
+      messages.where((m) => m.startsWith('tx ${CalypsoGatt.requests} ')),
       hasLength(1),
       reason: 'the request the app sent',
     );

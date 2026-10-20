@@ -849,9 +849,87 @@ class TraceRequest extends $pb.GeneratedMessage {
   void clearChunkIndex() => $_clearField(3);
 }
 
+enum SyncRequest_Body { trace, notSet }
+
+/// Everything sent app -> device on the sync service.
+class SyncRequest extends $pb.GeneratedMessage {
+  factory SyncRequest({
+    TraceRequest? trace,
+  }) {
+    final result = SyncRequest._();
+    if (trace != null) result.trace = trace;
+    return result;
+  }
+
+  SyncRequest._();
+
+  factory SyncRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      SyncRequest()..mergeFromBuffer(data, registry);
+  factory SyncRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      SyncRequest()..mergeFromJson(json, registry);
+
+  static const $core.Map<$core.int, SyncRequest_Body> _SyncRequest_BodyByTag = {
+    1: SyncRequest_Body.trace,
+    0: SyncRequest_Body.notSet
+  };
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SyncRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
+      createEmptyInstance: SyncRequest.$_createMessage)
+    ..oo(0, [1])
+    ..aOM<TraceRequest>(1, _omitFieldNames ? '' : 'trace',
+        subBuilder: TraceRequest.$_createMessage)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SyncRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SyncRequest copyWith(void Function(SyncRequest) updates) =>
+      super.copyWith((message) => updates(message as SyncRequest))
+          as SyncRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use SyncRequest() / SyncRequest.new instead')
+  static SyncRequest create() => SyncRequest._();
+  static $pb.GeneratedMessage $_createMessage() => SyncRequest._();
+  @$core.override
+  SyncRequest createEmptyInstance() => SyncRequest._();
+  @$core.pragma('dart2js:noInline')
+  static SyncRequest getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<SyncRequest>(
+          SyncRequest.$_createMessage);
+  static SyncRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  SyncRequest_Body whichBody() => _SyncRequest_BodyByTag[$_whichOneof(0)]!;
+  @$pb.TagNumber(1)
+  void clearBody() => $_clearField($_whichOneof(0));
+
+  @$pb.TagNumber(1)
+  TraceRequest get trace => $_getN(0);
+  @$pb.TagNumber(1)
+  set trace(TraceRequest value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasTrace() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearTrace() => $_clearField(1);
+  @$pb.TagNumber(1)
+  TraceRequest ensureTrace() => $_ensure(0);
+}
+
 enum SyncMessage_Body { summary, trace, status, calibration, notSet }
 
 /// Everything sent device -> app on the sync service.
+///
+/// A response and a push look alike here, and the client tells them apart by the
+/// body: a `trace` belongs to the `TraceRequest` that asked for it (its chunks
+/// carry the rep's UUID), while `summary` and `calibration` arrive because the
+/// client subscribed, not because it asked.
 class SyncMessage extends $pb.GeneratedMessage {
   factory SyncMessage({
     RepSummary? summary,

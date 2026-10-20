@@ -14,7 +14,6 @@ Where Calypso is and what is left. Feature documentation lives in
   [docs/CALIBRATION.md](docs/CALIBRATION.md).
 - **BLE sync** — summaries auto-stream to a subscriber, traces stream on request,
   per-rep UUIDs identify reps across reboots. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
-- **Level sensor** — one axis of the gravity vector over BLE (read + notify).
 - **Client app** — sync, archive, rep list, 3D bar-path plot, calibration hint,
   BLE transport, all testable without hardware.
 - **Save calibration between power cycles** — a 22-byte BNO055 profile in NVS.
@@ -24,10 +23,10 @@ Where Calypso is and what is left. Feature documentation lives in
   could then never be read back (which broke both mounts and every trace). Reads are
   whole 64-byte blocks now and the test mock enforces `READ_SIZE = 4` as the driver
   does. See [docs/GOTCHAS.md](docs/GOTCHAS.md).
-- **The trace-chunk characteristic carries a chunk** — sized to
-  `sync::SYNC_CHUNK_MAX` rather than a summary's 128 bytes, which is why traces
-  stopped part-way with nothing said at either end. Both characteristics are pinned
-  by size tests now.
+- **The notify characteristic carries a chunk** — sized to `sync::SYNC_CHUNK_MAX`
+  rather than a summary's 128 bytes, which is why traces stopped part-way with
+  nothing said at either end. Every message the device sends shares it now, and all
+  three are bounded against it by a size test.
 - **Flash failures name themselves** — a boot or store failure carries the operation
   (phase), the sector and, where the driver lets us, the real `FlashStorageError`,
   plus a raw probe of the failing sector. Two sessions went on "flash read/write
@@ -41,6 +40,16 @@ Where Calypso is and what is left. Feature documentation lives in
 - **Bench mode** — `cargo run --features fake-reps` stores a synthetic rep every 10 s,
   exercising the whole device -> log -> BLE -> app path without lifting. See
   [calypso-esp32/README.md](calypso-esp32/README.md).
+- **One characteristic each way** — the sync service carries a `SyncMessage` out on
+  `0000ca21` and a `SyncRequest` in on `0000ca22`, whatever the body, instead of a
+  characteristic per message kind. The interface can now grow — the next request is a
+  new arm of a oneof, not a new UUID — and the app subscribes once. It also removed
+  the asymmetry between the two directions and the CCCD count that could be got wrong
+  in silence. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
+- **A device name that cannot be written** — the name is a compile-time constant, GAP
+  is read-only, and the NVS name blob and its codec are gone. The gravity service and
+  characteristic went the same way (the level verdict in the firmware log is now its
+  only reader).
 
 ## Open
 
@@ -122,15 +131,18 @@ Where Calypso is and what is left. Feature documentation lives in
 - [ ] `SyncStatus` is defined in the proto and encodable in core, but the
       firmware never sends it — so "this trace is no longer in the log" is
       answered by the client timing out instead of by a message. Either wire it
-      up (`trace_unavailable`, rep counts) or drop it.
+      up (`trace_unavailable`, rep counts) or drop it. **A request has no reply at
+      all**, which is the same gap seen from the other side: the app writes a
+      `SyncRequest` and, if the device will not serve it (not subscribed, rep
+      already gone, unknown request), the only thing that happens is a timeout —
+      the device logs it and says nothing. A reply that names what it answers
+      (a request id, or at least a status body) is what would close both.
 - [ ] **Let the app clear the device's log.** Today the only way is `espflash
       erase-parts --partition-table partitions.csv log` from a host, which is the
-      wrong shape when iterating on the app. A `SyncMessage` arm (or a control
-      characteristic write) calling `FlashLog::format()` and resetting the summary
-      cursor would do it, and it destroys reps so it should be deliberate and
-      logged.
-- [ ] Decide about the device name: currently rename-only via the GAP
-      characteristic, persisted in NVS.
+      wrong shape when iterating on the app. With one characteristic each way this
+      is now a new `SyncRequest` arm — calling `FlashLog::format()` and resetting
+      the summary cursor — rather than a characteristic of its own. It destroys
+      reps, so it should be deliberate and logged.
 
 ### Firmware
 - [ ] **OTA code updates** — the app partition is 1.5 MB with headroom; dual

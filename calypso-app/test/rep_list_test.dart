@@ -176,7 +176,7 @@ void _calibrationHint() {
     // Connected, but no reading yet: nothing to say.
     expect(find.textContaining('IMU not calibrated'), findsNothing);
 
-    link.notify(CalypsoGatt.summary, calibrationMessage(sys: 1, accel: 1, gyro: 2));
+    link.notify(CalypsoGatt.messages, calibrationMessage(sys: 1, accel: 1, gyro: 2));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('IMU not calibrated'), findsOneWidget);
@@ -189,7 +189,7 @@ void _calibrationHint() {
 
     // The IMU finishes calibrating: the hint goes away and the list has the
     // screen to itself again.
-    link.notify(CalypsoGatt.summary, calibrationMessage());
+    link.notify(CalypsoGatt.messages, calibrationMessage());
     await tester.pumpAndSettle();
     expect(find.textContaining('IMU not calibrated'), findsNothing);
   });
@@ -197,7 +197,7 @@ void _calibrationHint() {
   testWidgets('a dropped connection takes a stale hint with it', (tester) async {
     final link = await pumpConnected(tester);
 
-    link.notify(CalypsoGatt.summary, calibrationMessage(sys: 1, accel: 1, gyro: 1));
+    link.notify(CalypsoGatt.messages, calibrationMessage(sys: 1, accel: 1, gyro: 1));
     await tester.pumpAndSettle();
     expect(find.textContaining('IMU not calibrated'), findsOneWidget);
 
@@ -250,7 +250,7 @@ void _liveSummaries() {
     // nothing, so the request times out and the summary is archived without one —
     // the documented behaviour for a trace the device no longer holds, not a
     // failure.
-    link.notify(CalypsoGatt.summary, summaryMessage(u(0)));
+    link.notify(CalypsoGatt.messages, summaryMessage(u(0)));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('Rep ${uuidShort(u(0))}'), findsOneWidget,
@@ -259,7 +259,7 @@ void _liveSummaries() {
 
     // The device re-streams summaries on every connection, and a rep can be
     // summarised twice around a reconnect: the log is written once either way.
-    link.notify(CalypsoGatt.summary, summaryMessage(u(0)));
+    link.notify(CalypsoGatt.messages, summaryMessage(u(0)));
     await tester.pumpAndSettle();
     expect(find.textContaining('Rep ${uuidShort(u(0))}'), findsOneWidget,
         reason: 'one row, one record');
@@ -296,7 +296,7 @@ void _bleWiring() {
 
     expect(find.text('Connected'), findsOneWidget);
     expect(link.scans.single, [CalypsoGatt.service]);
-    expect(link.subscribed, [CalypsoGatt.summary, CalypsoGatt.traceChunk]);
+    expect(link.subscribed, [CalypsoGatt.messages]);
     expect(find.text('Disconnect'), findsOneWidget);
 
     // Disconnecting is reflected too.
