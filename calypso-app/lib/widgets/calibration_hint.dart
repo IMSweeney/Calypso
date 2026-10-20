@@ -1,12 +1,3 @@
-/// The calibration hint: what the device is waiting for, in words.
-///
-/// The device has no display and will not record a rep until its IMU is
-/// calibrated, which on its own looks like an app that does nothing. This is the
-/// strip that explains it — see `docs/CALIBRATION.md`.
-///
-/// Shown only while connected and only until the IMU is calibrated: the levels
-/// come from the device, so they mean nothing once the link drops (the transport
-/// clears them), and once it is recording there is nothing to say.
 library;
 
 import 'package:flutter/material.dart';
@@ -57,8 +48,6 @@ class CalibrationHint extends StatelessWidget {
                       const SizedBox(height: 2),
                       Text(latest.action),
                       const SizedBox(height: 4),
-                      // Every sensor, including the one not to bother with: the
-                      // levels are what says which sensor is holding it up.
                       Text(
                         latest.levels,
                         style: Theme.of(context).textTheme.bodySmall,

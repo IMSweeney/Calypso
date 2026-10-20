@@ -1,11 +1,3 @@
-/// The BLE transport: the device over Bluetooth, behind the same [RepTransport]
-/// interface as a fixture, so the sync client and the UI never know the
-/// difference.
-///
-/// All the logic here is protocol and state — scanning, subscribing, decoding
-/// `SyncMessage`s, requesting traces, reassembling chunks, knowing when a stream
-/// has ended — and it runs on top of [BleLink], the plugin seam, so it is
-/// testable with a fake link and no hardware.
 library;
 
 import 'dart:async';
@@ -24,20 +16,12 @@ import '../sync/trace_reassembly.dart';
 import 'ble_link.dart';
 import 'transport.dart';
 
-/// The device's GATT layout, from `calypso-core::ble`.
-///
-/// One service and one characteristic each way: everything the device says is a
-/// `SyncMessage` on [messages], and everything the app asks for is a `SyncRequest`
-/// on [requests]. The body of the message says what it is — a calibration status,
-/// a summary, a trace chunk — so a new kind of message is a new arm of the oneof,
-/// not a new characteristic.
 class CalypsoGatt {
   static const String service = '0000ca20-b0cd-11ec-871f-d45ddf138840';
   static const String messages = '0000ca21-b0cd-11ec-871f-d45ddf138840';
   static const String requests = '0000ca22-b0cd-11ec-871f-d45ddf138840';
 }
 
-/// Which way a logged message went: the first word of its log line.
 enum _Direction { rx, tx }
 
 class BleTransport implements RepTransport {
@@ -48,61 +32,31 @@ class BleTransport implements RepTransport {
   });
 
   final BleLink _link;
-
-  /// How long a requested trace may go **without a chunk** before it is given up on.
-  ///
-  /// An idle timeout, not a budget for the whole stream, and every chunk resets it —
-  /// what matters is whether chunks are still coming. A whole-stream budget cannot
-  /// work at this size: a real trace is ~150 notifications, and the device may take
-  /// tens of seconds to send the first one while it finishes the previous rep's trace
-  /// and its flash work. The log has exactly that: a request whose first chunk arrived
-  /// 22 s later, after the app had given up and while the device was streaming it
-  /// perfectly well.
-  ///
-  /// The device stays silent *for ever* if it no longer holds the rep, so this is also
-  /// what makes a forgotten trace fail rather than hang.
   final Duration traceTimeout;
-
-  /// Completion fallback for a device that doesn't send `totalChunks` (anything
-  /// flashed before that field landed): a stream is over when it goes quiet.
   final Duration chunkIdleTimeout;
 
-  /// Connection state, for the UI to observe.
   final BleStatusNotifier status = BleStatusNotifier();
-
-  /// The IMU's calibration levels, as last reported by the device. Empty until
-  /// the device sends one, and cleared when the link drops.
   final CalibrationNotifier calibration = CalibrationNotifier();
 
   String? _deviceId;
   StreamSubscription<Uint8List>? _messagesSub;
   final StreamController<RepSummary> _summaryCtrl = StreamController<RepSummary>.broadcast();
 
-  /// Summaries the device has told us about, by rep id.
   final Map<String, pb.RepSummary> _summaries = {};
 
-  /// Messages received, by kind, for the instrumentation line in [_onMessage].
   final Map<pb.SyncMessage_Body, int> _rxCounts = {};
 
-  /// Reassembly per rep in flight.
   final Map<String, TraceAssembler> _assemblers = {};
   final Map<String, int> _expectedChunks = {};
   final Map<String, Timer> _idleTimers = {};
 
-  /// The silence timer per rep in flight: reset by every chunk that arrives, and what
-  /// gives up on a request the device never answers ([`_timeoutRequest`]).
   final Map<String, Timer> _requestTimers = {};
   final Map<String, Completer<List<TracePoint>>> _pending = {};
 
-  /// Traces already received whole, so a second request doesn't re-fetch.
   final Map<String, List<TracePoint>> _completed = {};
 
   bool _closed = false;
 
-  // ── Connection ──────────────────────────────────────────────────────────
-
-  /// Scan for the device, connect, and subscribe to both notification
-  /// characteristics. Repeated calls are safe: they re-scan and re-connect.
   Future<void> connect({Duration scanTimeout = const Duration(seconds: 10)}) async {
     if (_closed) throw StateError('BleTransport is closed');
     await _teardownConnection();
@@ -114,10 +68,6 @@ class BleTransport implements RepTransport {
       return;
     }
 
-    // **The session, one line at a time, so an empty log means something.** The
-    // messages below are the reason this log exists, but "nothing arrived" has three
-    // shapes — never connected, connected but not subscribed, subscribed but never
-    // sent — and without these lines a file full of nothing cannot tell them apart.
     bleLog.info('scanning for ${CalypsoGatt.service}');
     status.set(BleStatus.scanning);
     final found = Completer<String>();
@@ -142,36 +92,17 @@ class BleTransport implements RepTransport {
     status.set(BleStatus.connecting, deviceId: deviceId);
     try {
       await _link.connect(deviceId);
-      // **Discover before subscribing.** On iOS and macOS the plugin looks the
-      // characteristic up in the peripheral's discovered service list, and
-      // CoreBluetooth leaves that empty until `discoverServices` has run. Skipping
-      // this does not fail as "no services" — it fails as
-      // `characteristicNotFound`, naming a UUID that is perfectly correct, which is
-      // exactly how it read on the first run against real hardware.
       var services = await _link.discoverServices(deviceId);
-      // Instrumentation, not a test: what the device offers and what we wanted,
-      // every time, successful or not. Two rounds of this link disagreeing about UUID
-      // byte order were settled by exactly this pair of lines, and the firmware logs
-      // its side (`sync service uuid …`) at boot.
       debugPrint(
         'calypso: device offers ${_describe(services)}; '
         'want ${CalypsoGatt.service}[${CalypsoGatt.messages}, ${CalypsoGatt.requests}]',
       );
       if (!_offersSync(services)) {
-        // CoreBluetooth's tree can still be filling in when discovery returns, so
-        // give it one more chance before believing the device doesn't have it.
         await Future<void>.delayed(const Duration(milliseconds: 250));
         services = await _link.discoverServices(deviceId);
       }
       if (!_offersSync(services)) {
-        // A device from before the UUID byte order was settled exposes every UUID
-        // reversed. That is worth saying plainly: it is a firmware version, not a
-        // bug in the app, and the fix is to flash the current firmware.
         if (_offersReversed(services)) {
-          // Two causes, and they need different fixes, so name both. The device's
-          // Bluetooth address is its identity, so a client that cached the old GATT
-          // database keeps seeing it under the *same* identity across reflashes —
-          // which is how "reflash it" turned into a circle.
           throw StateError(
             'the device looks like it exposes its UUIDs reversed '
             '(${_reversed(CalypsoGatt.service)}). Either it is running firmware from '
@@ -181,19 +112,12 @@ class BleTransport implements RepTransport {
             'off and on before reflashing.',
           );
         }
-        // Otherwise say what the device *does* offer. The plugin's own error for
-        // this names the characteristic we asked for, which is correct — so it
-        // reads as a device fault while telling us nothing about the device.
         throw StateError(
           'device offers ${_describe(services)}, not both characteristics of '
           '${CalypsoGatt.service} (${CalypsoGatt.messages}, ${CalypsoGatt.requests})',
         );
       }
       await _link.subscribe(deviceId, CalypsoGatt.service, CalypsoGatt.messages);
-      // Instrumentation: subscribing is the half of this link the app initiates. A
-      // hint that never appears has three shapes — never sent, notifications never
-      // enabled, or received and ignored — and the device logs the first, this logs
-      // the second, and `calypso: rx` logs the third.
       debugPrint('calypso: notifications enabled for ${CalypsoGatt.messages}');
       bleLog.info('subscribed to ${CalypsoGatt.messages}');
     } catch (e) {
@@ -207,12 +131,7 @@ class BleTransport implements RepTransport {
       if (id != _deviceId) return;
       if (!connected) _onConnectionLost(error);
     });
-    // Inside a guard too: a stream that cannot be opened is a failed connection,
-    // not something to leak into the widget tree as an unhandled error.
     try {
-      // One stream, one listener: summaries, calibration and trace chunks all
-      // arrive here, and ordering between them is BLE's to keep rather than two
-      // independent plugin streams'.
       _messagesSub = _link
           .valueStream(deviceId, CalypsoGatt.messages)
           .listen(_onMessage);
@@ -227,8 +146,6 @@ class BleTransport implements RepTransport {
     status.set(BleStatus.connected, deviceId: deviceId);
   }
 
-  /// Whether a discovered tree holds the sync service with the characteristic each
-  /// way: without both, the device can neither be heard nor asked anything.
   static bool _offersSync(List<DiscoveredService> services) => services.any(
         (service) =>
             _sameUuid(service.uuid, CalypsoGatt.service) &&
@@ -236,22 +153,14 @@ class BleTransport implements RepTransport {
             service.characteristics.any((c) => _sameUuid(c, CalypsoGatt.requests)),
       );
 
-  /// UUIDs arrive in whatever case the platform prefers — CoreBluetooth gives
-  /// upper case — and the protocol's identity is the value, not the spelling.
   static bool _sameUuid(String a, String b) => a.toLowerCase() == b.toLowerCase();
 
   static String _describe(List<DiscoveredService> services) =>
       services.isEmpty ? 'no services' : services.join('; ');
 
-  /// Whether the device offers the sync service with its UUID bytes reversed — the
-  /// signature of firmware from before the two byte orders were sorted out (see the
-  /// note in `calypso-core/src/ble.rs`: the same UUID needs one order in the GATT
-  /// tree and the opposite in advertising data, and getting it wrong is silent at
-  /// both ends).
   static bool _offersReversed(List<DiscoveredService> services) =>
       services.any((service) => _sameUuid(service.uuid, _reversed(CalypsoGatt.service)));
 
-  /// The same UUID with its 16 bytes in the opposite order.
   static String _reversed(String uuid) {
     final clean = uuid.replaceAll('-', '').toLowerCase();
     final bytes = [for (var i = 0; i < 16; i++) clean.substring(i * 2, i * 2 + 2)];
@@ -266,13 +175,7 @@ class BleTransport implements RepTransport {
   }
 
   Future<void> _teardownConnection() async {
-    // The calibration levels belong to a connection, so they go with it.
     calibration.clear();
-    // Fire-and-forget the subscription cancels. Awaiting them can block behind an
-    // event-loop turn that may never arrive (a widget test's fake clock, or a
-    // wedged platform channel), and nothing here needs confirmation that the
-    // cancel finished: the listeners are nulled below and `_onMessage` drops
-    // anything that still arrives.
     _messagesSub?.cancel();
     _messagesSub = null;
     final deviceId = _deviceId;
@@ -281,7 +184,6 @@ class BleTransport implements RepTransport {
       try {
         await _link.disconnect(deviceId);
       } catch (_) {
-        // Already gone.
       }
     }
   }
@@ -294,8 +196,6 @@ class BleTransport implements RepTransport {
     _failPending('connection lost');
   }
 
-  /// Completes every in-flight trace request with a [TraceUnavailableException]:
-  /// the caller can retry, and must not hang.
   void _failPending(String reason) {
     for (final entry in _pending.entries.toList()) {
       entry.value.completeError(TraceUnavailableException(entry.key, reason));
@@ -305,15 +205,11 @@ class BleTransport implements RepTransport {
       timer.cancel();
     }
     _idleTimers.clear();
-    // Including the silence timers: this *is* the failure they would report, and a
-    // stale one firing later would describe a dropped link as a quiet device.
     for (final timer in _requestTimers.values) {
       timer.cancel();
     }
     _requestTimers.clear();
   }
-
-  // ── RepTransport ────────────────────────────────────────────────────────
 
   @override
   Future<List<RepSummary>> summaries() async {
@@ -334,23 +230,15 @@ class BleTransport implements RepTransport {
       throw TraceUnavailableException(uuid, 'not connected to a device');
     }
 
-    // A fresh attempt: drop anything left from an earlier, partial stream.
     _assemblers[uuid] = TraceAssembler(uuid);
     _expectedChunks.remove(uuid);
     _idleTimers.remove(uuid)?.cancel();
     final completer = Completer<List<TracePoint>>();
     _pending[uuid] = completer;
-    // The listener is attached below, before the write — so a connection that drops
-    // between the write and the await completes a future somebody is listening to.
     final response = completer.future;
-    // An idle timeout, armed now and reset by every chunk (`_onChunk`). See the field's
-    // doc for why this is not a whole-stream budget.
     _requestTimers.remove(uuid)?.cancel();
     _requestTimers[uuid] = Timer(traceTimeout, () => _timeoutRequest(uuid));
 
-    // The request goes in a `SyncRequest` envelope: one characteristic carries every
-    // request the app makes, so asking for something new (clearing the device's log,
-    // say) is a new arm of the oneof rather than a new characteristic.
     final request = pb.SyncRequest(
       trace: pb.TraceRequest(
         repUuid: uuidToBytes(uuid) ?? Uint8List(0),
@@ -358,9 +246,6 @@ class BleTransport implements RepTransport {
       ),
     );
     final payload = request.writeToBuffer();
-    // Logged before the write, not after: a write that fails is exactly the thing
-    // the log is for, and "requested but never sent" is worth telling apart from
-    // "never requested".
     _logMessage(_Direction.tx, CalypsoGatt.requests, payload);
     try {
       await _link.write(
@@ -372,8 +257,6 @@ class BleTransport implements RepTransport {
     } catch (e) {
       _pending.remove(uuid);
       _assemblers.remove(uuid);
-      // The response future is abandoned; mark its errors as handled so a
-      // completion racing this failure cannot become an unhandled error.
       response.ignore();
       bleLog.warning('trace $uuid: request failed: $e');
       throw TraceUnavailableException(uuid, 'request failed: $e');
@@ -381,9 +264,6 @@ class BleTransport implements RepTransport {
 
     try {
       final points = await response;
-      // The outcome, not just the request: `tx` above says a request went out, and
-      // this says what came back. Without it a file holding one and not the other is
-      // an argument rather than a diagnosis.
       bleLog.info('trace $uuid: ${points.length} points');
       return points;
     } finally {
@@ -393,17 +273,11 @@ class BleTransport implements RepTransport {
     }
   }
 
-  /// Nothing has arrived for [uuid] for `traceTimeout`: give the caller up rather than
-  /// hang, and say which shape it was.
   void _timeoutRequest(String uuid) {
     _requestTimers.remove(uuid);
     final pending = _pending.remove(uuid);
     if (pending == null || pending.isCompleted) return;
     final partial = _assemblers.remove(uuid)?.chunkCount ?? 0;
-    // Nothing at all arriving (the request never reached the device, or the device
-    // chose not to answer), or a stream that stopped part-way (the chunks stopped
-    // coming). A link that died under it is `_failPending`'s, not this. The `rx` lines
-    // above say how far it got.
     bleLog.warning(
       partial == 0
           ? 'trace $uuid: no answer within ${traceTimeout.inSeconds}s'
@@ -427,31 +301,15 @@ class BleTransport implements RepTransport {
     status.set(BleStatus.idle);
   }
 
-  // ── Notifications ───────────────────────────────────────────────────────
-
-  /// [characteristic] is which of the two notification characteristics carried
-  /// it: the streams are merged here, and only the caller knows which is which, so
-  /// the log can say.
   void _onMessage(Uint8List bytes) {
-    // Logged before the guards below: the point of the file is what the radio
-    // actually delivered, including a straggler from a connection already torn
-    // down.
     _logMessage(_Direction.rx, CalypsoGatt.messages, bytes);
-    // Also dropped: a straggling notification from a connection we have already
-    // torn down (the subscription cancel above is not awaited).
     if (_closed || _deviceId == null) return;
     final pb.SyncMessage message;
     try {
       message = pb.SyncMessage.fromBuffer(bytes);
     } catch (_) {
-      // A malformed notification is dropped rather than allowed to break the
-      // subscription: the device is a separate writer we don't control.
       return;
     }
-    // Instrumentation: what actually arrives, by kind, with a running count. A
-    // screen that shows nothing has two possible causes — never sent, or sent and
-    // ignored — and the device logs its side of this, so this is the other half.
-    // (Traces arrive dozens of messages to a rep; everything else is rare.)
     final kind = message.whichBody();
     final seen = _rxCounts.update(kind, (n) => n + 1, ifAbsent: () => 1);
     if (kind != pb.SyncMessage_Body.trace || seen % 60 == 0) {
@@ -477,10 +335,6 @@ class BleTransport implements RepTransport {
     }
   }
 
-  /// One log line's worth of a BLE message: `<direction> <uuid> <n>B <hex>`.
-  ///
-  /// The vocabulary is the transport's, not the logger's: the pipeline knows about
-  /// timestamps and levels, this knows a GATT characteristic when it sees one.
   void _logMessage(_Direction direction, String characteristic, List<int> bytes) {
     bleLog.fine(describeMessage(direction.name, characteristic, bytes));
   }
@@ -488,8 +342,6 @@ class BleTransport implements RepTransport {
   void _onChunk(pb.TraceChunk chunk) {
     final uuid = uuidFromBytes(chunk.repUuid);
     if (uuid == null) return;
-    // Any chunk is progress, so it resets that request's silence timer: the timeout is
-    // "nothing is coming", not "the whole trace is taking a while" (see `traceTimeout`).
     final waiting = _requestTimers[uuid];
     if (waiting != null) {
       waiting.cancel();
@@ -499,8 +351,6 @@ class BleTransport implements RepTransport {
     assembler.add(chunk);
 
     if (chunk.totalChunks > 0) {
-      // The device told us how many chunks this stream has, so completion is
-      // exact: every index 0..total-1 arrived.
       _expectedChunks[uuid] = chunk.totalChunks;
       if (assembler.indices.length == chunk.totalChunks && assembler.missingIndices().isEmpty) {
         _complete(uuid);
@@ -508,7 +358,6 @@ class BleTransport implements RepTransport {
       return;
     }
 
-    // No total (firmware from before that field): a quiet stream is over.
     _idleTimers[uuid]?.cancel();
     _idleTimers[uuid] = Timer(chunkIdleTimeout, () => _complete(uuid));
   }

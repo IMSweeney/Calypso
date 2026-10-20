@@ -1,10 +1,3 @@
-/// Reassembling a rep's trace from its chunks.
-///
-/// Traces arrive in chunks because a BLE notification is MTU-bound (~3 points
-/// per notification at Apple's ~185-byte MTU), and a rep is up to 512 points.
-/// Chunks can arrive out of order and a trace can be requested again, so this is
-/// deliberately tolerant: chunks are keyed by index, a repeated index replaces
-/// the earlier one, and chunks for other reps are ignored.
 library;
 
 import '../model/rep.dart';
@@ -14,13 +7,10 @@ import '../protocol/calypso.pb.dart' as pb;
 class TraceAssembler {
   TraceAssembler(this.uuid);
 
-  /// The rep's UUID, canonical text.
   final String uuid;
 
-  /// Chunk index -> points, so a duplicate or re-sent chunk is idempotent.
   final Map<int, List<TracePoint>> _chunks = {};
 
-  /// Adds a chunk if it belongs to this rep, returning whether it did.
   bool add(pb.TraceChunk chunk) {
     if (uuidFromBytes(chunk.repUuid) != uuid) return false;
     _chunks[chunk.index] = chunk.samples.map(TracePoint.fromProto).toList();
@@ -31,11 +21,8 @@ class TraceAssembler {
 
   bool get isEmpty => _chunks.isEmpty;
 
-  /// The indices received so far, ascending.
   List<int> get indices => _chunks.keys.toList()..sort();
 
-  /// Gaps in the chunk indices: if a chunk went missing, its index appears here
-  /// so the caller can ask for that one chunk again.
   List<int> missingIndices() {
     if (_chunks.isEmpty) return const [];
     final highest = indices.last;
@@ -45,7 +32,6 @@ class TraceAssembler {
     ];
   }
 
-  /// The trace so far, in chunk order.
   List<TracePoint> assemble() => [
         for (final index in indices) ...?_chunks[index],
       ];

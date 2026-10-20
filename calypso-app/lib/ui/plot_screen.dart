@@ -1,9 +1,3 @@
-/// A minimal screen for looking at one rep: pick a rep, see its 3D bar path,
-/// scrub through it.
-///
-/// This is deliberately thin — the rep list and session grouping are phase 4 —
-/// but it is the thing that turns the plot model into something you can look at
-/// on the Mac, driven entirely by a fixture (no device, no BLE).
 library;
 
 import 'package:flutter/material.dart';
@@ -13,12 +7,10 @@ import '../model/uuid.dart';
 import '../plot/rep_plot.dart';
 import '../store/rep_archive.dart';
 
-/// One rep from the archive: its summary, its 3D bar path, and a scrubber.
 class PlotScreen extends StatefulWidget {
   const PlotScreen({super.key, required this.store, required this.repUuid});
 
   final RepArchive store;
-  /// The rep's UUID, as text.
   final String repUuid;
 
   @override
@@ -93,8 +85,6 @@ class _PlotScreenState extends State<PlotScreen> {
           if (selected != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              // Wrap, not Row: five stats do not fit a phone's width, and an
-              // overflowing Row would clip them.
               child: Wrap(
                 alignment: WrapAlignment.spaceBetween,
                 spacing: 16,

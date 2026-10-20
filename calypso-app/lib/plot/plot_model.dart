@@ -1,10 +1,3 @@
-/// The plot model: everything about "what to draw" that isn't drawing.
-///
-/// Pure Dart — no Flutter, no canvas — so the axis fit, decimation, speed ramp,
-/// camera and projection are all unit-testable, and so the renderer stays dumb.
-/// The one thing the model cannot know is which axis is "up": the trace is in
-/// the device's own gravity-aligned frame, and that depends on how the sensor
-/// is mounted (see the plan's open question 1).
 library;
 
 import 'dart:math' as math;
@@ -14,30 +7,19 @@ import 'package:vector_math/vector_math_64.dart';
 
 import '../model/rep.dart';
 
-/// A decimated, speed-annotated path ready for drawing.
 class PlotPath {
   PlotPath._(this.points, this.speeds, this.speedMax, this.bounds);
 
-  /// The points that will actually be drawn, oldest first.
   final List<TracePoint> points;
-
-  /// Instantaneous speed at each point, m/s (0 for the first point).
   final List<double> speeds;
-
-  /// Fastest speed in the path, for normalising the colour ramp. 0 if the rep
-  /// never moved.
   final double speedMax;
-
   final AxisBounds bounds;
 
   int get length => points.length;
 
-  /// Where this point sits on the colour ramp, 0 (slowest) to 1 (fastest).
   double speedT(int index) =>
       speedMax <= 0 ? 0 : (speeds[index] / speedMax).clamp(0.0, 1.0);
 
-  /// Total path length in metres, which is a decent proxy for how much the bar
-  /// travelled (versus [RepSummary.rom], which is the dominant-axis range).
   double get pathLength {
     var total = 0.0;
     for (var i = 1; i < points.length; i++) {
@@ -46,13 +28,6 @@ class PlotPath {
     return total;
   }
 
-  /// Builds a drawable path from a rep's trace.
-  ///
-  /// Decimation keeps **both ends**: the start and the end of a rep are the
-  /// points you care about when judging a bar path, so neither is allowed to be
-  /// the sample that gets dropped. (The firmware's own trace decimation anchors
-  /// on the last sample, since that was the bug there — it stores what it has
-  /// without the client's luxury of choosing.)
   static PlotPath from(List<TracePoint> all, {int maxPoints = 512}) {
     if (all.isEmpty) {
       return PlotPath._(const [], const [], 0, AxisBounds.of(const []));
@@ -72,11 +47,6 @@ class PlotPath {
     return PlotPath._(points, speeds, speedMax, AxisBounds.of(points));
   }
 
-  /// Picks at most [maxPoints] samples, always including the first and last.
-  ///
-  /// Starts from a uniform grid and widens it until it fits, rather than
-  /// computing a stride that lands exactly on the cap: the extra iterations are
-  /// cheaper than reasoning about off-by-ones.
   static List<TracePoint> _decimate(List<TracePoint> all, int maxPoints) {
     final n = all.length;
     if (maxPoints < 2 || n <= maxPoints) return List.of(all);
@@ -100,8 +70,6 @@ class PlotPath {
   }
 }
 
-/// A cube containing the path, with a floor on its size so a tiny rep doesn't
-/// get blown up into a misleading shape.
 class AxisBounds {
   AxisBounds(this.center, this.halfExtent);
 
@@ -129,7 +97,6 @@ class AxisBounds {
   }
 }
 
-/// An orbit camera: the user drags to swing around the path, pinches to zoom.
 class OrbitCamera {
   OrbitCamera({
     this.azimuthDeg = -55,
@@ -160,7 +127,6 @@ class OrbitCamera {
         );
   }
 
-  /// Frames [bounds]: far enough back that the cube fits the field of view.
   void fit(AxisBounds bounds) {
     target = bounds.center.clone();
     final fov = fovDeg * math.pi / 180;
@@ -180,7 +146,6 @@ class OrbitCamera {
   }
 }
 
-/// Projects world points into viewport pixels for one camera/viewport pair.
 class PlotProjection {
   PlotProjection(this.camera, this.viewport) {
     _eye = camera.eye;
@@ -208,10 +173,8 @@ class PlotProjection {
 
   static const double nearPlane = 0.01;
 
-  /// View-space depth of a world point (positive in front of the camera).
   double depth(Vector3 world) => (world - _eye).dot(_forward);
 
-  /// Screen position of a world point, or null if it is behind the camera.
   Offset? toScreen(Vector3 world) {
     final d = world - _eye;
     final z = d.dot(_forward);
@@ -224,9 +187,6 @@ class PlotProjection {
     );
   }
 
-  /// The path point nearest to [at], if one is within [maxDistancePx].
-  ///
-  /// This is the hit test behind "tap the path to scrub to that sample".
   int? nearestPoint(PlotPath path, Offset at, {double maxDistancePx = 24}) {
     int? best;
     var bestDistance = maxDistancePx;

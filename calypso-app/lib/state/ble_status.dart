@@ -1,33 +1,14 @@
-/// What the BLE connection is doing, as the UI needs to know it.
-///
-/// Named `BleStatus` rather than `ConnectionState` on purpose: Flutter already
-/// has a `ConnectionState` (in `AsyncSnapshot`), and importing both was the
-/// cause of the `connection.` prefixes in the previous sketch.
 library;
 
 import 'package:flutter/foundation.dart';
 
 enum BleStatus {
-  /// Nothing attempted yet.
   idle,
-
-  /// Bluetooth is off, not permitted, or absent (a missing macOS entitlement
-  /// shows up here too).
   unsupported,
-
-  /// Looking for a Calypso device.
   scanning,
-
-  /// Found one; connecting and subscribing.
   connecting,
-
-  /// Connected and subscribed: summaries arrive live.
   connected,
-
-  /// Was connected, or tried to be, and is not now.
   disconnected,
-
-  /// The last attempt failed; [BleStatusNotifier.error] says why.
   failed,
 }
 
@@ -47,7 +28,6 @@ class BleStatusNotifier extends ChangeNotifier {
       _status == BleStatus.disconnected ||
       _status == BleStatus.failed;
 
-  /// Short label for a status badge.
   String get label => switch (_status) {
         BleStatus.idle => 'No device',
         BleStatus.unsupported => 'Bluetooth unavailable',

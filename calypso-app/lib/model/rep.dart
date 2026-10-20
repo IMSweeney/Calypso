@@ -1,7 +1,3 @@
-/// Domain types for the client, converted from the generated protobuf classes.
-///
-/// These are plain Dart (no protobuf, no Flutter) so the sync client, the plot
-/// model and the tests can all use them without dragging in either.
 library;
 
 import 'dart:math' as math;
@@ -10,12 +6,9 @@ import 'uuid.dart';
 
 import '../protocol/calypso.pb.dart' as pb;
 
-/// Fixed-point scales, mirroring `calypso_core::sampler`.
-const int accelLsbPerMs2 = 100; // 1 m/s^2 = 100 LSB
-const int quatLsbPerUnit = 16384; // 1.0 = 16384 LSB
+const int accelLsbPerMs2 = 100;
+const int quatLsbPerUnit = 16384;
 
-/// A rep summary as the device reports it.
-///
 /// Device timestamps are uptime milliseconds: the device has no RTC, so
 /// [tStartMs]/[tEndMs] are only meaningful relative to each other.
 class RepSummary {
@@ -37,7 +30,6 @@ class RepSummary {
     required this.decimated,
   });
 
-  /// The rep's identity: a canonical UUID string, keying the archive.
   final String uuid;
   final int tStartMs;
   final int tEndMs;
@@ -53,8 +45,7 @@ class RepSummary {
   /// m/s^2.
   final double peakAccel;
 
-  /// Degrees. The bar-tilt numbers: roll is side-to-side dip, pitch is
-  /// forward lean.
+  /// The bar-tilt numbers: roll is side-to-side dip, pitch is forward lean.
   final double rollMinDeg;
   final double rollMaxDeg;
   final double pitchMinDeg;
@@ -64,10 +55,6 @@ class RepSummary {
   final int traceLen;
 
   /// Chunks the device stored, at `TRACE_CHUNK_SAMPLES` (48) points each.
-  ///
-  /// Note this is the *stored* chunking. When a trace is streamed over BLE the
-  /// device re-chunks to fit the MTU, so this is not the number of
-  /// notifications to expect (see the plan's phase 5 notes).
   final int chunkCount;
 
   /// True if the trace was decimated to fit the device's trace buffer.
@@ -96,12 +83,6 @@ class RepSummary {
       );
 }
 
-/// One point of a rep's trace.
-///
-/// The raw accel and quaternion are kept alongside the derived position, so the
-/// client can re-derive traces with better algorithms later without a firmware
-/// update. There is no velocity field: the plot derives speed from consecutive
-/// positions.
 class TracePoint {
   const TracePoint({
     required this.tOffsetMs,
@@ -117,11 +98,8 @@ class TracePoint {
     required this.qz,
   });
 
-  /// Milliseconds from the rep's first trace point.
   final int tOffsetMs;
 
-  /// ZUPT-anchored displacement from the rep start, in the device's own
-  /// gravity-aligned world frame (metres).
   final double x;
   final double y;
   final double z;

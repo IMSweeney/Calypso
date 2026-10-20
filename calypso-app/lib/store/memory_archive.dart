@@ -1,9 +1,3 @@
-/// An in-memory [RepArchive].
-///
-/// Used by widget tests (where real file I/O never completes under the fake
-/// clock) and useful for replaying a capture without touching the disk. It keeps
-/// the same byte layout as the file-backed archive, so both interpret the format
-/// through [scanBlocks].
 library;
 
 import 'dart:typed_data';
@@ -17,13 +11,7 @@ class MemoryArchive implements RepArchive {
   }
 
   final List<int> _bytes = [];
-
-  /// Client receipt times, decoration rather than truth — same rule as
-  /// `HistoryStore`, and this class mirrors it so a widget test drives the same
-  /// semantics.
   final Map<String, DateTime> _received = {};
-
-  /// The uuids the records hold, rebuilt from them by [load].
   final Set<String> _uuids = {};
   List<StoredRep> _reps = [];
   bool _truncated = false;
@@ -37,8 +25,6 @@ class MemoryArchive implements RepArchive {
   @override
   int get sizeBytes => _bytes.length;
 
-  /// Whether the records hold this rep, asked of the records rather than of the
-  /// receipt times beside them.
   @override
   bool contains(String uuid) => _uuids.contains(uuid);
 

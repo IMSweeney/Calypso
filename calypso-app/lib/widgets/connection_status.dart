@@ -1,4 +1,3 @@
-/// The BLE connection badge: state, and the connect/disconnect action.
 library;
 
 import 'package:flutter/material.dart';

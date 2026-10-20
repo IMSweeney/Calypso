@@ -1,9 +1,3 @@
-/// The 3D view: a [CustomPainter] over the plot model, plus the widget that
-/// hands it gestures.
-///
-/// No 3D engine: a rep is a polyline, a gizmo and a grid, so projecting by hand
-/// keeps full control of the look and lets the rendering be pinned by golden
-/// tests with no device and no simulator.
 library;
 
 import 'package:flutter/material.dart';
@@ -12,8 +6,6 @@ import 'package:vector_math/vector_math_64.dart' show Vector3;
 import '../model/rep.dart';
 import 'plot_model.dart';
 
-/// Slow-to-fast colour ramp for the bar path. A grinding rep reads cool, a
-/// snappy one reads hot, which is the thing you can't see in a summary table.
 const Color _slowColour = Color(0xFF4C6EF5);
 const Color _midColour = Color(0xFF51CF66);
 const Color _fastColour = Color(0xFFFF6B35);
@@ -26,8 +18,6 @@ Color colourForSpeed(double t) {
   return Color.lerp(_midColour, _fastColour, (clamped - 0.5) * 2)!;
 }
 
-/// Draws one rep: ground grid, world axes, the bar path coloured by speed,
-/// start/end markers, the scrub marker and an orientation gizmo.
 class RepPlotPainter extends CustomPainter {
   RepPlotPainter({
     required this.path,
@@ -38,7 +28,6 @@ class RepPlotPainter extends CustomPainter {
   final PlotPath path;
   final OrbitCamera camera;
 
-  /// Which path point the scrubber is on, if any.
   final int? scrubIndex;
 
   @override
@@ -79,7 +68,6 @@ class RepPlotPainter extends CustomPainter {
       bounds.center.z - bounds.halfExtent,
     );
     final length = bounds.halfExtent * 2;
-    // Vector3 isn't const-constructible, so this is a runtime list.
     final axes = [
       (Vector3(1, 0, 0), const Color(0xFFE03131)), // x
       (Vector3(0, 1, 0), const Color(0xFF2F9E44)), // y
@@ -123,8 +111,6 @@ class RepPlotPainter extends CustomPainter {
     }
   }
 
-  /// A small body-axis gizmo at the scrubbed sample's orientation: the
-  /// quaternion is the device's, so this is the bar's attitude at that instant.
   void _paintGizmo(Canvas canvas, PlotProjection projection) {
     if (path.length == 0) return;
     final index = (scrubIndex ?? 0).clamp(0, path.length - 1).toInt();
@@ -150,7 +136,6 @@ class RepPlotPainter extends CustomPainter {
 
   static Vector3 _rotateByQuaternion(List<double> q, Vector3 v) {
     final w = q[0], x = q[1], y = q[2], z = q[3];
-    // t = 2 * (qv x v); v' = v + w * t + qv x t
     final tx = 2 * (y * v.z - z * v.y);
     final ty = 2 * (z * v.x - x * v.z);
     final tz = 2 * (x * v.y - y * v.x);
@@ -186,7 +171,6 @@ class RepPlotPainter extends CustomPainter {
   }
 }
 
-/// The interactive 3D view: drag to orbit, pinch to zoom, double-tap to refit.
 class RepPlotView extends StatefulWidget {
   const RepPlotView({
     super.key,
@@ -196,13 +180,8 @@ class RepPlotView extends StatefulWidget {
     this.background = const Color(0xFF14161C),
   });
 
-  /// The rep's trace, straight from the transport.
   final List<TracePoint> points;
-
-  /// Which point the scrubber is on (drives the marker and the gizmo).
   final int? scrubIndex;
-
-  /// Called when the user taps near the path: the index they hit.
   final ValueChanged<int>? onScrub;
 
   final Color background;
@@ -232,7 +211,6 @@ class RepPlotViewState extends State<RepPlotView> {
     _camera.fit(_path.bounds);
   }
 
-  /// Reframes the path (double-tap, or the "reset view" action).
   void refit() => setState(() => _camera.fit(_path.bounds));
 
   @override
@@ -242,7 +220,6 @@ class RepPlotViewState extends State<RepPlotView> {
       onScaleStart: (_) {},
       onScaleUpdate: (details) {
         setState(() {
-          // One finger drags (orbit), two fingers pinch (zoom).
           if (details.pointerCount == 1) {
             _camera.orbitBy(details.focalPointDelta.dx * 0.6, -details.focalPointDelta.dy * 0.6);
           } else if (details.scale != 1.0) {
