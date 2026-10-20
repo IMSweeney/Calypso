@@ -4,19 +4,19 @@
 import 'dart:math' as math;
 import 'dart:ui' show Offset, Size;
 
-import 'package:calypso/model/rep.dart';
 import 'package:calypso/plot/plot_model.dart';
+import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vector_math/vector_math_64.dart';
 
 /// A squat-like trace: down to -[depth] and back, `count` points, 10 ms apart.
-List<TracePoint> squatTrace({int count = 100, double depth = 0.4}) => [
+List<pb.TraceSample> squatTrace({int count = 100, double depth = 0.4}) => [
       for (var i = 0; i < count; i++)
-        TracePoint(
+        pb.TraceSample(
           tOffsetMs: i * 10,
-          x: 0.02 * i / count,
-          y: 0,
-          z: -depth * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
+          px: 0.02 * i / count,
+          py: 0,
+          pz: -depth * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
           ax: 0,
           ay: 0,
           az: -100,
@@ -35,12 +35,12 @@ void main() {
 
     // A rep that barely moved still gets a usable cube, so it isn't stretched
     // into a misleading shape.
-    final flat = PlotPath.from(const [
-      TracePoint(
+    final flat = PlotPath.from([
+      pb.TraceSample(
         tOffsetMs: 0,
-        x: 0,
-        y: 0,
-        z: 0,
+        px: 0,
+        py: 0,
+        pz: 0,
         ax: 0,
         ay: 0,
         az: 0,
@@ -49,11 +49,11 @@ void main() {
         qy: 0,
         qz: 0,
       ),
-      TracePoint(
+      pb.TraceSample(
         tOffsetMs: 10,
-        x: 0.001,
-        y: 0,
-        z: 0,
+        px: 0.001,
+        py: 0,
+        pz: 0,
         ax: 0,
         ay: 0,
         az: 0,
@@ -103,11 +103,11 @@ void main() {
     // 10 ms apart, 0.01 m apart on x: 1 m/s.
     final trace = [
       for (var i = 0; i < 5; i++)
-        TracePoint(
+        pb.TraceSample(
           tOffsetMs: i * 10,
-          x: i * 0.01,
-          y: 0,
-          z: 0,
+          px: i * 0.01,
+          py: 0,
+          pz: 0,
           ax: 0,
           ay: 0,
           az: 0,
@@ -201,7 +201,7 @@ void main() {
     final projection = PlotProjection(camera, viewport);
 
     final target = path.points[path.length ~/ 2];
-    final screen = projection.toScreen(Vector3(target.x, target.y, target.z))!;
+    final screen = projection.toScreen(Vector3(target.px, target.py, target.pz))!;
     final hit = projection.nearestPoint(path, screen);
     expect(hit, isNotNull);
     expect(path.points[hit!].tOffsetMs, target.tOffsetMs);

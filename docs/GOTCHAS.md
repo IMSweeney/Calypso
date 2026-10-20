@@ -353,6 +353,44 @@ message kind, and the three senders encode into one shared buffer. The remaining
 to get this wrong is the *other* direction: a request the app writes is rejected by the
 stack if it does not fit `sync.requests`, and the app sees the failure.
 
+## Types
+
+### The device keeps two types off the wire, on purpose
+
+`proto/calypso.proto` describes the wire format, and both ends use those generated
+types for anything that is stored, streamed or logged. Two types are deliberately not
+the generated ones, because they are what the *maths* runs on rather than what travels:
+
+- **`sampler::Sample`** — 20 bytes, fixed point, produced 100 times a second. The
+  detector and the ZUPT integration read these directly; a message type here would be a
+  conversion per sample.
+- **`rep::TracePoint`** — 32 flat bytes (`pos: [f32; 3]`, `accel: [i16; 3]`,
+  `quat: [i16; 4]`) against a `TraceSample` that carries a derived `t_offset_ms` and
+  the wire's quantized ints. A rep's trace is up to 512 points.
+
+What makes this more than tidiness: **a decoded message is ~2 KB** — a full trace chunk
+is stored inline in a `TraceSample` list — and the device's stack is the documented
+landmine above. That is why `pb::decode_record_into` reuses a caller-owned buffer, why
+the summary batch lives on the heap, and why `stream_trace` carries the firmware's only
+`large_stack_frames` exemption. Holding decoded messages in the sampling path would
+move kilobytes onto a stack that has none to spare.
+
+Everything else is the generated type, on the device too: `compute_rep` returns a
+`msg::RepSummary` (the caller fills in the uuid it minted and the `chunk_count` its
+storage will use), and a rep is stored, streamed and logged as the messages it is.
+
+The app keeps no mirror types at all: `model/rep.dart` and `model/calibration.dart`
+are extensions that *derive* from the messages (units, tilt ranges, the calibration
+wording), so a field added to the proto reaches the UI instead of being dropped by a
+hand-written conversion.
+
+### A protobuf message is not a `const`
+
+`package:protobuf` messages compare by *content* (`GeneratedMessage` overrides `==` and
+`hashCode`), so a `ValueNotifier`/`ChangeNotifier` holding one behaves as expected — the
+1 Hz calibration push does not notify when nothing changed. They cannot be `const`
+though, so a test that wants a fixed message builds it in a `final`, not a `const`.
+
 ## Tests and tooling
 
 ### `cargo test` does not work in `calypso-esp32`

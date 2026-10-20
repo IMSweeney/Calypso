@@ -23,20 +23,18 @@ class FixtureTransport implements RepTransport {
   bool get truncated => _result.truncated;
 
   @override
-  Future<List<RepSummary>> summaries() async => summariesOf(_result.records)
-      .map(RepSummary.fromProto)
-      .toList();
+  Future<List<pb.RepSummary>> summaries() async => summariesOf(_result.records);
 
   @override
-  Stream<RepSummary> watchSummaries() async* {
+  Stream<pb.RepSummary> watchSummaries() async* {
     for (final summary in summariesOf(_result.records)) {
       if (replayInterval > Duration.zero) await Future<void>.delayed(replayInterval);
-      yield RepSummary.fromProto(summary);
+      yield summary;
     }
   }
 
   @override
-  Future<List<TracePoint>> trace(String uuid) async {
+  Future<List<pb.TraceSample>> trace(String uuid) async {
     final chunks = traceChunksFor(_result.records, uuid);
     if (chunks.isEmpty) {
       throw TraceUnavailableException(
@@ -52,7 +50,7 @@ class FixtureTransport implements RepTransport {
   }
 
   bool _hasSummary(String uuid) =>
-      summariesOf(_result.records).any((pb.RepSummary s) => summaryUuid(s) == uuid);
+      summariesOf(_result.records).any((pb.RepSummary s) => s.uuid == uuid);
 
   @override
   Future<void> close() async {}

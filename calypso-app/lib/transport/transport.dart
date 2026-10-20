@@ -1,6 +1,6 @@
 library;
 
-import '../model/rep.dart';
+import '../protocol/calypso.pb.dart' as pb;
 
 class TraceUnavailableException implements Exception {
   const TraceUnavailableException(this.uuid, [this.reason = 'not in the log']);
@@ -13,8 +13,8 @@ class TraceUnavailableException implements Exception {
 }
 
 abstract class RepTransport {
-  Future<List<RepSummary>> summaries();
-  Stream<RepSummary> watchSummaries();
-  Future<List<TracePoint>> trace(String uuid);
+  Future<List<pb.RepSummary>> summaries();
+  Stream<pb.RepSummary> watchSummaries();
+  Future<List<pb.TraceSample>> trace(String uuid);
   Future<void> close();
 }

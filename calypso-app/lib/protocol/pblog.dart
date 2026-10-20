@@ -34,7 +34,6 @@ DumpReadResult readDump(Uint8List bytes) {
 List<RepSummary> summariesOf(List<RepRecord> records) =>
     records.where((r) => r.hasSummary()).map((r) => r.summary).toList();
 
-String? summaryUuid(RepSummary summary) => uuidFromBytes(summary.repUuid);
 
 String? chunkUuid(TraceChunk chunk) => uuidFromBytes(chunk.repUuid);
 

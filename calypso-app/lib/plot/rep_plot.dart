@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:vector_math/vector_math_64.dart' show Vector3;
 
 import '../model/rep.dart';
+import '../protocol/calypso.pb.dart' as pb;
 import 'plot_model.dart';
 
 const Color _slowColour = Color(0xFF4C6EF5);
@@ -90,7 +91,7 @@ class RepPlotPainter extends CustomPainter {
         ..strokeWidth = 3
         ..strokeCap = StrokeCap.round;
       _line(canvas, projection, paint,
-          Vector3(a.x, a.y, a.z), Vector3(b.x, b.y, b.z));
+          Vector3(a.px, a.py, a.pz), Vector3(b.px, b.py, b.pz));
     }
   }
 
@@ -98,16 +99,16 @@ class RepPlotPainter extends CustomPainter {
     if (path.length == 0) return;
     final first = path.points.first;
     final last = path.points.last;
-    _dot(canvas, projection, Vector3(first.x, first.y, first.z),
+    _dot(canvas, projection, Vector3(first.px, first.py, first.pz),
         const Color(0xFFFFFFFF), 4);
-    _dot(canvas, projection, Vector3(last.x, last.y, last.z),
+    _dot(canvas, projection, Vector3(last.px, last.py, last.pz),
         const Color(0xFFFFD43B), 5);
 
     final index = scrubIndex;
     if (index != null && index >= 0 && index < path.length) {
       final p = path.points[index];
-      _dot(canvas, projection, Vector3(p.x, p.y, p.z), const Color(0xFFF8F9FA), 7);
-      _dot(canvas, projection, Vector3(p.x, p.y, p.z), const Color(0xFF212529), 3);
+      _dot(canvas, projection, Vector3(p.px, p.py, p.pz), const Color(0xFFF8F9FA), 7);
+      _dot(canvas, projection, Vector3(p.px, p.py, p.pz), const Color(0xFF212529), 3);
     }
   }
 
@@ -117,7 +118,7 @@ class RepPlotPainter extends CustomPainter {
     final point = path.points[index];
     final axisLength = path.bounds.halfExtent * 0.35;
     final quaternion = point.quaternion;
-    final base = Vector3(point.x, point.y, point.z);
+    final base = Vector3(point.px, point.py, point.pz);
 
     const colours = [
       Color(0xFFE03131),
@@ -180,7 +181,7 @@ class RepPlotView extends StatefulWidget {
     this.background = const Color(0xFF14161C),
   });
 
-  final List<TracePoint> points;
+  final List<pb.TraceSample> points;
   final int? scrubIndex;
   final ValueChanged<int>? onScrub;
 

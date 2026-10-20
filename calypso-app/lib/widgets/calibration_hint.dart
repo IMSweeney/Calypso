@@ -2,6 +2,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../model/calibration.dart';
 import '../state/ble_status.dart';
 import '../state/calibration.dart';
 

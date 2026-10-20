@@ -6,8 +6,8 @@
 library;
 
 import 'dart:async';
+import 'dart:typed_data';
 
-import 'package:calypso/model/rep.dart';
 import 'package:calypso/model/uuid.dart';
 
 import 'test_uuid.dart';
@@ -16,7 +16,7 @@ import 'package:calypso/sync/trace_reassembly.dart';
 import 'package:calypso/transport/transport.dart';
 
 /// Builds a summary with sensible defaults, so tests only state what matters.
-RepSummary summary(
+pb.RepSummary summary(
   int index, {
   int durationMs = 1400,
   double rom = 0.4,
@@ -25,8 +25,8 @@ RepSummary summary(
   int chunkCount = 3,
   bool decimated = false,
 }) =>
-    RepSummary(
-      uuid: testUuid(index),
+    pb.RepSummary(
+      repUuid: uuidToBytes(testUuid(index)) ?? Uint8List(0),
       tStartMs: index * 10_000,
       tEndMs: index * 10_000 + durationMs,
       durationMs: durationMs,
@@ -44,13 +44,13 @@ RepSummary summary(
     );
 
 /// Builds a trace of [count] points, 10 ms apart, sinking to -0.4 m.
-List<TracePoint> tracePoints(int count, {int startMs = 0}) => [
+List<pb.TraceSample> tracePoints(int count, {int startMs = 0}) => [
       for (var i = 0; i < count; i++)
-        TracePoint(
+        pb.TraceSample(
           tOffsetMs: startMs + i * 10,
-          x: 0,
-          y: 0,
-          z: -0.4 * i / (count == 1 ? 1 : count - 1),
+          px: 0,
+          py: 0,
+          pz: -0.4 * i / (count == 1 ? 1 : count - 1),
           ax: 0,
           ay: 0,
           az: -100,
@@ -65,7 +65,7 @@ List<TracePoint> tracePoints(int count, {int startMs = 0}) => [
 /// them over BLE: every chunk carries the total, so a client knows which is last.
 ///
 /// The chunks carry [uuid], so they belong to the rep a test named.
-List<pb.TraceChunk> chunksFor(String uuid, List<TracePoint> points, {int perChunk = 4}) {
+List<pb.TraceChunk> chunksFor(String uuid, List<pb.TraceSample> points, {int perChunk = 4}) {
   final chunks = <pb.TraceChunk>[];
   for (var start = 0; start < points.length; start += perChunk) {
     final slice = points.sublist(start, (start + perChunk).clamp(0, points.length));
@@ -78,9 +78,9 @@ List<pb.TraceChunk> chunksFor(String uuid, List<TracePoint> points, {int perChun
         for (final p in slice)
           pb.TraceSample(
             tOffsetMs: p.tOffsetMs,
-            px: p.x,
-            py: p.y,
-            pz: p.z,
+            px: p.px,
+            py: p.py,
+            pz: p.pz,
             ax: p.ax,
             ay: p.ay,
             az: p.az,
@@ -96,24 +96,24 @@ List<pb.TraceChunk> chunksFor(String uuid, List<TracePoint> points, {int perChun
 
 class FakeTransport implements RepTransport {
   FakeTransport({
-    List<RepSummary>? stored,
-    Map<int, List<TracePoint>>? tracePoints,
+    List<pb.RepSummary>? stored,
+    Map<int, List<pb.TraceSample>>? tracePoints,
     Set<int>? tracesMissing,
     this.traceDelay = Duration.zero,
     this.failSummaries = false,
   })  : _stored = stored ?? [],
         _points = {
-          for (final entry in (tracePoints ?? <int, List<TracePoint>>{}).entries)
+          for (final entry in (tracePoints ?? <int, List<pb.TraceSample>>{}).entries)
             testUuid(entry.key): entry.value,
         },
         _missing = {
           for (final index in tracesMissing ?? <int>{}) testUuid(index),
         };
 
-  List<RepSummary> _stored;
+  List<pb.RepSummary> _stored;
 
   /// Traces keyed by the uuid the transport API uses, built from test indices.
-  final Map<String, List<TracePoint>> _points;
+  final Map<String, List<pb.TraceSample>> _points;
 
   /// Reps whose trace the device no longer has (the ring overwrote them).
   final Set<String> _missing;
@@ -122,15 +122,15 @@ class FakeTransport implements RepTransport {
   final Duration traceDelay;
   final bool failSummaries;
 
-  final _live = StreamController<RepSummary>.broadcast();
+  final _live = StreamController<pb.RepSummary>.broadcast();
   int summariesCalls = 0;
   int traceCalls = 0;
 
   /// What the transport is holding now — mutate to simulate a device-side wrap.
-  void setStored(List<RepSummary> stored) => _stored = stored;
+  void setStored(List<pb.RepSummary> stored) => _stored = stored;
 
   /// Pushes a summary as if the device had just recorded it.
-  void emit(RepSummary s) {
+  void emit(pb.RepSummary s) {
     _stored = [..._stored, s];
     _live.add(s);
   }
@@ -139,17 +139,17 @@ class FakeTransport implements RepTransport {
   void dropConnection() => _live.close();
 
   @override
-  Future<List<RepSummary>> summaries() async {
+  Future<List<pb.RepSummary>> summaries() async {
     summariesCalls++;
     if (failSummaries) throw StateError('device unreachable');
     return List.of(_stored);
   }
 
   @override
-  Stream<RepSummary> watchSummaries() => _live.stream;
+  Stream<pb.RepSummary> watchSummaries() => _live.stream;
 
   @override
-  Future<List<TracePoint>> trace(String uuid) async {
+  Future<List<pb.TraceSample>> trace(String uuid) async {
     traceCalls++;
     if (traceDelay > Duration.zero) await Future<void>.delayed(traceDelay);
     if (_missing.contains(uuid)) {
@@ -165,7 +165,7 @@ class FakeTransport implements RepTransport {
 
   /// Reassembles a trace from protocol chunks, mirroring what the BLE transport
   /// will do with notifications.
-  static List<TracePoint> reassemble(String uuid, Iterable<pb.TraceChunk> chunks) {
+  static List<pb.TraceSample> reassemble(String uuid, Iterable<pb.TraceChunk> chunks) {
     final assembler = TraceAssembler(uuid);
     for (final chunk in chunks) {
       assembler.add(chunk);

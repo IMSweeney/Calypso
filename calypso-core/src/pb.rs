@@ -12,7 +12,7 @@
 //! [`crate::flashlog`]).
 
 use crate::calibration::Calibration;
-use crate::rep::{RepSummary, TracePoint};
+use crate::rep::TracePoint;
 use crate::uuid::{RepUuid, UUID_LEN};
 use micropb::MessageDecode;
 
@@ -104,28 +104,6 @@ pub fn calibration_message(c: &Calibration) -> msg::CalibrationStatus {
     }
 }
 
-/// Convert a computed summary into its wire form. `chunk_count` is
-/// [`chunk_count_for`] of the stored trace length.
-pub fn summary_message(rep_uuid: RepUuid, s: &RepSummary, chunk_count: u32) -> msg::RepSummary {
-    msg::RepSummary {
-        rep_uuid: uuid_to_field(&rep_uuid),
-        t_start_ms: s.t_start_ms,
-        t_end_ms: s.t_end_ms,
-        duration_ms: s.duration_ms,
-        rom: s.rom,
-        peak_velocity: s.peak_velocity,
-        mean_velocity: s.mean_velocity,
-        peak_accel: s.peak_accel,
-        roll_min_deg: s.roll_min_deg,
-        roll_max_deg: s.roll_max_deg,
-        pitch_min_deg: s.pitch_min_deg,
-        pitch_max_deg: s.pitch_max_deg,
-        trace_len: s.trace_len as u32,
-        chunk_count,
-        decimated: s.decimated,
-    }
-}
-
 /// Convert one trace point into its wire form, with timestamps relative to
 /// `t0_ms` (the rep's first trace point).
 pub fn trace_sample_message(p: &TracePoint, t0_ms: u32) -> msg::TraceSample {
@@ -186,17 +164,13 @@ pub fn chunk_message(
 }
 
 /// Encode a rep summary as a log record. Returns the encoded length.
-pub fn encode_summary(
-    rep_uuid: RepUuid,
-    s: &RepSummary,
-    chunk_count: u32,
-    out: &mut [u8],
-) -> Result<usize, Error> {
-    record(msg::RepRecord_::Body::Summary(summary_message(
-        rep_uuid,
-        s,
-        chunk_count,
-    )), out)
+///
+/// The summary is the wire type, so there is nothing to convert: the caller fills
+/// in `rep_uuid` (minted when the rep closed) and `chunk_count` ([`chunk_count_for`]
+/// of the trace it is about to store), and this puts it in the log's record
+/// envelope.
+pub fn encode_summary(summary: &msg::RepSummary, out: &mut [u8]) -> Result<usize, Error> {
+    record(msg::RepRecord_::Body::Summary(summary.clone()), out)
 }
 
 /// Encode a trace chunk as a log record. Returns the encoded length.

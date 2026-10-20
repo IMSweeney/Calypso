@@ -2,11 +2,13 @@
 //! flash log's record limit, and error handling.
 
 use calypso_core::pb::{self, msg, Record, TRACE_CHUNK_SAMPLES};
+use calypso_core::rep::TracePoint;
 use calypso_core::uuid::fixture_uuid;
-use calypso_core::rep::{RepSummary, TracePoint};
 
-fn sample_summary() -> RepSummary {
-    RepSummary {
+/// A summary with every field set, and its identity left to the caller: the uuid
+/// is minted when a rep closes, not with the statistics.
+fn sample_summary() -> msg::RepSummary {
+    msg::RepSummary {
         t_start_ms: 12_345,
         t_end_ms: 13_800,
         duration_ms: 1455,
@@ -20,6 +22,7 @@ fn sample_summary() -> RepSummary {
         pitch_max_deg: 3.1,
         trace_len: 145,
         decimated: false,
+        ..Default::default()
     }
 }
 
@@ -34,9 +37,11 @@ fn sample_point(i: usize, t0: u32) -> TracePoint {
 
 #[test]
 fn summary_round_trips() {
-    let summary = sample_summary();
+    let mut summary = sample_summary();
+    summary.rep_uuid = pb::uuid_to_field(&fixture_uuid(7));
+    summary.chunk_count = 4;
     let mut buf = [0u8; 256];
-    let n = pb::encode_summary(fixture_uuid(7), &summary, 4, &mut buf).unwrap();
+    let n = pb::encode_summary(&summary, &mut buf).unwrap();
     assert!(n > 0 && n < buf.len());
 
     match pb::decode_record(&buf[..n]).unwrap() {
@@ -49,7 +54,7 @@ fn summary_round_trips() {
             assert!((s.peak_velocity - summary.peak_velocity).abs() < 1e-6);
             assert!((s.roll_min_deg - summary.roll_min_deg).abs() < 1e-6);
             assert!((s.pitch_max_deg - summary.pitch_max_deg).abs() < 1e-6);
-            assert_eq!(s.trace_len, summary.trace_len as u32);
+            assert_eq!(s.trace_len, summary.trace_len);
             assert_eq!(s.chunk_count, 4);
             assert!(!s.decimated);
         }
@@ -168,7 +173,9 @@ fn trace_request_round_trips_in_its_envelope() {
 
 #[test]
 fn sync_message_carries_a_summary() {
-    let summary = pb::summary_message(fixture_uuid(3), &sample_summary(), 2);
+    let mut summary = sample_summary();
+    summary.rep_uuid = pb::uuid_to_field(&fixture_uuid(3));
+    summary.chunk_count = 2;
     let mut buf = [0u8; 256];
     let n = pb::encode_sync(msg::SyncMessage_::Body::Summary(summary.clone()), &mut buf).unwrap();
     let decoded = pb::decode_sync(&buf[..n]).unwrap();

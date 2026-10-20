@@ -7,6 +7,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:calypso/model/rep.dart';
 import 'package:calypso/protocol/pblog.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -27,7 +28,7 @@ void main() {
       final summary = summaries[i];
       // The fixtures carry the generator's deterministic uuids, so each rep in
       // the set can be named by its index.
-      expect(summaryUuid(summary), u(i), reason: 'rep $i carries its generator uuid');
+      expect(summary.uuid, u(i), reason: 'rep $i carries its generator uuid');
       expect(summary.decimated, isFalse);
 
       // Each summary is followed by the chunks it promises, in order, holding
@@ -71,7 +72,7 @@ void main() {
     expect(result.truncated, isFalse);
 
     final summary = summariesOf(result.records).single;
-    expect(summaryUuid(summary), u(1));
+    expect(summary.uuid, u(1));
     expect(summary.traceLen, 1);
     expect(summary.chunkCount, 1);
 
@@ -83,7 +84,7 @@ void main() {
     final result = readDump(fixture('long-decimated'));
     final summary = summariesOf(result.records).single;
 
-    expect(summaryUuid(summary), u(1));
+    expect(summary.uuid, u(1));
     expect(summary.decimated, isTrue);
     expect(summary.traceLen, 512);
 
@@ -100,7 +101,7 @@ void main() {
     final result = readDump(fixture('ring-dropped'));
     final summary = summariesOf(result.records).single;
 
-    expect(summaryUuid(summary), u(7));
+    expect(summary.uuid, u(7));
     expect(summary.chunkCount, 3, reason: 'the device still claims chunks');
     expect(traceChunksFor(result.records, u(7)), isEmpty,
         reason: 'the app must show "trace unavailable", not crash');
@@ -111,7 +112,7 @@ void main() {
     expect(result.truncated, isFalse);
 
     final summary = summariesOf(result.records).single;
-    expect(summaryUuid(summary), u(99));
+    expect(summary.uuid, u(99));
     expect(summary.traceLen, 4);
     expect(summary.decimated, isTrue);
 
@@ -128,7 +129,7 @@ void main() {
     // The cut fixture is one rep: a summary plus four chunks, with the last
     // frame clipped, so exactly four records survive.
     expect(result.records.length, 4);
-    expect(summaryUuid(summariesOf(result.records).single), u(0));
+    expect(summariesOf(result.records).single.uuid, u(0));
   });
 
   test('an empty dump is valid and empty', () {

@@ -6,6 +6,7 @@
 //!
 //! See `docs/REP_TRACKING.md`.
 
+use crate::pb::msg;
 use crate::sampler::Sample;
 
 /// Linear-acceleration magnitude (m/s²) that counts as "moving".
@@ -241,29 +242,13 @@ impl<'a> TraceBuf<'a> {
     }
 }
 
-/// Summary statistics for one rep. Angles are degrees, distances metres,
-/// velocities m/s.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct RepSummary {
-    pub t_start_ms: u32,
-    pub t_end_ms: u32,
-    pub duration_ms: u32,
-    /// Range of motion: peak-to-peak displacement along the dominant axis.
-    pub rom: f32,
-    pub peak_velocity: f32,
-    pub mean_velocity: f32,
-    pub peak_accel: f32,
-    pub roll_min_deg: f32,
-    pub roll_max_deg: f32,
-    pub pitch_min_deg: f32,
-    pub pitch_max_deg: f32,
-    /// Number of trace points stored (0 if the input or buffer was empty).
-    pub trace_len: usize,
-    /// True if the input didn't fit `out` and was decimated uniformly.
-    pub decimated: bool,
-}
-
 /// Compute the ZUPT-anchored world-frame trace and summary for one rep.
+///
+/// The summary is the wire type ([`msg::RepSummary`]) rather than a struct of our
+/// own: it is what gets stored, streamed and logged, and `rep_uuid` and
+/// `chunk_count` are filled in by the caller — the rep's identity is minted when
+/// it closes, and how many chunks the trace becomes depends on the storage that is
+/// holding it.
 ///
 /// `samples` should be the detector's span plus margin at each end (the rest
 /// samples let the integration be anchored at zero velocity at both ends).
@@ -279,9 +264,9 @@ pub struct RepSummary {
 ///
 /// Runs in three passes with running scalars only (no scratch buffers), so it
 /// needs no allocation on the device.
-pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> RepSummary {
+pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummary {
     out.clear();
-    let mut summary = RepSummary {
+    let mut summary = msg::RepSummary {
         roll_min_deg: f32::MAX,
         roll_max_deg: f32::MIN,
         pitch_min_deg: f32::MAX,
@@ -419,7 +404,7 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> RepSummary {
     summary.peak_accel = a_max;
     summary.peak_velocity = v_max;
     summary.mean_velocity = v_sum / n as f32;
-    summary.trace_len = out.len();
+    summary.trace_len = out.len() as u32;
     summary
 }
 

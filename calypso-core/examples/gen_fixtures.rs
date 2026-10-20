@@ -14,8 +14,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use calypso_core::fixtures::{self, push_rep, push_record, squat_set};
-use calypso_core::pb;
-use calypso_core::rep::{compute_rep, RepSummary, TraceBuf, TracePoint};
+use calypso_core::pb::{self, msg};
+use calypso_core::rep::{compute_rep, TraceBuf, TracePoint};
 use calypso_core::store::RECORD_BUF_BYTES;
 use calypso_core::uuid::fixture_uuid;
 
@@ -54,14 +54,15 @@ fn main() -> std::io::Result<()> {
             accel: [0, 0, -100],
             quat: [16_384, 0, 0, 0],
         }];
-        let summary = RepSummary {
+        let mut summary = msg::RepSummary {
+            rep_uuid: pb::uuid_to_field(&fixture_uuid(1)),
             t_start_ms: 900,
             t_end_ms: 1_100,
             duration_ms: 200,
             trace_len: 1,
             ..Default::default()
         };
-        push_rep(&mut dump, &mut rec_buf, fixture_uuid(1), &summary, &trace).unwrap();
+        push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();
         write(&dir, "single-point.pblog", &dump)?;
     }
 
@@ -83,12 +84,13 @@ fn main() -> std::io::Result<()> {
 
         let mut storage = vec![TracePoint::ZERO; 512];
         let mut trace = TraceBuf::new(&mut storage);
-        let summary = compute_rep(window, &mut trace);
+        let mut summary = compute_rep(window, &mut trace);
         assert!(summary.decimated, "a 10 s rep should exceed the 512-point buffer");
         assert_eq!(summary.trace_len, 512);
 
+        summary.rep_uuid = pb::uuid_to_field(&fixture_uuid(1));
         let mut dump = Vec::new();
-        push_rep(&mut dump, &mut rec_buf, fixture_uuid(1), &summary, trace.as_slice()).unwrap();
+        push_rep(&mut dump, &mut rec_buf, &mut summary, trace.as_slice()).unwrap();
         write(&dir, "long-decimated.pblog", &dump)?;
     }
 
@@ -96,16 +98,18 @@ fn main() -> std::io::Result<()> {
     //    its chunks are not. The app must say "trace unavailable", not crash.
     {
         let mut dump = Vec::new();
-        let summary = RepSummary {
+        let summary = msg::RepSummary {
+            rep_uuid: pb::uuid_to_field(&fixture_uuid(7)),
             t_start_ms: 5_000,
             t_end_ms: 6_400,
             duration_ms: 1_400,
             rom: 0.41,
             peak_velocity: 0.7,
             trace_len: 140,
+            chunk_count: 3,
             ..Default::default()
         };
-        let n = pb::encode_summary(fixture_uuid(7), &summary, 3, &mut rec_buf).unwrap();
+        let n = pb::encode_summary(&summary, &mut rec_buf).unwrap();
         push_record(&mut dump, &rec_buf[..n]);
         write(&dir, "ring-dropped.pblog", &dump)?;
     }
@@ -122,7 +126,8 @@ fn main() -> std::io::Result<()> {
                 quat: [i16::MIN, i16::MAX, -16_384, 16_383],
             })
             .collect();
-        let summary = RepSummary {
+        let mut summary = msg::RepSummary {
+            rep_uuid: pb::uuid_to_field(&fixture_uuid(99)),
             t_start_ms: u32::MAX - 100,
             t_end_ms: u32::MAX,
             duration_ms: 100,
@@ -134,10 +139,11 @@ fn main() -> std::io::Result<()> {
             roll_max_deg: f32::MAX,
             pitch_min_deg: f32::MIN,
             pitch_max_deg: f32::MAX,
-            trace_len: trace.len(),
+            trace_len: trace.len() as u32,
             decimated: true,
+            ..Default::default()
         };
-        push_rep(&mut dump, &mut rec_buf, fixture_uuid(99), &summary, &trace).unwrap();
+        push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();
         write(&dir, "extreme-values.pblog", &dump)?;
     }
 
@@ -156,12 +162,13 @@ fn main() -> std::io::Result<()> {
         let reps = fixtures::detect_and_trace(&samples, 512);
         assert_eq!(reps.len(), 2, "the dip should not stop the detector");
         let mut dump = Vec::new();
-        for (i, (summary, trace)) in reps.iter().enumerate() {
+        for (i, (mut summary, trace)) in reps.into_iter().enumerate() {
             let xs: Vec<f32> = trace.iter().map(|p| p.pos[0]).collect();
             let range = xs.iter().cloned().fold(f32::MIN, f32::max)
                 - xs.iter().cloned().fold(f32::MAX, f32::min);
             assert!(range > 0.05, "the dipped path should bow sideways: {range} m");
-            push_rep(&mut dump, &mut rec_buf, fixture_uuid((i + 1) as u32), summary, trace).unwrap();
+            summary.rep_uuid = pb::uuid_to_field(&fixture_uuid((i + 1) as u32));
+            push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();
         }
         write(&dir, "dip-left.pblog", &dump)?;
     }

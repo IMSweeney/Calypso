@@ -1,6 +1,6 @@
 //! Rep identity: v4 UUIDs, minted where a rep is created.
 
-use calypso_core::pb;
+use calypso_core::pb::{self, msg};
 use calypso_core::uuid::{self, RepUuid, UUID_LEN};
 
 /// A predictable source of randomness: a counter run through a mixing step.
@@ -82,7 +82,10 @@ fn a_uuid_survives_both_record_kinds() {
     // The identity has to come back out of a summary and out of a chunk: the
     // client keys its archive on it, and the device matches chunks by it.
     let uuid = uuid::fixture_uuid(3);
-    let summary = pb::summary_message(uuid, &Default::default(), 0);
+    let summary = msg::RepSummary {
+        rep_uuid: pb::uuid_to_field(&uuid),
+        ..Default::default()
+    };
     assert_eq!(pb::summary_uuid(&summary), Some(uuid));
 
     let points = [calypso_core::rep::TracePoint::ZERO];

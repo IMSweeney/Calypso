@@ -10,8 +10,8 @@
 //! reuses it for every record.
 
 use crate::flashlog::{Error as LogError, FlashLog};
-use crate::pb::{self, TRACE_CHUNK_SAMPLES};
-use crate::rep::{RepSummary, TraceBuf, TracePoint};
+use crate::pb::{self, msg, TRACE_CHUNK_SAMPLES};
+use crate::rep::{TraceBuf, TracePoint};
 use crate::uuid::RepUuid;
 use embedded_storage::nor_flash::NorFlash;
 
@@ -43,15 +43,19 @@ impl<E> From<pb::Error> for Error<E> {
 ///
 /// `rec_buf` must be at least [`RECORD_BUF_BYTES`]; it is scratch space
 /// reused for each record. Returns the number of records written.
+///
+/// `summary` comes in as the wire type with its `rep_uuid` already set — identity
+/// is minted when the rep closes, not here — and this fills in `chunk_count`, which
+/// is a property of how the trace is being stored.
 pub fn append_rep<'a, N: NorFlash>(
     log: &mut FlashLog<'a, N>,
     rec_buf: &mut [u8],
-    rep_uuid: RepUuid,
-    summary: &RepSummary,
+    summary: &mut msg::RepSummary,
     trace: &[TracePoint],
 ) -> Result<u32, Error<N::Error>> {
-    let chunk_count = pb::chunk_count_for(trace.len());
-    let n = pb::encode_summary(rep_uuid, summary, chunk_count, rec_buf)?;
+    let rep_uuid = pb::summary_uuid(summary).ok_or(Error::Encode(pb::Error::Decode))?;
+    summary.chunk_count = pb::chunk_count_for(trace.len());
+    let n = pb::encode_summary(summary, rec_buf)?;
     log.append(&rec_buf[..n])?;
 
     let t0_ms = trace.first().map(|p| p.t_ms).unwrap_or(0);

@@ -15,6 +15,8 @@ import 'package:calypso/store/memory_archive.dart';
 import 'package:calypso/store/archive_sync.dart';
 import 'package:calypso/transport/ble_link.dart';
 import 'package:calypso/transport/ble_transport.dart';
+import 'package:calypso/model/calibration.dart';
+import 'package:calypso/model/rep.dart';
 import 'package:calypso/transport/transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -189,7 +191,7 @@ void main() {
     final link = FakeBleLink();
     final transport = await connectedTransport(link);
     final seen = <String>[];
-    final sub = transport.watchSummaries().listen((s) => seen.add(s.uuid));
+    final sub = transport.watchSummaries().listen((s) => seen.add(s.uuid!));
 
     link.notify(CalypsoGatt.messages, summaryMessage(u(1)));
     link.notify(CalypsoGatt.messages, summaryMessage(u(2)));
@@ -232,7 +234,7 @@ void main() {
     expect(trace.length, 7, reason: '3 + 3 + 1 points, duplicates ignored');
     expect(trace.first.tOffsetMs, 0);
     expect(trace.last.tOffsetMs, 60);
-    expect(trace.last.z, closeTo(-0.06, 1e-6));
+    expect(trace.last.pz, closeTo(-0.06, 1e-6));
     await transport.close();
   });
 
@@ -440,7 +442,7 @@ void main() {
     // The archive is a real .pblog: the trace reads back from it.
     final trace = await archive.trace(u(1));
     expect(trace.length, 7);
-    expect(trace.last.z, closeTo(-0.06, 1e-6));
+    expect(trace.last.pz, closeTo(-0.06, 1e-6));
     expect(archive.reps.map((r) => r.uuid), unorderedEquals([u(1), u(2)]));
     await transport.close();
   });

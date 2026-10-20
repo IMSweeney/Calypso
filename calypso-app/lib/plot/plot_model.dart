@@ -5,12 +5,12 @@ import 'dart:ui' show Offset, Size;
 
 import 'package:vector_math/vector_math_64.dart';
 
-import '../model/rep.dart';
+import '../protocol/calypso.pb.dart' as pb;
 
 class PlotPath {
   PlotPath._(this.points, this.speeds, this.speedMax, this.bounds);
 
-  final List<TracePoint> points;
+  final List<pb.TraceSample> points;
   final List<double> speeds;
   final double speedMax;
   final AxisBounds bounds;
@@ -28,7 +28,7 @@ class PlotPath {
     return total;
   }
 
-  static PlotPath from(List<TracePoint> all, {int maxPoints = 512}) {
+  static PlotPath from(List<pb.TraceSample> all, {int maxPoints = 512}) {
     if (all.isEmpty) {
       return PlotPath._(const [], const [], 0, AxisBounds.of(const []));
     }
@@ -47,7 +47,7 @@ class PlotPath {
     return PlotPath._(points, speeds, speedMax, AxisBounds.of(points));
   }
 
-  static List<TracePoint> _decimate(List<TracePoint> all, int maxPoints) {
+  static List<pb.TraceSample> _decimate(List<pb.TraceSample> all, int maxPoints) {
     final n = all.length;
     if (maxPoints < 2 || n <= maxPoints) return List.of(all);
 
@@ -64,8 +64,8 @@ class PlotPath {
     }
   }
 
-  static double _distance(TracePoint a, TracePoint b) {
-    final dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+  static double _distance(pb.TraceSample a, pb.TraceSample b) {
+    final dx = b.px - a.px, dy = b.py - a.py, dz = b.pz - a.pz;
     return math.sqrt(dx * dx + dy * dy + dz * dz);
   }
 }
@@ -76,17 +76,17 @@ class AxisBounds {
   final Vector3 center;
   final double halfExtent;
 
-  static AxisBounds of(List<TracePoint> points, {double minHalfExtent = 0.12}) {
+  static AxisBounds of(List<pb.TraceSample> points, {double minHalfExtent = 0.12}) {
     if (points.isEmpty) return AxisBounds(Vector3.zero(), minHalfExtent);
     var minX = double.infinity, minY = double.infinity, minZ = double.infinity;
     var maxX = -double.infinity, maxY = -double.infinity, maxZ = -double.infinity;
     for (final p in points) {
-      minX = math.min(minX, p.x);
-      maxX = math.max(maxX, p.x);
-      minY = math.min(minY, p.y);
-      maxY = math.max(maxY, p.y);
-      minZ = math.min(minZ, p.z);
-      maxZ = math.max(maxZ, p.z);
+      minX = math.min(minX, p.px);
+      maxX = math.max(maxX, p.px);
+      minY = math.min(minY, p.py);
+      maxY = math.max(maxY, p.py);
+      minZ = math.min(minZ, p.pz);
+      maxZ = math.max(maxZ, p.pz);
     }
     final center = Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
     final extent = math.max(
@@ -192,7 +192,7 @@ class PlotProjection {
     var bestDistance = maxDistancePx;
     for (var i = 0; i < path.length; i++) {
       final p = path.points[i];
-      final screen = toScreen(Vector3(p.x, p.y, p.z));
+      final screen = toScreen(Vector3(p.px, p.py, p.pz));
       if (screen == null) continue;
       final d = (screen - at).distance;
       if (d < bestDistance) {

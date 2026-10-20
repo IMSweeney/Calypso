@@ -8,10 +8,8 @@ import 'package:calypso/state/calibration.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('the wire form is mapped level by level', () {
-    final status = CalibrationStatus.fromProto(
-      pb.CalibrationStatus(sys: 3, accel: 2, gyro: 1, mag: 0, ready: false),
-    );
+  test('the levels arrive as the device sends them', () {
+    final status = pb.CalibrationStatus(sys: 3, accel: 2, gyro: 1, mag: 0, ready: false);
 
     expect(status.sys, 3);
     expect(status.accel, 2);
@@ -24,14 +22,10 @@ void main() {
     // The device sends the gate it is acting on. If the app re-derived it, a
     // firmware that changed the rule (dropping the aggregate, say) would leave
     // the app confidently telling the user the opposite of what is happening.
-    final saysReady = CalibrationStatus.fromProto(
-      pb.CalibrationStatus(sys: 3, accel: 3, gyro: 3, mag: 0, ready: true),
-    );
+    final saysReady = pb.CalibrationStatus(sys: 3, accel: 3, gyro: 3, mag: 0, ready: true);
     expect(saysReady.ready, isTrue);
 
-    final saysNotReady = CalibrationStatus.fromProto(
-      pb.CalibrationStatus(sys: 1, accel: 1, gyro: 1, mag: 0, ready: false),
-    );
+    final saysNotReady = pb.CalibrationStatus(sys: 1, accel: 1, gyro: 1, mag: 0, ready: false);
     expect(saysNotReady.ready, isFalse);
   });
 
@@ -39,7 +33,7 @@ void main() {
     // The trap this hardware sets: the BNO055 runs in IMU mode, where the
     // magnetometer never calibrates. A hint that asked the user to fix `mag`
     // would send them to do figure eights in the gym forever.
-    final onlyMagShort = CalibrationStatus(
+    final onlyMagShort = pb.CalibrationStatus(
       sys: maxCalibrationLevel,
       accel: maxCalibrationLevel,
       gyro: maxCalibrationLevel,
@@ -54,9 +48,9 @@ void main() {
   });
 
   test('the action names only the sensors that are short', () {
-    final bothShort = CalibrationStatus(sys: 1, accel: 1, gyro: 2, mag: 0, ready: false);
-    final gyroOnly = CalibrationStatus(sys: 3, accel: 3, gyro: 2, mag: 0, ready: false);
-    final accelOnly = CalibrationStatus(sys: 3, accel: 2, gyro: 3, mag: 0, ready: false);
+    final bothShort = pb.CalibrationStatus(sys: 1, accel: 1, gyro: 2, mag: 0, ready: false);
+    final gyroOnly = pb.CalibrationStatus(sys: 3, accel: 3, gyro: 2, mag: 0, ready: false);
+    final accelOnly = pb.CalibrationStatus(sys: 3, accel: 2, gyro: 3, mag: 0, ready: false);
 
     // Stillness is what the gyroscope wants; a few still orientations is what the
     // accelerometer wants. Each hint asks for one, not for both.
@@ -73,15 +67,15 @@ void main() {
   test('nothing is asked for when the sensors are fine but the device is not recording', () {
     // Both levels good, ready still false: the aggregate is catching up. There is
     // no action to give, and inventing one would send the user off to no effect.
-    final finishing = CalibrationStatus(sys: 2, accel: 3, gyro: 3, mag: 0, ready: false);
-    final gyroOnly = CalibrationStatus(sys: 3, accel: 3, gyro: 2, mag: 0, ready: false);
+    final finishing = pb.CalibrationStatus(sys: 2, accel: 3, gyro: 3, mag: 0, ready: false);
+    final gyroOnly = pb.CalibrationStatus(sys: 3, accel: 3, gyro: 2, mag: 0, ready: false);
 
     expect(finishing.action, isNotEmpty);
     expect(finishing.action, isNot(gyroOnly.action));
   });
 
   test('the level line carries every sensor', () {
-    const status = CalibrationStatus(sys: 1, accel: 2, gyro: 3, mag: 0, ready: false);
+    final status = pb.CalibrationStatus(sys: 1, accel: 2, gyro: 3, mag: 0, ready: false);
     expect(status.levels, 'accel 2/3 · gyro 3/3 · sys 1/3 · mag 0/3');
   });
 
@@ -101,14 +95,14 @@ void main() {
       var notifications = 0;
       notifier.addListener(() => notifications++);
 
-      const uncalibrated = CalibrationStatus(sys: 1, accel: 1, gyro: 2, mag: 0, ready: false);
+      final uncalibrated = pb.CalibrationStatus(sys: 1, accel: 1, gyro: 2, mag: 0, ready: false);
       notifier.set(uncalibrated);
       expect(notifications, 1);
 
       notifier.set(uncalibrated);
       expect(notifications, 1, reason: 'same reading, nothing to say');
 
-      notifier.set(const CalibrationStatus(
+      notifier.set(pb.CalibrationStatus(
         sys: maxCalibrationLevel,
         accel: maxCalibrationLevel,
         gyro: maxCalibrationLevel,
@@ -127,7 +121,7 @@ void main() {
       notifier.clear();
       expect(notifications, 0, reason: 'nothing to forget');
 
-      notifier.set(const CalibrationStatus(sys: 1, accel: 1, gyro: 1, mag: 0, ready: false));
+      notifier.set(pb.CalibrationStatus(sys: 1, accel: 1, gyro: 1, mag: 0, ready: false));
       expect(notifications, 1);
 
       notifier.clear();

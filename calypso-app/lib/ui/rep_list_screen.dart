@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../logging/rotating_file_appender.dart';
 import '../logging/setup.dart';
 import '../model/rep.dart';
+import '../protocol/calypso.pb.dart' as pb;
 import '../model/uuid.dart';
 import '../store/archive_sync.dart';
 import '../store/history_store.dart';
@@ -55,7 +56,7 @@ class _RepListScreenState extends State<RepListScreen> {
   int _syncDone = 0;
   int _syncTotal = 0;
 
-  StreamSubscription<RepSummary>? _live;
+  StreamSubscription<pb.RepSummary>? _live;
   Future<void> _writes = Future<void>.value();
 
   @override
@@ -82,13 +83,13 @@ class _RepListScreenState extends State<RepListScreen> {
     super.dispose();
   }
 
-  void _onSummary(RepSummary summary) {
+  void _onSummary(pb.RepSummary summary) {
     final archive = _archive;
     if (archive == null) return;
     unawaited(_addToLog(archive, summary));
   }
 
-  Future<void> _addToLog(RepArchive archive, RepSummary summary) async {
+  Future<void> _addToLog(RepArchive archive, pb.RepSummary summary) async {
     try {
       final added = await _queueWrite(() => archiveRep(archive, _ble, summary));
       if (mounted && added > 0) setState(() => _synced += added);
@@ -238,7 +239,7 @@ class _RepListScreenState extends State<RepListScreen> {
                             onTap: () => Navigator.of(context).push(
                               MaterialPageRoute(
                                 builder: (_) =>
-                                    PlotScreen(store: archive, repUuid: s.uuid),
+                                    PlotScreen(store: archive, repUuid: stored.uuid),
                               ),
                             ),
                           );

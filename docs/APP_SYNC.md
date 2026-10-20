@@ -46,15 +46,21 @@ runs in `flutter test` and in the Simulator (which has no CoreBluetooth at all):
 ```dart
 abstract class RepTransport {
   /// Summaries on the device, oldest first.
-  Future<List<RepSummary>> summaries();
+  Future<List<pb.RepSummary>> summaries();
 
   /// Follow the device as new reps arrive.
-  Stream<RepSummary> watchSummaries();
+  Stream<pb.RepSummary> watchSummaries();
 
   /// One rep's trace, reassembled from chunks.
-  Future<List<TracePoint>> trace(String repUuid);
+  Future<List<pb.TraceSample>> trace(String repUuid);
 }
 ```
+
+The types are the generated ones throughout, down to the plot: the archive stores
+`RepRecord`s and the UI reads fields off the messages, so a field added to
+`proto/calypso.proto` reaches the screen without anyone remembering to copy it. What
+`lib/model/` holds is extensions that *derive* from the messages — physical units, tilt
+ranges, the calibration wording — see [`GOTCHAS.md`](GOTCHAS.md).
 
 ## Summary sync
 

@@ -3,7 +3,7 @@
 
 use calypso_core::fixtures::{self, push_rep, push_record, read_dump, squat_dump, squat_set};
 use calypso_core::pb::{self, msg, Record};
-use calypso_core::rep::{compute_rep, RepSummary, TraceBuf, TracePoint};
+use calypso_core::rep::{compute_rep, TraceBuf, TracePoint};
 use calypso_core::store::RECORD_BUF_BYTES;
 use calypso_core::uuid::fixture_uuid;
 
@@ -16,7 +16,7 @@ fn squash_set_is_detected_and_traced() {
     assert_eq!(reps.len(), 3, "the detector should find three reps");
     for (summary, trace) in &reps {
         assert!(!trace.is_empty());
-        assert_eq!(summary.trace_len, trace.len());
+        assert_eq!(summary.trace_len, trace.len() as u32);
         assert!(!summary.decimated);
         // A 0.4 m squat: the trace should show roughly that much travel.
         assert!(
@@ -89,11 +89,12 @@ fn empty_and_single_point_dumps_are_valid() {
         accel: [0, 0, -100],
         quat: [16_384, 0, 0, 0],
     }];
-    let summary = RepSummary {
+    let mut summary = msg::RepSummary {
+        rep_uuid: pb::uuid_to_field(&fixture_uuid(1)),
         trace_len: 1,
         ..Default::default()
     };
-    push_rep(&mut dump, &mut rec_buf, fixture_uuid(1), &summary, &trace).unwrap();
+    push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();
 
     let (records, truncated) = read_dump(&dump);
     assert!(!truncated);

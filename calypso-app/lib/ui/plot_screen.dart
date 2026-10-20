@@ -3,6 +3,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../model/rep.dart';
+import '../protocol/calypso.pb.dart' as pb;
 import '../model/uuid.dart';
 import '../plot/rep_plot.dart';
 import '../store/rep_archive.dart';
@@ -18,8 +19,8 @@ class PlotScreen extends StatefulWidget {
 }
 
 class _PlotScreenState extends State<PlotScreen> {
-  RepSummary? _summary;
-  List<TracePoint> _trace = const [];
+  pb.RepSummary? _summary;
+  List<pb.TraceSample> _trace = const [];
   int? _scrubIndex;
   String? _error;
   bool _loading = true;
@@ -54,7 +55,7 @@ class _PlotScreenState extends State<PlotScreen> {
     }
   }
 
-  RepSummary? get _selected => _summary;
+  pb.RepSummary? get _selected => _summary;
 
   @override
   Widget build(BuildContext context) {

@@ -3,7 +3,7 @@
 
 use calypso_core::calibration::Calibration;
 use calypso_core::pb::{self, msg, Record};
-use calypso_core::rep::{RepSummary, TracePoint};
+use calypso_core::rep::TracePoint;
 use calypso_core::sync::{
     decode_trace_request, encode_calibration_message, encode_summary_message, SummaryCursor,
     TraceStreamer, BLE_CHUNK_SAMPLES, BLE_NOTIFY_BYTES, SYNC_CHUNK_MAX,
@@ -174,25 +174,23 @@ fn worst_case_chunk_fits_the_notification_budget() {
 fn worst_case_summary_fits_the_summary_characteristic() {
     // The same hazard on the other characteristic, so it is pinned the same way: every
     // field at its widest encoding.
-    let summary = pb::summary_message(
-        fixture_uuid(3),
-        &RepSummary {
-            t_start_ms: u32::MAX,
-            t_end_ms: u32::MAX,
-            duration_ms: u32::MAX,
-            rom: f32::MAX,
-            peak_velocity: f32::MIN,
-            mean_velocity: f32::MAX,
-            peak_accel: f32::MIN,
-            roll_min_deg: f32::MIN,
-            roll_max_deg: f32::MAX,
-            pitch_min_deg: f32::MIN,
-            pitch_max_deg: f32::MAX,
-            trace_len: u32::MAX as usize,
-            decimated: true,
-        },
-        u32::MAX,
-    );
+    let summary = msg::RepSummary {
+        rep_uuid: pb::uuid_to_field(&fixture_uuid(3)),
+        t_start_ms: u32::MAX,
+        t_end_ms: u32::MAX,
+        duration_ms: u32::MAX,
+        rom: f32::MAX,
+        peak_velocity: f32::MIN,
+        mean_velocity: f32::MAX,
+        peak_accel: f32::MIN,
+        roll_min_deg: f32::MIN,
+        roll_max_deg: f32::MAX,
+        pitch_min_deg: f32::MIN,
+        pitch_max_deg: f32::MAX,
+        trace_len: u32::MAX,
+        chunk_count: u32::MAX,
+        decimated: true,
+    };
     let mut buf = [0u8; 512];
     let n = encode_summary_message(summary, &mut buf).unwrap();
     // Asserted against the *notify characteristic's* ceiling rather than a
@@ -215,7 +213,11 @@ fn worst_case_summary_fits_the_summary_characteristic() {
 
 #[test]
 fn summary_messages_and_cursor() {
-    let summary = pb::summary_message(fixture_uuid(5), &Default::default(), 2);
+    let summary = msg::RepSummary {
+        rep_uuid: pb::uuid_to_field(&fixture_uuid(5)),
+        chunk_count: 2,
+        ..Default::default()
+    };
     let mut buf = [0u8; 128];
     let n = encode_summary_message(summary, &mut buf).unwrap();
     let msg = pb::decode_sync(&buf[..n]).unwrap();

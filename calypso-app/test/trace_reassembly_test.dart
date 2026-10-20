@@ -64,7 +64,7 @@ void main() {
     expect(assembled.length, points.length);
     for (var i = 0; i < points.length; i++) {
       expect(assembled[i].tOffsetMs, points[i].tOffsetMs);
-      expect(assembled[i].z, points[i].z);
+      expect(assembled[i].pz, points[i].pz);
       expect(assembled[i].az, points[i].az);
     }
   });

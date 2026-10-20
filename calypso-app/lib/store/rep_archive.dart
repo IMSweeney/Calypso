@@ -15,13 +15,14 @@ class StoredRep {
     this.receivedAt,
   });
 
-  final RepSummary summary;
+  final pb.RepSummary summary;
 
   final int offset;
   final int length;
   final DateTime? receivedAt;
 
-  String get uuid => summary.uuid;
+  /// Set: `scanBlocks` refuses a summary whose uuid does not parse.
+  String get uuid => summary.uuid!;
 }
 
 abstract class RepArchive {
@@ -33,7 +34,7 @@ abstract class RepArchive {
 
   Future<int> appendNew(Map<String, Uint8List> recordBlocks, {DateTime? receivedAt});
 
-  Future<List<TracePoint>> trace(String uuid);
+  Future<List<pb.TraceSample>> trace(String uuid);
 }
 
 class BlockScan {
@@ -53,7 +54,7 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
   var pos = 0;
   int? blockStart;
   var blockLength = 0;
-  (String, RepSummary)? pending;
+  (String, pb.RepSummary)? pending;
 
   while (pos + 4 <= bytes.length) {
     final length = ByteData.sublistView(bytes, pos, pos + 4).getUint32(0, Endian.little);
@@ -71,7 +72,7 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
     }
     if (record.hasSummary()) {
       goodBytes = pos;
-      final uuid = summaryUuid(record.summary);
+      final uuid = record.summary.uuid;
       if (uuid == null) {
         truncated = true;
         break;
@@ -84,7 +85,7 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
           receivedAt: receivedAt[pending.$1],
         ));
       }
-      pending = (uuid, RepSummary.fromProto(record.summary));
+      pending = (uuid, record.summary);
       blockStart = pos;
       blockLength = 0;
     }
@@ -106,7 +107,7 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
   return BlockScan(reps, truncated, bytes.length);
 }
 
-List<TracePoint> assembleTraceFromBlock(Uint8List block, String uuid) {
+List<pb.TraceSample> assembleTraceFromBlock(Uint8List block, String uuid) {
   final dump = readDump(block);
   final chunks = traceChunksFor(dump.records, uuid);
   if (chunks.isEmpty) return const [];

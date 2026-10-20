@@ -2,16 +2,16 @@ library;
 
 import 'package:flutter/foundation.dart';
 
-import '../model/calibration.dart';
+import '../protocol/calypso.pb.dart' as pb;
 
 class CalibrationNotifier extends ChangeNotifier {
-  CalibrationStatus? _latest;
+  pb.CalibrationStatus? _latest;
 
-  CalibrationStatus? get latest => _latest;
+  pb.CalibrationStatus? get latest => _latest;
 
   bool get isReady => _latest?.ready ?? false;
 
-  void set(CalibrationStatus status) {
+  void set(pb.CalibrationStatus status) {
     if (_latest == status) return;
     _latest = status;
     notifyListeners();

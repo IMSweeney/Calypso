@@ -688,14 +688,17 @@ async fn main(spawner: Spawner) -> ! {
                             let mut rand = || rng.random();
                             uuid::new_uuid(&mut rand)
                         };
-                        let sum = compute_rep(&rep_window[..copied], &mut rep_trace);
+                        let mut sum = compute_rep(&rep_window[..copied], &mut rep_trace);
+                        // Identity is minted when the rep closes, so it is set here
+                        // rather than computed with the stats.
+                        sum.rep_uuid = calypso_core::pb::uuid_to_field(&rep_uuid);
                         // Persist the rep (summary + trace chunks). This
                         // happens right after the rest debounce, i.e. while
                         // the sensor is at rest, so the tens of ms an erase
                         // takes here can't land in the middle of a rep.
                         let stored = {
                             let mut guard = store.lock().await;
-                            store_rep(&mut guard, rec_buf, rep_uuid, &sum, &rep_trace)
+                            store_rep(&mut guard, rec_buf, &mut sum, &rep_trace)
                         };
                         match stored {
                             Ok(n) => info!(
@@ -1259,8 +1262,7 @@ impl defmt::Format for UuidShort<'_> {
 fn store_rep(
     store: &mut FlashStore,
     rec_buf: &mut [u8],
-    rep_uuid: RepUuid,
-    summary: &calypso_core::rep::RepSummary,
+    summary: &mut msg::RepSummary,
     trace: &TraceBuf<'_>,
 ) -> Result<u32, LogError> {
     let (flash, pt_mem) = store.split();
@@ -1280,7 +1282,7 @@ fn store_rep(
         FlashLog::mount(&mut region)
             .map_err(store::Error::Log)
             .and_then(|mut log| {
-                store::append_rep(&mut log, rec_buf, rep_uuid, summary, trace.as_slice())
+                store::append_rep(&mut log, rec_buf, summary, trace.as_slice())
             })
     };
     match appended {

@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import '../model/rep.dart';
+import '../protocol/calypso.pb.dart' as pb;
 import 'rep_archive.dart';
 
 export 'rep_archive.dart' show StoredRep;
@@ -102,7 +102,7 @@ class HistoryStore implements RepArchive {
   bool contains(String uuid) => _uuids.contains(uuid);
 
   @override
-  Future<List<TracePoint>> trace(String uuid) async {
+  Future<List<pb.TraceSample>> trace(String uuid) async {
     StoredRep? stored;
     for (final r in _reps) {
       if (r.uuid == uuid) stored = r;

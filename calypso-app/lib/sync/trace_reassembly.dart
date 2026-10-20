@@ -1,6 +1,5 @@
 library;
 
-import '../model/rep.dart';
 import '../model/uuid.dart';
 import '../protocol/calypso.pb.dart' as pb;
 
@@ -9,11 +8,11 @@ class TraceAssembler {
 
   final String uuid;
 
-  final Map<int, List<TracePoint>> _chunks = {};
+  final Map<int, List<pb.TraceSample>> _chunks = {};
 
   bool add(pb.TraceChunk chunk) {
     if (uuidFromBytes(chunk.repUuid) != uuid) return false;
-    _chunks[chunk.index] = chunk.samples.map(TracePoint.fromProto).toList();
+    _chunks[chunk.index] = chunk.samples.toList();
     return true;
   }
 
@@ -32,7 +31,7 @@ class TraceAssembler {
     ];
   }
 
-  List<TracePoint> assemble() => [
+  List<pb.TraceSample> assemble() => [
         for (final index in indices) ...?_chunks[index],
       ];
 

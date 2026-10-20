@@ -6,8 +6,6 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../logging/loggers.dart';
-import '../model/calibration.dart';
-import '../model/rep.dart';
 import '../model/uuid.dart';
 import '../protocol/calypso.pb.dart' as pb;
 import '../state/ble_status.dart';
@@ -40,7 +38,7 @@ class BleTransport implements RepTransport {
 
   String? _deviceId;
   StreamSubscription<Uint8List>? _messagesSub;
-  final StreamController<RepSummary> _summaryCtrl = StreamController<RepSummary>.broadcast();
+  final StreamController<pb.RepSummary> _summaryCtrl = StreamController<pb.RepSummary>.broadcast();
 
   final Map<String, pb.RepSummary> _summaries = {};
 
@@ -51,9 +49,9 @@ class BleTransport implements RepTransport {
   final Map<String, Timer> _idleTimers = {};
 
   final Map<String, Timer> _requestTimers = {};
-  final Map<String, Completer<List<TracePoint>>> _pending = {};
+  final Map<String, Completer<List<pb.TraceSample>>> _pending = {};
 
-  final Map<String, List<TracePoint>> _completed = {};
+  final Map<String, List<pb.TraceSample>> _completed = {};
 
   bool _closed = false;
 
@@ -212,16 +210,16 @@ class BleTransport implements RepTransport {
   }
 
   @override
-  Future<List<RepSummary>> summaries() async {
+  Future<List<pb.RepSummary>> summaries() async {
     final ids = _summaries.keys.toList()..sort();
-    return [for (final id in ids) RepSummary.fromProto(_summaries[id]!)];
+    return [for (final id in ids) _summaries[id]!];
   }
 
   @override
-  Stream<RepSummary> watchSummaries() => _summaryCtrl.stream;
+  Stream<pb.RepSummary> watchSummaries() => _summaryCtrl.stream;
 
   @override
-  Future<List<TracePoint>> trace(String uuid) async {
+  Future<List<pb.TraceSample>> trace(String uuid) async {
     final cached = _completed[uuid];
     if (cached != null) return cached;
 
@@ -233,7 +231,7 @@ class BleTransport implements RepTransport {
     _assemblers[uuid] = TraceAssembler(uuid);
     _expectedChunks.remove(uuid);
     _idleTimers.remove(uuid)?.cancel();
-    final completer = Completer<List<TracePoint>>();
+    final completer = Completer<List<pb.TraceSample>>();
     _pending[uuid] = completer;
     final response = completer.future;
     _requestTimers.remove(uuid)?.cancel();
@@ -323,13 +321,13 @@ class BleTransport implements RepTransport {
         if (uuid == null) return; // a summary with no identity is not a rep
         final isNew = !_summaries.containsKey(uuid);
         _summaries[uuid] = summary;
-        if (isNew) _summaryCtrl.add(RepSummary.fromProto(summary));
+        if (isNew) _summaryCtrl.add(summary);
       case pb.SyncMessage_Body.trace:
         _onChunk(message.trace);
       case pb.SyncMessage_Body.status:
         break;
       case pb.SyncMessage_Body.calibration:
-        calibration.set(CalibrationStatus.fromProto(message.calibration));
+        calibration.set(message.calibration);
       case pb.SyncMessage_Body.notSet:
         break;
     }
@@ -364,7 +362,7 @@ class BleTransport implements RepTransport {
 
   void _complete(String uuid) {
     _idleTimers.remove(uuid)?.cancel();
-    final points = _assemblers.remove(uuid)?.assemble() ?? const <TracePoint>[];
+    final points = _assemblers.remove(uuid)?.assemble() ?? const <pb.TraceSample>[];
     _expectedChunks.remove(uuid);
     if (points.isEmpty) return;
     _completed[uuid] = points;

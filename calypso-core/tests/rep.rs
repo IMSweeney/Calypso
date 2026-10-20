@@ -223,7 +223,7 @@ fn compute_rep_recovers_known_displacement() {
     let sum = compute_rep(&samples, &mut buf);
 
     assert!(!sum.decimated);
-    assert_eq!(sum.trace_len, samples.len());
+    assert_eq!(sum.trace_len, samples.len() as u32);
     assert_eq!(sum.duration_ms, 1500 + 2 * MARGIN_MS);
     let peak_to_peak = peak_to_peak_z(&buf);
     assert!(

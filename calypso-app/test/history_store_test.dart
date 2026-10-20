@@ -4,6 +4,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:calypso/model/rep.dart';
 import 'package:calypso/model/uuid.dart';
 import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:calypso/store/history_store.dart';
@@ -81,7 +82,7 @@ void main() {
     expect(trace.length, 10);
     expect(trace.first.tOffsetMs, 0);
     expect(trace.last.tOffsetMs, 90);
-    expect(trace.last.z, closeTo(-0.4, 1e-6), reason: 'positions are f32 on the wire');
+    expect(trace.last.pz, closeTo(-0.4, 1e-6), reason: 'positions are f32 on the wire');
   });
 
   test('re-syncing the same reps is idempotent', () async {
@@ -189,19 +190,19 @@ void main() {
     final summaries = await transport.summaries();
 
     for (final summary in summaries) {
-      final points = await transport.trace(summary.uuid);
+      final points = await transport.trace(summary.uuid!);
       final records = <int>[
-        ..._frameFor(summaryRecord(summary.uuid, pointCount: points.length)),
-        for (final chunk in chunksFor(summary.uuid, points))
+        ..._frameFor(summaryRecord(summary.uuid!, pointCount: points.length)),
+        for (final chunk in chunksFor(summary.uuid!, points))
           ..._frameFor(pb.RepRecord(trace: chunk)),
       ];
-      await store.appendNew({summary.uuid: Uint8List.fromList(records)});
+      await store.appendNew({summary.uuid!: Uint8List.fromList(records)});
     }
 
     expect(store.reps.length, 3);
     // The second summary in the fixture, keyed by the uuid it carries — the
     // generator's, not a test-minted one.
-    final trace = await store.trace(summaries[1].uuid);
+    final trace = await store.trace(summaries[1].uuid!);
     expect(trace.length, summaries[1].traceLen);
   });
 

@@ -2,7 +2,7 @@ library;
 
 import 'dart:typed_data';
 
-import '../model/rep.dart';
+import '../protocol/calypso.pb.dart' as pb;
 import 'rep_archive.dart';
 
 class MemoryArchive implements RepArchive {
@@ -53,7 +53,7 @@ class MemoryArchive implements RepArchive {
   }
 
   @override
-  Future<List<TracePoint>> trace(String uuid) async {
+  Future<List<pb.TraceSample>> trace(String uuid) async {
     for (final stored in _reps) {
       if (stored.uuid != uuid) continue;
       final block = Uint8List.fromList(_bytes.sublist(stored.offset, stored.offset + stored.length));

@@ -10,6 +10,7 @@ import 'dart:math' as math;
 
 import 'package:calypso/model/rep.dart';
 import 'package:calypso/plot/rep_plot.dart';
+import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:calypso/transport/fixture_transport.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,13 +19,13 @@ import 'support/test_uuid.dart';
 
 /// A squat: down to -[depth] and back, [count] points, 10 ms apart, and a small
 /// sideways drift so the path isn't a flat line in the x axis.
-List<TracePoint> squatTrace({int count = 160, double depth = 0.4, double drift = 0.03}) => [
+List<pb.TraceSample> squatTrace({int count = 160, double depth = 0.4, double drift = 0.03}) => [
       for (var i = 0; i < count; i++)
-        TracePoint(
+        pb.TraceSample(
           tOffsetMs: i * 10,
-          x: drift * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
-          y: 0.01 * math.sin(2 * math.pi * i / (count - 1)),
-          z: -depth * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
+          px: drift * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
+          py: 0.01 * math.sin(2 * math.pi * i / (count - 1)),
+          pz: -depth * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
           ax: 0,
           ay: 0,
           az: -100,
@@ -37,7 +38,7 @@ List<TracePoint> squatTrace({int count = 160, double depth = 0.4, double drift =
 
 Future<void> pumpPlot(
   WidgetTester tester,
-  List<TracePoint> points, {
+  List<pb.TraceSample> points, {
   int? scrubIndex,
   Size size = const Size(400, 300),
 }) async {
@@ -80,11 +81,11 @@ void main() {
 
   testWidgets('a one-point trace does not break the view', (tester) async {
     await pumpPlot(tester, [
-      const TracePoint(
+      pb.TraceSample(
         tOffsetMs: 0,
-        x: 0,
-        y: 0,
-        z: -0.01,
+        px: 0,
+        py: 0,
+        pz: -0.01,
         ax: 0,
         ay: 0,
         az: -100,
@@ -112,7 +113,7 @@ void _fixtureEndToEnd() {
     expect(summaries, isNotEmpty);
     // The generator's uuid for the fixture's first rep.
     expect(summaries.first.uuid, u(1));
-    final trace = await transport.trace(summaries.first.uuid);
+    final trace = await transport.trace(summaries.first.uuid!);
     expect(trace.length, greaterThan(50));
 
     await pumpPlot(tester, trace, scrubIndex: trace.length ~/ 2);

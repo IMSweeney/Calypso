@@ -12,11 +12,11 @@
 
 use alloc::vec::Vec;
 
-use crate::pb;
-use crate::rep::{compute_rep, Detector, RepSpan, RepSummary, TraceBuf, TracePoint, MARGIN_MS};
+use crate::pb::{self, msg};
+use crate::rep::{compute_rep, Detector, RepSpan, TraceBuf, TracePoint, MARGIN_MS};
 use crate::sampler::{quantize, Sample, SampleRing, ACCEL_SCALE, QUAT_SCALE};
 use crate::store::RECORD_BUF_BYTES;
-use crate::uuid::{self, RepUuid};
+use crate::uuid;
 
 /// Sample interval used by the synthetic fixtures (100 Hz, like the device).
 pub const SAMPLE_DT_MS: u32 = 10;
@@ -86,7 +86,7 @@ pub fn squat_set(reps: usize, t_ms: u32, rest_ms: u32, a: f32) -> (Vec<Sample>, 
 pub fn detect_and_trace(
     samples: &[Sample],
     trace_capacity: usize,
-) -> Vec<(RepSummary, Vec<TracePoint>)> {
+) -> Vec<(msg::RepSummary, Vec<TracePoint>)> {
     let mut ring_buf = alloc::vec![Sample::ZERO; REPLAY_RING];
     let mut ring = SampleRing::new(&mut ring_buf);
     let mut det = Detector::new();
@@ -126,12 +126,14 @@ pub fn push_record(dump: &mut Vec<u8>, record: &[u8]) {
 pub fn push_rep(
     dump: &mut Vec<u8>,
     rec_buf: &mut [u8],
-    rep_uuid: RepUuid,
-    summary: &RepSummary,
+    summary: &mut msg::RepSummary,
     trace: &[TracePoint],
 ) -> Result<u32, pb::Error> {
-    let chunk_count = pb::chunk_count_for(trace.len());
-    let n = pb::encode_summary(rep_uuid, summary, chunk_count, rec_buf)?;
+    // The chunks carry the same identity as the summary, and that identity is the
+    // summary's — deriving it here is what keeps them together.
+    let rep_uuid = pb::summary_uuid(summary).ok_or(pb::Error::Decode)?;
+    summary.chunk_count = pb::chunk_count_for(trace.len());
+    let n = pb::encode_summary(summary, rec_buf)?;
     push_record(dump, &rec_buf[..n]);
 
     let t0_ms = trace.first().map(|p| p.t_ms).unwrap_or(0);
@@ -152,9 +154,10 @@ pub fn squat_dump(reps: usize, a: f32) -> Vec<u8> {
     let reps = detect_and_trace(&samples, 512);
     let mut rec_buf = [0u8; RECORD_BUF_BYTES];
     let mut dump = Vec::new();
-    for (i, (summary, trace)) in reps.iter().enumerate() {
+    for (i, (mut summary, trace)) in reps.into_iter().enumerate() {
         // Deterministic identities: fixtures are regenerated and compared.
-        push_rep(&mut dump, &mut rec_buf, uuid::fixture_uuid(i as u32), summary, trace).unwrap();
+        summary.rep_uuid = pb::uuid_to_field(&uuid::fixture_uuid(i as u32));
+        push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();
     }
     dump
 }
