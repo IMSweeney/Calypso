@@ -1,0 +1,6 @@
+- Minimal comments; only add comments when the code is not self describing. Any gotchas should go in GOTCHAS.md rather than the comments
+- Don’t keep code around for backwards compatibility
+- keep unit tests brief. 
+- When you can, test each interface against a recording of real or synthetic data
+- Fail fast. Unexpected errors should cause a crash in dev, expected errors should warn and retry. Never swallow an error silently
+- One source of schema; any data schema used across client and device goes in proto. Use generated proto objects rather than converting to language specific types where possible (unless performance dictates otherwise)
