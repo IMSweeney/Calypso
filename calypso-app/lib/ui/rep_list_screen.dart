@@ -23,7 +23,10 @@ import '../widgets/calibration_hint.dart';
 import '../widgets/connection_status.dart';
 import 'plot_screen.dart';
 
-const String seedFixture = String.fromEnvironment('FIXTURE', defaultValue: 'synthetic-squat');
+const String seedFixture = String.fromEnvironment(
+  'FIXTURE',
+  defaultValue: 'synthetic-squat',
+);
 
 class RepListScreen extends StatefulWidget {
   const RepListScreen({
@@ -106,15 +109,21 @@ class _RepListScreenState extends State<RepListScreen> {
 
   Future<void> _load() async {
     try {
-      final archive = widget.archive ??
+      final archive =
+          widget.archive ??
           HistoryStore(
-              HistoryFiles(widget.historyDirectory ?? await getApplicationSupportDirectory()));
+            HistoryFiles(
+              widget.historyDirectory ?? await getApplicationSupportDirectory(),
+            ),
+          );
       await archive.load();
 
       var synced = 0;
       var source = widget.source;
       if (source == null && widget.fixture.isNotEmpty) {
-        final data = await rootBundle.load('assets/fixtures/${widget.fixture}.pblog');
+        final data = await rootBundle.load(
+          'assets/fixtures/${widget.fixture}.pblog',
+        );
         source = FixtureTransport.fromBytes(data.buffer.asUint8List());
       }
       if (source != null) {
@@ -143,18 +152,20 @@ class _RepListScreenState extends State<RepListScreen> {
     if (!_ble.status.isConnected) return;
 
     try {
-      final added = await _queueWrite(() => archiveFromTransport(
-            archive,
-            _ble,
-            onProgress: (done, total) {
-              if (mounted) {
-                setState(() {
-                  _syncDone = done;
-                  _syncTotal = total;
-                });
-              }
-            },
-          ));
+      final added = await _queueWrite(
+        () => archiveFromTransport(
+          archive,
+          _ble,
+          onProgress: (done, total) {
+            if (mounted) {
+              setState(() {
+                _syncDone = done;
+                _syncTotal = total;
+              });
+            }
+          },
+        ),
+      );
       if (!mounted) return;
       setState(() {
         _synced += added;
@@ -217,34 +228,38 @@ class _RepListScreenState extends State<RepListScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : archive == null || archive.reps.isEmpty
-                    ? Center(child: Text(_error ?? 'No reps yet'))
-                    : ListView.separated(
-                        itemCount: archive.reps.length,
-                        separatorBuilder: (_, _) => const Divider(height: 1),
-                        itemBuilder: (context, index) {
-                          final stored = archive.reps[archive.reps.length - 1 - index];
-                          final s = stored.summary;
-                          return ListTile(
-                            title: Text(
-                                'Rep ${uuidShort(s.uuid)} · ${_formatTime(stored.receivedAt)}'),
-                            subtitle: Text(
-                              '${(s.durationMs / 1000).toStringAsFixed(1)} s · '
-                              'ROM ${s.rom.toStringAsFixed(2)} m · '
-                              'peak ${s.peakVelocity.toStringAsFixed(2)} m/s · '
-                              'tilt ${s.rollRangeDeg.toStringAsFixed(1)}° / '
-                              '${s.pitchRangeDeg.toStringAsFixed(1)}°'
-                              '${s.decimated ? ' · decimated' : ''}',
+                ? Center(child: Text(_error ?? 'No reps yet'))
+                : ListView.separated(
+                    itemCount: archive.reps.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final stored =
+                          archive.reps[archive.reps.length - 1 - index];
+                      final s = stored.summary;
+                      return ListTile(
+                        title: Text(
+                          'Rep ${uuidShort(s.uuid)} · ${_formatTime(stored.receivedAt)}',
+                        ),
+                        subtitle: Text(
+                          '${(s.durationMs / 1000).toStringAsFixed(1)} s · '
+                          'ROM ${s.rom.toStringAsFixed(2)} m · '
+                          'peak ${s.peakVelocity.toStringAsFixed(2)} m/s · '
+                          'tilt ${s.rollRangeDeg.toStringAsFixed(1)}° / '
+                          '${s.pitchRangeDeg.toStringAsFixed(1)}°'
+                          '${s.decimated ? ' · decimated' : ''}',
+                        ),
+                        trailing: const Icon(Icons.view_in_ar_outlined),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => PlotScreen(
+                              store: archive,
+                              repUuid: stored.uuid,
                             ),
-                            trailing: const Icon(Icons.view_in_ar_outlined),
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) =>
-                                    PlotScreen(store: archive, repUuid: stored.uuid),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
           ),
         ],
       ),

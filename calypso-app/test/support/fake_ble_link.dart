@@ -21,20 +21,18 @@ class FakeBleLink implements BleLink {
   final List<String> discovered = [];
 
   List<DiscoveredService> services = const [
-    DiscoveredService(
-      '0000ca20-b0cd-11ec-871f-d45ddf138840',
-      [
-        '0000ca21-b0cd-11ec-871f-d45ddf138840',
-        '0000ca22-b0cd-11ec-871f-d45ddf138840',
-        '0000ca23-b0cd-11ec-871f-d45ddf138840',
-      ],
-    ),
+    DiscoveredService('0000ca20-b0cd-11ec-871f-d45ddf138840', [
+      '0000ca21-b0cd-11ec-871f-d45ddf138840',
+      '0000ca22-b0cd-11ec-871f-d45ddf138840',
+      '0000ca23-b0cd-11ec-871f-d45ddf138840',
+    ]),
   ];
 
   final List<(String, Uint8List)> writes = [];
 
   void Function(String deviceId, String? name)? _onScanResult;
-  void Function(String deviceId, bool connected, String? error)? _onConnectionChange;
+  void Function(String deviceId, bool connected, String? error)?
+  _onConnectionChange;
   final Map<String, StreamController<Uint8List>> _values = {};
 
   @override
@@ -80,22 +78,34 @@ class FakeBleLink implements BleLink {
 
   @override
   void onConnectionChange(
-          void Function(String deviceId, bool connected, String? error) callback) =>
-      _onConnectionChange = callback;
+    void Function(String deviceId, bool connected, String? error) callback,
+  ) => _onConnectionChange = callback;
 
   @override
-  Future<void> subscribe(String deviceId, String serviceUuid, String characteristicUuid) async {
+  Future<void> subscribe(
+    String deviceId,
+    String serviceUuid,
+    String characteristicUuid,
+  ) async {
     calls.add('subscribe:$characteristicUuid');
     if (!discovered.contains(deviceId)) {
       throw StateError('subscribe before discoverServices');
     }
     subscribed.add(characteristicUuid);
-    _values.putIfAbsent(characteristicUuid, () => StreamController<Uint8List>.broadcast());
+    _values.putIfAbsent(
+      characteristicUuid,
+      () => StreamController<Uint8List>.broadcast(),
+    );
   }
 
   @override
   Stream<Uint8List> valueStream(String deviceId, String characteristicUuid) =>
-      _values.putIfAbsent(characteristicUuid, () => StreamController<Uint8List>.broadcast()).stream;
+      _values
+          .putIfAbsent(
+            characteristicUuid,
+            () => StreamController<Uint8List>.broadcast(),
+          )
+          .stream;
 
   @override
   Future<void> write(
@@ -110,8 +120,12 @@ class FakeBleLink implements BleLink {
   void seeDevice(String deviceId, [String? name]) =>
       _onScanResult?.call(deviceId, name);
 
-  void notify(String characteristicUuid, Uint8List value) =>
-      _values.putIfAbsent(characteristicUuid, () => StreamController<Uint8List>.broadcast()).add(value);
+  void notify(String characteristicUuid, Uint8List value) => _values
+      .putIfAbsent(
+        characteristicUuid,
+        () => StreamController<Uint8List>.broadcast(),
+      )
+      .add(value);
 
   void dropConnection([String? error]) {
     connected = false;
@@ -119,10 +133,11 @@ class FakeBleLink implements BleLink {
   }
 
   Uint8List lastWriteTo(String characteristicUuid) => writes
-      .lastWhere((w) => w.$1 == characteristicUuid,
-          orElse: () => throw StateError('no write to $characteristicUuid'))
+      .lastWhere(
+        (w) => w.$1 == characteristicUuid,
+        orElse: () => throw StateError('no write to $characteristicUuid'),
+      )
       .$2;
 
-  bool get hasWriteTo =>
-      writes.isNotEmpty;
+  bool get hasWriteTo => writes.isNotEmpty;
 }

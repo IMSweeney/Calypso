@@ -32,7 +32,10 @@ abstract class RepArchive {
   int get sizeBytes;
   bool contains(String uuid);
 
-  Future<int> appendNew(Map<String, Uint8List> recordBlocks, {DateTime? receivedAt});
+  Future<int> appendNew(
+    Map<String, Uint8List> recordBlocks, {
+    DateTime? receivedAt,
+  });
 
   Future<List<pb.TraceSample>> trace(String uuid);
 }
@@ -57,7 +60,11 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
   (String, pb.RepSummary)? pending;
 
   while (pos + 4 <= bytes.length) {
-    final length = ByteData.sublistView(bytes, pos, pos + 4).getUint32(0, Endian.little);
+    final length = ByteData.sublistView(
+      bytes,
+      pos,
+      pos + 4,
+    ).getUint32(0, Endian.little);
     final start = pos + 4;
     if (length == 0 || start + length > bytes.length) {
       truncated = true;
@@ -78,12 +85,14 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
         break;
       }
       if (pending != null) {
-        reps.add(StoredRep(
-          summary: pending.$2,
-          offset: blockStart!,
-          length: blockLength,
-          receivedAt: receivedAt[pending.$1],
-        ));
+        reps.add(
+          StoredRep(
+            summary: pending.$2,
+            offset: blockStart!,
+            length: blockLength,
+            receivedAt: receivedAt[pending.$1],
+          ),
+        );
       }
       pending = (uuid, record.summary);
       blockStart = pos;
@@ -98,12 +107,14 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
     receivedAt.remove(pending.$1);
     return BlockScan(reps, truncated, goodBytes);
   }
-  reps.add(StoredRep(
-    summary: pending.$2,
-    offset: blockStart!,
-    length: blockLength,
-    receivedAt: receivedAt[pending.$1],
-  ));
+  reps.add(
+    StoredRep(
+      summary: pending.$2,
+      offset: blockStart!,
+      length: blockLength,
+      receivedAt: receivedAt[pending.$1],
+    ),
+  );
   return BlockScan(reps, truncated, bytes.length);
 }
 

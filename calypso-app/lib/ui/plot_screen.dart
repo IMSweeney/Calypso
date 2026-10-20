@@ -34,7 +34,9 @@ class _PlotScreenState extends State<PlotScreen> {
   Future<void> _load() async {
     try {
       final repUuid = widget.repUuid;
-      final stored = widget.store.reps.where((r) => r.uuid == repUuid).firstOrNull;
+      final stored = widget.store.reps
+          .where((r) => r.uuid == repUuid)
+          .firstOrNull;
       final trace = await widget.store.trace(repUuid);
       if (!mounted) return;
       setState(() {
@@ -42,7 +44,8 @@ class _PlotScreenState extends State<PlotScreen> {
         _trace = trace;
         _loading = false;
         if (trace.isEmpty) {
-          _error = 'Rep ${uuidShort(repUuid)}: no trace in the archive '
+          _error =
+              'Rep ${uuidShort(repUuid)}: no trace in the archive '
               '(${stored?.summary.chunkCount ?? 0} chunks were expected)';
         }
       });
@@ -64,15 +67,18 @@ class _PlotScreenState extends State<PlotScreen> {
     }
     final selected = _selected;
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Rep ${uuidShort(widget.repUuid)}'),
-      ),
+      appBar: AppBar(title: Text('Rep ${uuidShort(widget.repUuid)}')),
       body: Column(
         children: [
           if (_error != null)
             MaterialBanner(
               content: Text(_error!),
-              actions: [TextButton(onPressed: () => setState(() => _error = null), child: const Text('Dismiss'))],
+              actions: [
+                TextButton(
+                  onPressed: () => setState(() => _error = null),
+                  child: const Text('Dismiss'),
+                ),
+              ],
             ),
           Expanded(
             child: _trace.isEmpty
@@ -93,9 +99,13 @@ class _PlotScreenState extends State<PlotScreen> {
                 children: [
                   Text('${selected.durationMs} ms'),
                   Text('ROM ${selected.rom.toStringAsFixed(2)} m'),
-                  Text('peak v ${selected.peakVelocity.toStringAsFixed(2)} m/s'),
-                  Text('tilt ${selected.rollRangeDeg.toStringAsFixed(1)}° roll / '
-                      '${selected.pitchRangeDeg.toStringAsFixed(1)}° pitch'),
+                  Text(
+                    'peak v ${selected.peakVelocity.toStringAsFixed(2)} m/s',
+                  ),
+                  Text(
+                    'tilt ${selected.rollRangeDeg.toStringAsFixed(1)}° roll / '
+                    '${selected.pitchRangeDeg.toStringAsFixed(1)}° pitch',
+                  ),
                 ],
               ),
             ),
@@ -106,7 +116,8 @@ class _PlotScreenState extends State<PlotScreen> {
                 value: (_scrubIndex ?? 0).toDouble(),
                 max: (_trace.length - 1).toDouble(),
                 divisions: _trace.length > 1 ? _trace.length - 1 : null,
-                label: '${(_scrubIndex == null ? 0 : _trace[_scrubIndex!].tOffsetMs)} ms',
+                label:
+                    '${(_scrubIndex == null ? 0 : _trace[_scrubIndex!].tOffsetMs)} ms',
                 onChanged: (v) => setState(() => _scrubIndex = v.round()),
               ),
             ),

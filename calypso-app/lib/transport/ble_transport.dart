@@ -38,7 +38,8 @@ class BleTransport implements RepTransport {
 
   String? _deviceId;
   StreamSubscription<Uint8List>? _messagesSub;
-  final StreamController<pb.RepSummary> _summaryCtrl = StreamController<pb.RepSummary>.broadcast();
+  final StreamController<pb.RepSummary> _summaryCtrl =
+      StreamController<pb.RepSummary>.broadcast();
 
   final Map<String, pb.RepSummary> _summaries = {};
 
@@ -55,14 +56,20 @@ class BleTransport implements RepTransport {
 
   bool _closed = false;
 
-  Future<void> connect({Duration scanTimeout = const Duration(seconds: 10)}) async {
+  Future<void> connect({
+    Duration scanTimeout = const Duration(seconds: 10),
+  }) async {
     if (_closed) throw StateError('BleTransport is closed');
     await _teardownConnection();
 
     if (!await _link.isAvailable()) {
-      bleLog.warning('bluetooth unavailable: off, not permitted, or not present');
-      status.set(BleStatus.unsupported,
-          error: 'Bluetooth is off, not permitted, or not available');
+      bleLog.warning(
+        'bluetooth unavailable: off, not permitted, or not present',
+      );
+      status.set(
+        BleStatus.unsupported,
+        error: 'Bluetooth is off, not permitted, or not available',
+      );
       return;
     }
 
@@ -79,7 +86,9 @@ class BleTransport implements RepTransport {
       deviceId = await found.future.timeout(scanTimeout);
     } on TimeoutException {
       await _link.stopScan();
-      bleLog.warning('no Calypso device found within ${scanTimeout.inSeconds}s');
+      bleLog.warning(
+        'no Calypso device found within ${scanTimeout.inSeconds}s',
+      );
       status.set(BleStatus.failed, error: 'No Calypso device found');
       return;
     } finally {
@@ -115,7 +124,11 @@ class BleTransport implements RepTransport {
           '${CalypsoGatt.service} (${CalypsoGatt.messages}, ${CalypsoGatt.requests})',
         );
       }
-      await _link.subscribe(deviceId, CalypsoGatt.service, CalypsoGatt.messages);
+      await _link.subscribe(
+        deviceId,
+        CalypsoGatt.service,
+        CalypsoGatt.messages,
+      );
       debugPrint('calypso: notifications enabled for ${CalypsoGatt.messages}');
       bleLog.info('subscribed to ${CalypsoGatt.messages}');
     } catch (e) {
@@ -145,23 +158,29 @@ class BleTransport implements RepTransport {
   }
 
   static bool _offersSync(List<DiscoveredService> services) => services.any(
-        (service) =>
-            _sameUuid(service.uuid, CalypsoGatt.service) &&
-            service.characteristics.any((c) => _sameUuid(c, CalypsoGatt.messages)) &&
-            service.characteristics.any((c) => _sameUuid(c, CalypsoGatt.requests)),
-      );
+    (service) =>
+        _sameUuid(service.uuid, CalypsoGatt.service) &&
+        service.characteristics.any(
+          (c) => _sameUuid(c, CalypsoGatt.messages),
+        ) &&
+        service.characteristics.any((c) => _sameUuid(c, CalypsoGatt.requests)),
+  );
 
-  static bool _sameUuid(String a, String b) => a.toLowerCase() == b.toLowerCase();
+  static bool _sameUuid(String a, String b) =>
+      a.toLowerCase() == b.toLowerCase();
 
   static String _describe(List<DiscoveredService> services) =>
       services.isEmpty ? 'no services' : services.join('; ');
 
-  static bool _offersReversed(List<DiscoveredService> services) =>
-      services.any((service) => _sameUuid(service.uuid, _reversed(CalypsoGatt.service)));
+  static bool _offersReversed(List<DiscoveredService> services) => services.any(
+    (service) => _sameUuid(service.uuid, _reversed(CalypsoGatt.service)),
+  );
 
   static String _reversed(String uuid) {
     final clean = uuid.replaceAll('-', '').toLowerCase();
-    final bytes = [for (var i = 0; i < 16; i++) clean.substring(i * 2, i * 2 + 2)];
+    final bytes = [
+      for (var i = 0; i < 16; i++) clean.substring(i * 2, i * 2 + 2),
+    ];
     final out = bytes.reversed.join();
     return '${out.substring(0, 8)}-${out.substring(8, 12)}-${out.substring(12, 16)}'
         '-${out.substring(16, 20)}-${out.substring(20)}';
@@ -181,8 +200,7 @@ class BleTransport implements RepTransport {
     if (deviceId != null) {
       try {
         await _link.disconnect(deviceId);
-      } catch (_) {
-      }
+      } catch (_) {}
     }
   }
 
@@ -281,12 +299,14 @@ class BleTransport implements RepTransport {
           ? 'trace $uuid: no answer within ${traceTimeout.inSeconds}s'
           : 'trace $uuid: stream stopped after $partial chunks',
     );
-    pending.completeError(TraceUnavailableException(
-      uuid,
-      partial == 0
-          ? 'the device did not answer (it may no longer hold this rep)'
-          : 'the stream stopped after $partial chunks',
-    ));
+    pending.completeError(
+      TraceUnavailableException(
+        uuid,
+        partial == 0
+            ? 'the device did not answer (it may no longer hold this rep)'
+            : 'the stream stopped after $partial chunks',
+      ),
+    );
   }
 
   @override
@@ -333,7 +353,11 @@ class BleTransport implements RepTransport {
     }
   }
 
-  void _logMessage(_Direction direction, String characteristic, List<int> bytes) {
+  void _logMessage(
+    _Direction direction,
+    String characteristic,
+    List<int> bytes,
+  ) {
     bleLog.fine(describeMessage(direction.name, characteristic, bytes));
   }
 
@@ -350,7 +374,8 @@ class BleTransport implements RepTransport {
 
     if (chunk.totalChunks > 0) {
       _expectedChunks[uuid] = chunk.totalChunks;
-      if (assembler.indices.length == chunk.totalChunks && assembler.missingIndices().isEmpty) {
+      if (assembler.indices.length == chunk.totalChunks &&
+          assembler.missingIndices().isEmpty) {
         _complete(uuid);
       }
       return;
@@ -362,7 +387,8 @@ class BleTransport implements RepTransport {
 
   void _complete(String uuid) {
     _idleTimers.remove(uuid)?.cancel();
-    final points = _assemblers.remove(uuid)?.assemble() ?? const <pb.TraceSample>[];
+    final points =
+        _assemblers.remove(uuid)?.assemble() ?? const <pb.TraceSample>[];
     _expectedChunks.remove(uuid);
     if (points.isEmpty) return;
     _completed[uuid] = points;

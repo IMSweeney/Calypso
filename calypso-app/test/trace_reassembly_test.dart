@@ -28,10 +28,9 @@ void main() {
     }
     final assembled = assembler.assemble();
     expect(assembled.length, 10);
-    expect(
-      assembled.map((p) => p.tOffsetMs).toList(),
-      [for (var i = 0; i < 10; i++) i * 10],
-    );
+    expect(assembled.map((p) => p.tOffsetMs).toList(), [
+      for (var i = 0; i < 10; i++) i * 10,
+    ]);
   });
 
   test('a repeated chunk is idempotent', () {

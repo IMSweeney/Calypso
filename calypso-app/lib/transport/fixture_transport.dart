@@ -15,7 +15,10 @@ class FixtureTransport implements RepTransport {
     this.replayInterval = const Duration(milliseconds: 30),
   }) : _result = readDump(bytes);
 
-  FixtureTransport(this._result, {this.replayInterval = const Duration(milliseconds: 30)});
+  FixtureTransport(
+    this._result, {
+    this.replayInterval = const Duration(milliseconds: 30),
+  });
 
   final DumpReadResult _result;
   final Duration replayInterval;
@@ -28,7 +31,9 @@ class FixtureTransport implements RepTransport {
   @override
   Stream<pb.RepSummary> watchSummaries() async* {
     for (final summary in summariesOf(_result.records)) {
-      if (replayInterval > Duration.zero) await Future<void>.delayed(replayInterval);
+      if (replayInterval > Duration.zero) {
+        await Future<void>.delayed(replayInterval);
+      }
       yield summary;
     }
   }
@@ -39,7 +44,9 @@ class FixtureTransport implements RepTransport {
     if (chunks.isEmpty) {
       throw TraceUnavailableException(
         uuid,
-        _hasSummary(uuid) ? 'trace overwritten on the device ring' : 'no such rep',
+        _hasSummary(uuid)
+            ? 'trace overwritten on the device ring'
+            : 'no such rep',
       );
     }
     final assembler = TraceAssembler(uuid);

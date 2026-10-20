@@ -10,22 +10,26 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'support/test_uuid.dart';
 
-List<pb.TraceSample> squatTrace({int count = 160, double depth = 0.4, double drift = 0.03}) => [
-      for (var i = 0; i < count; i++)
-        pb.TraceSample(
-          tOffsetMs: i * 10,
-          px: drift * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
-          py: 0.01 * math.sin(2 * math.pi * i / (count - 1)),
-          pz: -depth * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
-          ax: 0,
-          ay: 0,
-          az: -100,
-          qw: 16384,
-          qx: 0,
-          qy: 0,
-          qz: 0,
-        ),
-    ];
+List<pb.TraceSample> squatTrace({
+  int count = 160,
+  double depth = 0.4,
+  double drift = 0.03,
+}) => [
+  for (var i = 0; i < count; i++)
+    pb.TraceSample(
+      tOffsetMs: i * 10,
+      px: drift * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
+      py: 0.01 * math.sin(2 * math.pi * i / (count - 1)),
+      pz: -depth * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
+      ax: 0,
+      ay: 0,
+      az: -100,
+      qw: 16384,
+      qx: 0,
+      qy: 0,
+      qz: 0,
+    ),
+];
 
 Future<void> pumpPlot(
   WidgetTester tester,
@@ -62,7 +66,9 @@ void main() {
     );
   });
 
-  testWidgets('the same rep mid-scrub, showing the orientation gizmo', (tester) async {
+  testWidgets('the same rep mid-scrub, showing the orientation gizmo', (
+    tester,
+  ) async {
     await pumpPlot(tester, squatTrace(), scrubIndex: 80);
     await expectLater(
       find.byType(RepPlotView),
@@ -94,7 +100,9 @@ void main() {
 }
 
 void _fixtureEndToEnd() {
-  testWidgets('a dipped squat fixture, straight from the generator', (tester) async {
+  testWidgets('a dipped squat fixture, straight from the generator', (
+    tester,
+  ) async {
     final bytes = File('assets/fixtures/dip-left.pblog').readAsBytesSync();
     final transport = FixtureTransport.fromBytes(bytes);
     final summaries = await transport.summaries();

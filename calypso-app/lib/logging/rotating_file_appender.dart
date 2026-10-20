@@ -56,8 +56,7 @@ class RotatingFileAppender {
     try {
       await _sink?.flush();
       await _sink?.close();
-    } catch (_) {
-    }
+    } catch (_) {}
     _sink = null;
   }
 
@@ -98,8 +97,7 @@ class RotatingFileAppender {
         _size += chunk.length;
       }
       await _sink?.flush();
-    } catch (_) {
-    }
+    } catch (_) {}
   }
 
   Future<void> _open() async {

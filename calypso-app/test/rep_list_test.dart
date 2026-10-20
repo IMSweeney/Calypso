@@ -18,10 +18,9 @@ import 'support/calibration.dart';
 import 'support/fake_ble_link.dart';
 import 'support/test_uuid.dart';
 
-FixtureTransport fixtureTransport(String name) =>
-    FixtureTransport.fromBytes(
-      Uint8List.fromList(File('assets/fixtures/$name.pblog').readAsBytesSync()),
-    );
+FixtureTransport fixtureTransport(String name) => FixtureTransport.fromBytes(
+  Uint8List.fromList(File('assets/fixtures/$name.pblog').readAsBytesSync()),
+);
 
 Future<void> pumpList(
   WidgetTester tester, {
@@ -29,30 +28,36 @@ Future<void> pumpList(
   RepArchive? archive,
   RepTransport? source,
 }) async {
-  await tester.pumpWidget(MaterialApp(
-    home: RepListScreen(archive: archive, source: source ?? fixtureTransport(fixture)),
-  ));
+  await tester.pumpWidget(
+    MaterialApp(
+      home: RepListScreen(
+        archive: archive,
+        source: source ?? fixtureTransport(fixture),
+      ),
+    ),
+  );
   await tester.pumpAndSettle();
 }
 
 Uint8List summaryMessage(String uuid) => pb.SyncMessage(
-      summary: pb.RepSummary(
-        repUuid: uuidToBytes(uuid)!,
-        durationMs: 1400,
-        rom: 0.41,
-        peakVelocity: 0.7,
-        traceLen: 3,
-        chunkCount: 1,
-      ),
-    ).writeToBuffer();
+  summary: pb.RepSummary(
+    repUuid: uuidToBytes(uuid)!,
+    durationMs: 1400,
+    rom: 0.41,
+    peakVelocity: 0.7,
+    traceLen: 3,
+    chunkCount: 1,
+  ),
+).writeToBuffer();
 
 void main() {
   _bleWiring();
   _calibrationHint();
   _liveSummaries();
 
-  testWidgets('it archives the source and lists the reps newest first',
-      (tester) async {
+  testWidgets('it archives the source and lists the reps newest first', (
+    tester,
+  ) async {
     final archive = MemoryArchive();
     await pumpList(tester, fixture: 'synthetic-squat', archive: archive);
 
@@ -74,15 +79,20 @@ void main() {
     expect(archive.reps.last.receivedAt, isNotNull);
   });
 
-  testWidgets('re-opening the app does not duplicate the archive', (tester) async {
+  testWidgets('re-opening the app does not duplicate the archive', (
+    tester,
+  ) async {
     final archive = MemoryArchive();
     for (var i = 0; i < 2; i++) {
       await tester.pumpWidget(const SizedBox.shrink());
       await pumpList(tester, fixture: 'synthetic-squat', archive: archive);
     }
     expect(find.textContaining('Rep'), findsNWidgets(3));
-    expect(find.textContaining('synced'), findsNothing,
-        reason: 'the second run had nothing new');
+    expect(
+      find.textContaining('synced'),
+      findsNothing,
+      reason: 'the second run had nothing new',
+    );
     expect(archive.reps.length, 3);
   });
 
@@ -92,7 +102,11 @@ void main() {
   });
 
   testWidgets('tapping a rep opens its plot', (tester) async {
-    await pumpList(tester, fixture: 'synthetic-squat', archive: MemoryArchive());
+    await pumpList(
+      tester,
+      fixture: 'synthetic-squat',
+      archive: MemoryArchive(),
+    );
 
     await tester.tap(find.textContaining('Rep ${uuidShort(u(0))} ·'));
     await tester.pumpAndSettle();
@@ -103,24 +117,31 @@ void main() {
     expect(find.textContaining('ROM'), findsWidgets);
   });
 
-  testWidgets('a rep whose trace is gone explains itself instead of plotting nothing',
-      (tester) async {
-    await pumpList(tester, fixture: 'ring-dropped', archive: MemoryArchive());
+  testWidgets(
+    'a rep whose trace is gone explains itself instead of plotting nothing',
+    (tester) async {
+      await pumpList(tester, fixture: 'ring-dropped', archive: MemoryArchive());
 
-    expect(find.textContaining('Rep ${uuidShort(u(7))}'), findsOneWidget);
-    await tester.tap(find.textContaining('Rep ${uuidShort(u(7))} ·'));
-    await tester.pumpAndSettle();
+      expect(find.textContaining('Rep ${uuidShort(u(7))}'), findsOneWidget);
+      await tester.tap(find.textContaining('Rep ${uuidShort(u(7))} ·'));
+      await tester.pumpAndSettle();
 
-    expect(find.textContaining('no trace in the archive'), findsOneWidget);
-    expect(find.text('No trace available for this rep'), findsOneWidget);
-  });
+      expect(find.textContaining('no trace in the archive'), findsOneWidget);
+      expect(find.text('No trace available for this rep'), findsOneWidget);
+    },
+  );
 
   testWidgets('the archive is kept when the source goes away', (tester) async {
     final archive = MemoryArchive();
     await pumpList(tester, fixture: 'synthetic-squat', archive: archive);
     expect(find.textContaining('Rep'), findsNWidgets(3));
 
-    await pumpList(tester, fixture: 'empty', archive: archive, source: fixtureTransport('empty'));
+    await pumpList(
+      tester,
+      fixture: 'empty',
+      archive: archive,
+      source: fixtureTransport('empty'),
+    );
     expect(find.textContaining('Rep'), findsNWidgets(3));
   });
 }
@@ -128,11 +149,16 @@ void main() {
 void _calibrationHint() {
   Future<FakeBleLink> pumpConnected(WidgetTester tester) async {
     final link = FakeBleLink();
-    final ble = BleTransport(link, traceTimeout: const Duration(milliseconds: 50));
+    final ble = BleTransport(
+      link,
+      traceTimeout: const Duration(milliseconds: 50),
+    );
 
-    await tester.pumpWidget(MaterialApp(
-      home: RepListScreen(archive: MemoryArchive(), ble: ble, fixture: ''),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RepListScreen(archive: MemoryArchive(), ble: ble, fixture: ''),
+      ),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Connect'));
@@ -145,12 +171,17 @@ void _calibrationHint() {
     return link;
   }
 
-  testWidgets('an uncalibrated device explains itself, then stops', (tester) async {
+  testWidgets('an uncalibrated device explains itself, then stops', (
+    tester,
+  ) async {
     final link = await pumpConnected(tester);
 
     expect(find.textContaining('IMU not calibrated'), findsNothing);
 
-    link.notify(CalypsoGatt.messages, calibrationMessage(sys: 1, accel: 1, gyro: 2));
+    link.notify(
+      CalypsoGatt.messages,
+      calibrationMessage(sys: 1, accel: 1, gyro: 2),
+    );
     await tester.pumpAndSettle();
 
     expect(find.textContaining('IMU not calibrated'), findsOneWidget);
@@ -164,10 +195,15 @@ void _calibrationHint() {
     expect(find.textContaining('IMU not calibrated'), findsNothing);
   });
 
-  testWidgets('a dropped connection takes a stale hint with it', (tester) async {
+  testWidgets('a dropped connection takes a stale hint with it', (
+    tester,
+  ) async {
     final link = await pumpConnected(tester);
 
-    link.notify(CalypsoGatt.messages, calibrationMessage(sys: 1, accel: 1, gyro: 1));
+    link.notify(
+      CalypsoGatt.messages,
+      calibrationMessage(sys: 1, accel: 1, gyro: 1),
+    );
     await tester.pumpAndSettle();
     expect(find.textContaining('IMU not calibrated'), findsOneWidget);
 
@@ -178,11 +214,16 @@ void _calibrationHint() {
 
   testWidgets('nothing is claimed before connecting', (tester) async {
     final link = FakeBleLink();
-    final ble = BleTransport(link, traceTimeout: const Duration(milliseconds: 50));
+    final ble = BleTransport(
+      link,
+      traceTimeout: const Duration(milliseconds: 50),
+    );
 
-    await tester.pumpWidget(MaterialApp(
-      home: RepListScreen(archive: MemoryArchive(), ble: ble, fixture: ''),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RepListScreen(archive: MemoryArchive(), ble: ble, fixture: ''),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.textContaining('IMU not calibrated'), findsNothing);
@@ -191,50 +232,69 @@ void _calibrationHint() {
 }
 
 void _liveSummaries() {
-  testWidgets('a rep that arrives while connected is written to the log and listed',
-      (tester) async {
-    final link = FakeBleLink();
-    final ble = BleTransport(link, traceTimeout: const Duration(milliseconds: 50));
-    final archive = MemoryArchive();
+  testWidgets(
+    'a rep that arrives while connected is written to the log and listed',
+    (tester) async {
+      final link = FakeBleLink();
+      final ble = BleTransport(
+        link,
+        traceTimeout: const Duration(milliseconds: 50),
+      );
+      final archive = MemoryArchive();
 
-    await tester.pumpWidget(MaterialApp(
-      home: RepListScreen(archive: archive, ble: ble, fixture: ''),
-    ));
-    await tester.pumpAndSettle();
-    expect(find.text('No reps yet'), findsOneWidget);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: RepListScreen(archive: archive, ble: ble, fixture: ''),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('No reps yet'), findsOneWidget);
 
-    await tester.tap(find.text('Connect'));
-    await tester.pump();
-    link.seeDevice('device-1', 'Calypso');
-    for (var i = 0; i < 8; i++) {
-      await tester.pump(const Duration(milliseconds: 10));
-    }
-    expect(find.text('Connected'), findsOneWidget);
+      await tester.tap(find.text('Connect'));
+      await tester.pump();
+      link.seeDevice('device-1', 'Calypso');
+      for (var i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      expect(find.text('Connected'), findsOneWidget);
 
-    link.notify(CalypsoGatt.messages, summaryMessage(u(0)));
-    await tester.pumpAndSettle();
+      link.notify(CalypsoGatt.messages, summaryMessage(u(0)));
+      await tester.pumpAndSettle();
 
-    expect(find.textContaining('Rep ${uuidShort(u(0))}'), findsOneWidget,
-        reason: 'the list is the log, so it shows what the log just gained');
-    expect(archive.contains(u(0)), isTrue, reason: 'and the log has it');
+      expect(
+        find.textContaining('Rep ${uuidShort(u(0))}'),
+        findsOneWidget,
+        reason: 'the list is the log, so it shows what the log just gained',
+      );
+      expect(archive.contains(u(0)), isTrue, reason: 'and the log has it');
 
-    link.notify(CalypsoGatt.messages, summaryMessage(u(0)));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('Rep ${uuidShort(u(0))}'), findsOneWidget,
-        reason: 'one row, one record');
-    expect(archive.reps, hasLength(1));
-  });
+      link.notify(CalypsoGatt.messages, summaryMessage(u(0)));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Rep ${uuidShort(u(0))}'),
+        findsOneWidget,
+        reason: 'one row, one record',
+      );
+      expect(archive.reps, hasLength(1));
+    },
+  );
 }
 
 void _bleWiring() {
-  testWidgets('connecting updates the badge and subscribes, with no hardware',
-      (tester) async {
+  testWidgets('connecting updates the badge and subscribes, with no hardware', (
+    tester,
+  ) async {
     final link = FakeBleLink();
-    final ble = BleTransport(link, traceTimeout: const Duration(milliseconds: 50));
+    final ble = BleTransport(
+      link,
+      traceTimeout: const Duration(milliseconds: 50),
+    );
 
-    await tester.pumpWidget(MaterialApp(
-      home: RepListScreen(archive: MemoryArchive(), ble: ble, fixture: ''),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RepListScreen(archive: MemoryArchive(), ble: ble, fixture: ''),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('No reps yet'), findsOneWidget);

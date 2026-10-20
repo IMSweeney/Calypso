@@ -88,8 +88,11 @@ void main() {
 
     expect(summary.uuid, u(7));
     expect(summary.chunkCount, 3, reason: 'the device still claims chunks');
-    expect(traceChunksFor(result.records, u(7)), isEmpty,
-        reason: 'the app must show "trace unavailable", not crash');
+    expect(
+      traceChunksFor(result.records, u(7)),
+      isEmpty,
+      reason: 'the app must show "trace unavailable", not crash',
+    );
   });
 
   test('extreme values decode without loss', () {

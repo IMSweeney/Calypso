@@ -47,7 +47,10 @@ class PlotPath {
     return PlotPath._(points, speeds, speedMax, AxisBounds.of(points));
   }
 
-  static List<pb.TraceSample> _decimate(List<pb.TraceSample> all, int maxPoints) {
+  static List<pb.TraceSample> _decimate(
+    List<pb.TraceSample> all,
+    int maxPoints,
+  ) {
     final n = all.length;
     if (maxPoints < 2 || n <= maxPoints) return List.of(all);
 
@@ -76,10 +79,15 @@ class AxisBounds {
   final Vector3 center;
   final double halfExtent;
 
-  static AxisBounds of(List<pb.TraceSample> points, {double minHalfExtent = 0.12}) {
+  static AxisBounds of(
+    List<pb.TraceSample> points, {
+    double minHalfExtent = 0.12,
+  }) {
     if (points.isEmpty) return AxisBounds(Vector3.zero(), minHalfExtent);
     var minX = double.infinity, minY = double.infinity, minZ = double.infinity;
-    var maxX = -double.infinity, maxY = -double.infinity, maxZ = -double.infinity;
+    var maxX = -double.infinity,
+        maxY = -double.infinity,
+        maxZ = -double.infinity;
     for (final p in points) {
       minX = math.min(minX, p.px);
       maxX = math.max(maxX, p.px);
@@ -88,7 +96,11 @@ class AxisBounds {
       minZ = math.min(minZ, p.pz);
       maxZ = math.max(maxZ, p.pz);
     }
-    final center = Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
+    final center = Vector3(
+      (minX + maxX) / 2,
+      (minY + maxY) / 2,
+      (minZ + maxZ) / 2,
+    );
     final extent = math.max(
       math.max(maxX - minX, maxY - minY),
       math.max(maxZ - minZ, minHalfExtent * 2),
@@ -137,8 +149,10 @@ class OrbitCamera {
 
   void orbitBy(double deltaAzimuthDeg, double deltaElevationDeg) {
     azimuthDeg = (azimuthDeg + deltaAzimuthDeg) % 360;
-    elevationDeg =
-        (elevationDeg + deltaElevationDeg).clamp(minElevationDeg, maxElevationDeg);
+    elevationDeg = (elevationDeg + deltaElevationDeg).clamp(
+      minElevationDeg,
+      maxElevationDeg,
+    );
   }
 
   void zoomBy(double factor) {
@@ -159,7 +173,8 @@ class PlotProjection {
     _right = right;
     _up = up;
     _focal =
-        (viewport.shortestSide / 2) / math.tan(OrbitCamera.fovDeg * math.pi / 360);
+        (viewport.shortestSide / 2) /
+        math.tan(OrbitCamera.fovDeg * math.pi / 360);
   }
 
   final OrbitCamera camera;

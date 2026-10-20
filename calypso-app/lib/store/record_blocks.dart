@@ -21,18 +21,23 @@ Uint8List buildRepBlock(pb.RepSummary summary, List<pb.TraceSample> trace) {
   records.add(frameRecord(pb.RepRecord(summary: summary).writeToBuffer()));
 
   for (var start = 0; start < trace.length; start += pbTraceChunkSamples) {
-    final slice = trace.sublist(start, (start + pbTraceChunkSamples).clamp(0, trace.length));
-    records.add(frameRecord(
-      pb.RepRecord(
-        trace: pb.TraceChunk(
-          repUuid: summary.repUuid,
-          index: start ~/ pbTraceChunkSamples,
-          firstTOffsetMs: slice.first.tOffsetMs,
-          totalChunks: 0,
-          samples: slice,
-        ),
-      ).writeToBuffer(),
-    ));
+    final slice = trace.sublist(
+      start,
+      (start + pbTraceChunkSamples).clamp(0, trace.length),
+    );
+    records.add(
+      frameRecord(
+        pb.RepRecord(
+          trace: pb.TraceChunk(
+            repUuid: summary.repUuid,
+            index: start ~/ pbTraceChunkSamples,
+            firstTOffsetMs: slice.first.tOffsetMs,
+            totalChunks: 0,
+            samples: slice,
+          ),
+        ).writeToBuffer(),
+      ),
+    );
   }
   return records.toBytes();
 }

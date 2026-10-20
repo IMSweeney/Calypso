@@ -10,13 +10,12 @@ Uint8List calibrationMessage({
   int gyro = 3,
   int mag = 0,
   bool? ready,
-}) =>
-    pb.SyncMessage(
-      calibration: pb.CalibrationStatus(
-        sys: sys,
-        accel: accel,
-        gyro: gyro,
-        mag: mag,
-        ready: ready ?? (sys == 3 && accel == 3 && gyro == 3),
-      ),
-    ).writeToBuffer();
+}) => pb.SyncMessage(
+  calibration: pb.CalibrationStatus(
+    sys: sys,
+    accel: accel,
+    gyro: gyro,
+    mag: mag,
+    ready: ready ?? (sys == 3 && accel == 3 && gyro == 3),
+  ),
+).writeToBuffer();

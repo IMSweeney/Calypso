@@ -72,7 +72,10 @@ class HistoryStore implements RepArchive {
   }
 
   @override
-  Future<int> appendNew(Map<String, Uint8List> recordBlocks, {DateTime? receivedAt}) async {
+  Future<int> appendNew(
+    Map<String, Uint8List> recordBlocks, {
+    DateTime? receivedAt,
+  }) async {
     if (truncated) {
       final handle = await files.records.open(mode: FileMode.append);
       await handle.truncate(_goodBytes);
@@ -122,7 +125,9 @@ class HistoryStore implements RepArchive {
   Future<void> _loadReceiptTimes() async {
     if (!await files.receiptTimes.exists()) return;
     try {
-      final json = jsonDecode(await files.receiptTimes.readAsString()) as Map<String, dynamic>;
+      final json =
+          jsonDecode(await files.receiptTimes.readAsString())
+              as Map<String, dynamic>;
       json.forEach((key, value) {
         final when = DateTime.tryParse('$value');
         if (when != null) _received[key] = when;
@@ -133,7 +138,9 @@ class HistoryStore implements RepArchive {
   }
 
   Future<void> _saveReceiptTimes() async {
-    final json = {for (final e in _received.entries) e.key: e.value.toIso8601String()};
+    final json = {
+      for (final e in _received.entries) e.key: e.value.toIso8601String(),
+    };
     try {
       await files.receiptTimes.writeAsString(jsonEncode(json));
     } catch (_) {}

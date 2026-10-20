@@ -5,7 +5,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('the levels arrive as the device sends them', () {
-    final status = pb.CalibrationStatus(sys: 3, accel: 2, gyro: 1, mag: 0, ready: false);
+    final status = pb.CalibrationStatus(
+      sys: 3,
+      accel: 2,
+      gyro: 1,
+      mag: 0,
+      ready: false,
+    );
 
     expect(status.sys, 3);
     expect(status.accel, 2);
@@ -15,10 +21,22 @@ void main() {
   });
 
   test('ready is the device\'s answer, not one re-derived here', () {
-    final saysReady = pb.CalibrationStatus(sys: 3, accel: 3, gyro: 3, mag: 0, ready: true);
+    final saysReady = pb.CalibrationStatus(
+      sys: 3,
+      accel: 3,
+      gyro: 3,
+      mag: 0,
+      ready: true,
+    );
     expect(saysReady.ready, isTrue);
 
-    final saysNotReady = pb.CalibrationStatus(sys: 1, accel: 1, gyro: 1, mag: 0, ready: false);
+    final saysNotReady = pb.CalibrationStatus(
+      sys: 1,
+      accel: 1,
+      gyro: 1,
+      mag: 0,
+      ready: false,
+    );
     expect(saysNotReady.ready, isFalse);
   });
 
@@ -31,16 +49,37 @@ void main() {
       ready: false,
     );
 
-    expect(onlyMagShort.levels, contains('mag 0/3'),
-        reason: 'it is still read: "read each sensor" is the point');
+    expect(
+      onlyMagShort.levels,
+      contains('mag 0/3'),
+      reason: 'it is still read: "read each sensor" is the point',
+    );
     expect(onlyMagShort.action.toLowerCase(), isNot(contains('mag')));
     expect(onlyMagShort.action.toLowerCase(), isNot(contains('figure')));
   });
 
   test('the action names only the sensors that are short', () {
-    final bothShort = pb.CalibrationStatus(sys: 1, accel: 1, gyro: 2, mag: 0, ready: false);
-    final gyroOnly = pb.CalibrationStatus(sys: 3, accel: 3, gyro: 2, mag: 0, ready: false);
-    final accelOnly = pb.CalibrationStatus(sys: 3, accel: 2, gyro: 3, mag: 0, ready: false);
+    final bothShort = pb.CalibrationStatus(
+      sys: 1,
+      accel: 1,
+      gyro: 2,
+      mag: 0,
+      ready: false,
+    );
+    final gyroOnly = pb.CalibrationStatus(
+      sys: 3,
+      accel: 3,
+      gyro: 2,
+      mag: 0,
+      ready: false,
+    );
+    final accelOnly = pb.CalibrationStatus(
+      sys: 3,
+      accel: 2,
+      gyro: 3,
+      mag: 0,
+      ready: false,
+    );
 
     expect(gyroOnly.action, contains('still on the rack'));
     expect(gyroOnly.action, isNot(contains('upright')));
@@ -52,16 +91,37 @@ void main() {
     expect(bothShort.action, contains('upright'));
   });
 
-  test('nothing is asked for when the sensors are fine but the device is not recording', () {
-    final finishing = pb.CalibrationStatus(sys: 2, accel: 3, gyro: 3, mag: 0, ready: false);
-    final gyroOnly = pb.CalibrationStatus(sys: 3, accel: 3, gyro: 2, mag: 0, ready: false);
+  test(
+    'nothing is asked for when the sensors are fine but the device is not recording',
+    () {
+      final finishing = pb.CalibrationStatus(
+        sys: 2,
+        accel: 3,
+        gyro: 3,
+        mag: 0,
+        ready: false,
+      );
+      final gyroOnly = pb.CalibrationStatus(
+        sys: 3,
+        accel: 3,
+        gyro: 2,
+        mag: 0,
+        ready: false,
+      );
 
-    expect(finishing.action, isNotEmpty);
-    expect(finishing.action, isNot(gyroOnly.action));
-  });
+      expect(finishing.action, isNotEmpty);
+      expect(finishing.action, isNot(gyroOnly.action));
+    },
+  );
 
   test('the level line carries every sensor', () {
-    final status = pb.CalibrationStatus(sys: 1, accel: 2, gyro: 3, mag: 0, ready: false);
+    final status = pb.CalibrationStatus(
+      sys: 1,
+      accel: 2,
+      gyro: 3,
+      mag: 0,
+      ready: false,
+    );
     expect(status.levels, 'accel 2/3 · gyro 3/3 · sys 1/3 · mag 0/3');
   });
 
@@ -76,20 +136,28 @@ void main() {
       var notifications = 0;
       notifier.addListener(() => notifications++);
 
-      final uncalibrated = pb.CalibrationStatus(sys: 1, accel: 1, gyro: 2, mag: 0, ready: false);
+      final uncalibrated = pb.CalibrationStatus(
+        sys: 1,
+        accel: 1,
+        gyro: 2,
+        mag: 0,
+        ready: false,
+      );
       notifier.set(uncalibrated);
       expect(notifications, 1);
 
       notifier.set(uncalibrated);
       expect(notifications, 1, reason: 'same reading, nothing to say');
 
-      notifier.set(pb.CalibrationStatus(
-        sys: maxCalibrationLevel,
-        accel: maxCalibrationLevel,
-        gyro: maxCalibrationLevel,
-        mag: 0,
-        ready: true,
-      ));
+      notifier.set(
+        pb.CalibrationStatus(
+          sys: maxCalibrationLevel,
+          accel: maxCalibrationLevel,
+          gyro: maxCalibrationLevel,
+          mag: 0,
+          ready: true,
+        ),
+      );
       expect(notifications, 2);
       expect(notifier.isReady, isTrue);
     });
@@ -102,7 +170,9 @@ void main() {
       notifier.clear();
       expect(notifications, 0, reason: 'nothing to forget');
 
-      notifier.set(pb.CalibrationStatus(sys: 1, accel: 1, gyro: 1, mag: 0, ready: false));
+      notifier.set(
+        pb.CalibrationStatus(sys: 1, accel: 1, gyro: 1, mag: 0, ready: false),
+      );
       expect(notifications, 1);
 
       notifier.clear();

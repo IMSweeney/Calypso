@@ -22,10 +22,19 @@ class ConnectionStatusBadge extends StatelessWidget {
       animation: status,
       builder: (context, _) {
         final (icon, colour) = switch (status.status) {
-          BleStatus.connected => (Icons.bluetooth_connected, Colors.lightGreenAccent),
+          BleStatus.connected => (
+            Icons.bluetooth_connected,
+            Colors.lightGreenAccent,
+          ),
           BleStatus.scanning => (Icons.bluetooth_searching, Colors.amberAccent),
-          BleStatus.connecting => (Icons.bluetooth_searching, Colors.amberAccent),
-          BleStatus.unsupported => (Icons.bluetooth_disabled, Colors.orangeAccent),
+          BleStatus.connecting => (
+            Icons.bluetooth_searching,
+            Colors.amberAccent,
+          ),
+          BleStatus.unsupported => (
+            Icons.bluetooth_disabled,
+            Colors.orangeAccent,
+          ),
           BleStatus.failed => (Icons.bluetooth_disabled, Colors.redAccent),
           _ => (Icons.bluetooth, Colors.white70),
         };
@@ -45,7 +54,10 @@ class ConnectionStatusBadge extends StatelessWidget {
               ),
             const SizedBox(width: 4),
             if (status.isConnected)
-              TextButton(onPressed: onDisconnect, child: const Text('Disconnect'))
+              TextButton(
+                onPressed: onDisconnect,
+                child: const Text('Disconnect'),
+              )
             else
               TextButton(
                 onPressed: status.canConnect ? onConnect : null,

@@ -63,12 +63,19 @@ void main() {
       final lines = await bleLines('calypso.log');
       expect(lines, hasLength(1));
       expect(lines.single, hasLength(7));
+      expect(lines.single.sublist(1), [
+        'FINE',
+        'ble',
+        'rx',
+        'ca21',
+        '1B',
+        '00',
+      ], reason: 'time, level, logger name, message');
       expect(
-        lines.single.sublist(1),
-        ['FINE', 'ble', 'rx', 'ca21', '1B', '00'],
-        reason: 'time, level, logger name, message',
+        DateTime.tryParse(lines.single.first),
+        isNotNull,
+        reason: 'timestamped',
       );
-      expect(DateTime.tryParse(lines.single.first), isNotNull, reason: 'timestamped');
     });
 
     test('appends to what a previous session left', () async {
@@ -85,33 +92,46 @@ void main() {
       expect(lines.last.last, '02');
     });
 
-    test('rotates at maxBytes, keeps the newest files, loses no line', () async {
-      const keep = 3;
-      final logging = startFileLogging(() async => dir, maxBytes: 120, keep: keep);
-      final log = Logger('ble');
-      for (var i = 0; i < 12; i++) {
-        log.fine(message(i));
-      }
-      await logging.close();
-
-      expect(await logFile('calypso.log').exists(), isTrue);
-      expect(await logFile('calypso.log.$keep').exists(), isFalse);
-
-      final payloads = <int>[];
-      for (final name in ['calypso.log.2', 'calypso.log.1', 'calypso.log']) {
-        for (final fields in await bleLines(name)) {
-          expect(fields, hasLength(7), reason: 'a line is never half-written');
-          payloads.add(int.parse(fields.last, radix: 16));
+    test(
+      'rotates at maxBytes, keeps the newest files, loses no line',
+      () async {
+        const keep = 3;
+        final logging = startFileLogging(
+          () async => dir,
+          maxBytes: 120,
+          keep: keep,
+        );
+        final log = Logger('ble');
+        for (var i = 0; i < 12; i++) {
+          log.fine(message(i));
         }
-      }
-      expect(payloads, isNotEmpty);
-      expect(
-        payloads,
-        orderedEquals([for (var i = payloads.first; i <= payloads.last; i++) i]),
-        reason: 'no line lost at a rotation boundary',
-      );
-      expect(payloads.last, 11);
-    });
+        await logging.close();
+
+        expect(await logFile('calypso.log').exists(), isTrue);
+        expect(await logFile('calypso.log.$keep').exists(), isFalse);
+
+        final payloads = <int>[];
+        for (final name in ['calypso.log.2', 'calypso.log.1', 'calypso.log']) {
+          for (final fields in await bleLines(name)) {
+            expect(
+              fields,
+              hasLength(7),
+              reason: 'a line is never half-written',
+            );
+            payloads.add(int.parse(fields.last, radix: 16));
+          }
+        }
+        expect(payloads, isNotEmpty);
+        expect(
+          payloads,
+          orderedEquals([
+            for (var i = payloads.first; i <= payloads.last; i++) i,
+          ]),
+          reason: 'no line lost at a rotation boundary',
+        );
+        expect(payloads.last, 11);
+      },
+    );
 
     test('closing detaches: nothing is written afterwards', () async {
       final logging = startFileLogging(() async => dir);
@@ -129,7 +149,9 @@ void main() {
     test('a log it cannot open is dropped, and never thrown', () async {
       final blocker = File('${dir.path}/blocker')
         ..writeAsStringSync('not a directory');
-      final logging = startFileLogging(() async => Directory('${blocker.path}/nested'));
+      final logging = startFileLogging(
+        () async => Directory('${blocker.path}/nested'),
+      );
 
       Logger('ble').fine(message(1));
       await logging.close();

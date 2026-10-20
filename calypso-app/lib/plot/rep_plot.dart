@@ -20,11 +20,7 @@ Color colourForSpeed(double t) {
 }
 
 class RepPlotPainter extends CustomPainter {
-  RepPlotPainter({
-    required this.path,
-    required this.camera,
-    this.scrubIndex,
-  });
+  RepPlotPainter({required this.path, required this.camera, this.scrubIndex});
 
   final PlotPath path;
   final OrbitCamera camera;
@@ -55,10 +51,20 @@ class RepPlotPainter extends CustomPainter {
       final offset = -bounds.halfExtent + i * step;
       final x0 = bounds.center.x + offset;
       final y0 = bounds.center.y + offset;
-      _line(canvas, projection, paint, Vector3(x0, bounds.center.y - bounds.halfExtent, z),
-          Vector3(x0, bounds.center.y + bounds.halfExtent, z));
-      _line(canvas, projection, paint, Vector3(bounds.center.x - bounds.halfExtent, y0, z),
-          Vector3(bounds.center.x + bounds.halfExtent, y0, z));
+      _line(
+        canvas,
+        projection,
+        paint,
+        Vector3(x0, bounds.center.y - bounds.halfExtent, z),
+        Vector3(x0, bounds.center.y + bounds.halfExtent, z),
+      );
+      _line(
+        canvas,
+        projection,
+        paint,
+        Vector3(bounds.center.x - bounds.halfExtent, y0, z),
+        Vector3(bounds.center.x + bounds.halfExtent, y0, z),
+      );
     }
   }
 
@@ -90,8 +96,13 @@ class RepPlotPainter extends CustomPainter {
         ..color = colourForSpeed(path.speedT(i))
         ..strokeWidth = 3
         ..strokeCap = StrokeCap.round;
-      _line(canvas, projection, paint,
-          Vector3(a.px, a.py, a.pz), Vector3(b.px, b.py, b.pz));
+      _line(
+        canvas,
+        projection,
+        paint,
+        Vector3(a.px, a.py, a.pz),
+        Vector3(b.px, b.py, b.pz),
+      );
     }
   }
 
@@ -99,16 +110,38 @@ class RepPlotPainter extends CustomPainter {
     if (path.length == 0) return;
     final first = path.points.first;
     final last = path.points.last;
-    _dot(canvas, projection, Vector3(first.px, first.py, first.pz),
-        const Color(0xFFFFFFFF), 4);
-    _dot(canvas, projection, Vector3(last.px, last.py, last.pz),
-        const Color(0xFFFFD43B), 5);
+    _dot(
+      canvas,
+      projection,
+      Vector3(first.px, first.py, first.pz),
+      const Color(0xFFFFFFFF),
+      4,
+    );
+    _dot(
+      canvas,
+      projection,
+      Vector3(last.px, last.py, last.pz),
+      const Color(0xFFFFD43B),
+      5,
+    );
 
     final index = scrubIndex;
     if (index != null && index >= 0 && index < path.length) {
       final p = path.points[index];
-      _dot(canvas, projection, Vector3(p.px, p.py, p.pz), const Color(0xFFF8F9FA), 7);
-      _dot(canvas, projection, Vector3(p.px, p.py, p.pz), const Color(0xFF212529), 3);
+      _dot(
+        canvas,
+        projection,
+        Vector3(p.px, p.py, p.pz),
+        const Color(0xFFF8F9FA),
+        7,
+      );
+      _dot(
+        canvas,
+        projection,
+        Vector3(p.px, p.py, p.pz),
+        const Color(0xFF212529),
+        3,
+      );
     }
   }
 
@@ -120,11 +153,7 @@ class RepPlotPainter extends CustomPainter {
     final quaternion = point.quaternion;
     final base = Vector3(point.px, point.py, point.pz);
 
-    const colours = [
-      Color(0xFFE03131),
-      Color(0xFF2F9E44),
-      Color(0xFF1971C2),
-    ];
+    const colours = [Color(0xFFE03131), Color(0xFF2F9E44), Color(0xFF1971C2)];
     final axes = [Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)];
     for (var i = 0; i < 3; i++) {
       final rotated = _rotateByQuaternion(quaternion, axes[i]) * axisLength;
@@ -147,14 +176,26 @@ class RepPlotPainter extends CustomPainter {
     );
   }
 
-  void _line(Canvas canvas, PlotProjection projection, Paint paint, Vector3 a, Vector3 b) {
+  void _line(
+    Canvas canvas,
+    PlotProjection projection,
+    Paint paint,
+    Vector3 a,
+    Vector3 b,
+  ) {
     final from = projection.toScreen(a);
     final to = projection.toScreen(b);
     if (from == null || to == null) return;
     canvas.drawLine(from, to, paint);
   }
 
-  void _dot(Canvas canvas, PlotProjection projection, Vector3 at, Color colour, double radius) {
+  void _dot(
+    Canvas canvas,
+    PlotProjection projection,
+    Vector3 at,
+    Color colour,
+    double radius,
+  ) {
     final screen = projection.toScreen(at);
     if (screen == null) return;
     canvas.drawCircle(screen, radius, Paint()..color = colour);
@@ -222,7 +263,10 @@ class RepPlotViewState extends State<RepPlotView> {
       onScaleUpdate: (details) {
         setState(() {
           if (details.pointerCount == 1) {
-            _camera.orbitBy(details.focalPointDelta.dx * 0.6, -details.focalPointDelta.dy * 0.6);
+            _camera.orbitBy(
+              details.focalPointDelta.dx * 0.6,
+              -details.focalPointDelta.dy * 0.6,
+            );
           } else if (details.scale != 1.0) {
             _camera.zoomBy(1 / details.scale);
           }

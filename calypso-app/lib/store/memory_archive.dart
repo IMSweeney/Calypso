@@ -40,7 +40,10 @@ class MemoryArchive implements RepArchive {
   }
 
   @override
-  Future<int> appendNew(Map<String, Uint8List> recordBlocks, {DateTime? receivedAt}) async {
+  Future<int> appendNew(
+    Map<String, Uint8List> recordBlocks, {
+    DateTime? receivedAt,
+  }) async {
     var added = 0;
     for (final entry in recordBlocks.entries) {
       if (_uuids.contains(entry.key)) continue;
@@ -56,13 +59,15 @@ class MemoryArchive implements RepArchive {
   Future<List<pb.TraceSample>> trace(String uuid) async {
     for (final stored in _reps) {
       if (stored.uuid != uuid) continue;
-      final block = Uint8List.fromList(_bytes.sublist(stored.offset, stored.offset + stored.length));
+      final block = Uint8List.fromList(
+        _bytes.sublist(stored.offset, stored.offset + stored.length),
+      );
       return assembleTraceFromBlock(block, uuid);
     }
     return const [];
   }
 
   static List<int> _concat(Iterable<Uint8List> blocks) => [
-        for (final block in blocks) ...block,
-      ];
+    for (final block in blocks) ...block,
+  ];
 }

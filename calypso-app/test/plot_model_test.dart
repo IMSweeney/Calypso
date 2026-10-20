@@ -7,21 +7,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vector_math/vector_math_64.dart';
 
 List<pb.TraceSample> squatTrace({int count = 100, double depth = 0.4}) => [
-      for (var i = 0; i < count; i++)
-        pb.TraceSample(
-          tOffsetMs: i * 10,
-          px: 0.02 * i / count,
-          py: 0,
-          pz: -depth * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
-          ax: 0,
-          ay: 0,
-          az: -100,
-          qw: 16384,
-          qx: 0,
-          qy: 0,
-          qz: 0,
-        ),
-    ];
+  for (var i = 0; i < count; i++)
+    pb.TraceSample(
+      tOffsetMs: i * 10,
+      px: 0.02 * i / count,
+      py: 0,
+      pz: -depth * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
+      ax: 0,
+      ay: 0,
+      az: -100,
+      qw: 16384,
+      qx: 0,
+      qy: 0,
+      qz: 0,
+    ),
+];
 
 void main() {
   test('the axis fit frames the path and keeps a minimum size', () {
@@ -66,10 +66,16 @@ void main() {
 
     expect(path.length, lessThanOrEqualTo(200));
     expect(path.length, greaterThan(150));
-    expect(path.points.last.tOffsetMs, trace.last.tOffsetMs,
-        reason: 'the rep\'s end is what you plot');
-    expect(path.points.first.tOffsetMs, trace[0].tOffsetMs,
-        reason: 'and so is its start');
+    expect(
+      path.points.last.tOffsetMs,
+      trace.last.tOffsetMs,
+      reason: 'the rep\'s end is what you plot',
+    );
+    expect(
+      path.points.first.tOffsetMs,
+      trace[0].tOffsetMs,
+      reason: 'and so is its start',
+    );
   });
 
   test('decimation is a no-op when the trace already fits', () {
@@ -109,7 +115,11 @@ void main() {
         ),
     ];
     final path = PlotPath.from(trace);
-    expect(path.speeds.first, 0, reason: 'no previous point to measure against');
+    expect(
+      path.speeds.first,
+      0,
+      reason: 'no previous point to measure against',
+    );
     for (var i = 1; i < path.length; i++) {
       expect(path.speeds[i], closeTo(1.0, 1e-9));
     }
@@ -133,9 +143,13 @@ void main() {
       if (path.speeds[i] > path.speeds[fastest]) fastest = i;
     }
     final nearQuarter = (fastest - quarter).abs() <= path.length ~/ 10;
-    final nearThreeQuarters = (fastest - 3 * quarter).abs() <= path.length ~/ 10;
-    expect(nearQuarter || nearThreeQuarters, isTrue,
-        reason: 'fastest at $fastest, expected near $quarter or ${3 * quarter}');
+    final nearThreeQuarters =
+        (fastest - 3 * quarter).abs() <= path.length ~/ 10;
+    expect(
+      nearQuarter || nearThreeQuarters,
+      isTrue,
+      reason: 'fastest at $fastest, expected near $quarter or ${3 * quarter}',
+    );
     expect(path.speeds[slowest], lessThan(path.speedMax * 0.1));
     expect(path.speedMax, greaterThan(0.3));
     expect(path.speedMax, lessThan(1.5));
@@ -160,7 +174,8 @@ void main() {
   });
 
   test('projection puts the target in the middle of the viewport', () {
-    final camera = OrbitCamera(distance: 2)..fit(AxisBounds(Vector3.zero(), 0.4));
+    final camera = OrbitCamera(distance: 2)
+      ..fit(AxisBounds(Vector3.zero(), 0.4));
     const viewport = Size(400, 300);
     final projection = PlotProjection(camera, viewport);
 
@@ -171,10 +186,14 @@ void main() {
     final behind = camera.eye + (camera.eye - camera.target);
     expect(projection.toScreen(behind), isNull);
     final forward = (camera.target - camera.eye).normalized();
-    expect(projection.depth(camera.target),
-        lessThan(projection.depth(camera.target + forward)));
-    expect(projection.depth(camera.target),
-        greaterThan(projection.depth(camera.target - forward)));
+    expect(
+      projection.depth(camera.target),
+      lessThan(projection.depth(camera.target + forward)),
+    );
+    expect(
+      projection.depth(camera.target),
+      greaterThan(projection.depth(camera.target - forward)),
+    );
   });
 
   test('hit testing finds the path point under the cursor', () {
@@ -184,7 +203,9 @@ void main() {
     final projection = PlotProjection(camera, viewport);
 
     final target = path.points[path.length ~/ 2];
-    final screen = projection.toScreen(Vector3(target.px, target.py, target.pz))!;
+    final screen = projection.toScreen(
+      Vector3(target.px, target.py, target.pz),
+    )!;
     final hit = projection.nearestPoint(path, screen);
     expect(hit, isNotNull);
     expect(path.points[hit!].tOffsetMs, target.tOffsetMs);

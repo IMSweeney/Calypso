@@ -23,7 +23,11 @@ Future<int> archiveFromTransport(
   return added;
 }
 
-Future<int> archiveRep(RepArchive archive, RepTransport source, pb.RepSummary summary) async {
+Future<int> archiveRep(
+  RepArchive archive,
+  RepTransport source,
+  pb.RepSummary summary,
+) async {
   final uuid = summary.uuid!;
   if (archive.contains(uuid)) return 0;
   List<pb.TraceSample> trace;

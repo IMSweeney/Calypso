@@ -32,8 +32,8 @@ class TraceAssembler {
   }
 
   List<pb.TraceSample> assemble() => [
-        for (final index in indices) ...?_chunks[index],
-      ];
+    for (final index in indices) ...?_chunks[index],
+  ];
 
   void clear() => _chunks.clear();
 }

@@ -14,8 +14,11 @@ RotatingFileAppender startFileLogging(
 }) {
   Logger.root.level = Level.ALL;
 
-  final appender = RotatingFileAppender(directory, maxBytes: maxBytes, keep: keep)
-    ..attachToLogger(Logger.root);
+  final appender = RotatingFileAppender(
+    directory,
+    maxBytes: maxBytes,
+    keep: keep,
+  )..attachToLogger(Logger.root);
 
   appLog.info('file logging started ($maxBytes bytes per file, $keep kept)');
   return appender;

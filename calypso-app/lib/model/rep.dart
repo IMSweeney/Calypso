@@ -26,9 +26,9 @@ extension TraceSampleX on pb.TraceSample {
       math.sqrt((ax * ax + ay * ay + az * az).toDouble()) / accelLsbPerMs2;
 
   List<double> get quaternion => [
-        qw / quatLsbPerUnit,
-        qx / quatLsbPerUnit,
-        qy / quatLsbPerUnit,
-        qz / quatLsbPerUnit,
-      ];
+    qw / quatLsbPerUnit,
+    qx / quatLsbPerUnit,
+    qy / quatLsbPerUnit,
+    qz / quatLsbPerUnit,
+  ];
 }

@@ -21,9 +21,15 @@ abstract class BleLink {
 
   Future<void> disconnect(String deviceId);
 
-  void onConnectionChange(void Function(String deviceId, bool connected, String? error) callback);
+  void onConnectionChange(
+    void Function(String deviceId, bool connected, String? error) callback,
+  );
 
-  Future<void> subscribe(String deviceId, String serviceUuid, String characteristicUuid);
+  Future<void> subscribe(
+    String deviceId,
+    String serviceUuid,
+    String characteristicUuid,
+  );
 
   Stream<Uint8List> valueStream(String deviceId, String characteristicUuid);
 
@@ -47,9 +53,10 @@ class DiscoveredService {
 
 class UniversalBleLink implements BleLink {
   UniversalBleLink() {
-    plugin.UniversalBle.onValueChange = (deviceId, characteristicId, value, timestamp) {
-      bleLog.fine(describeMessage('raw', characteristicId, value));
-    };
+    plugin.UniversalBle.onValueChange =
+        (deviceId, characteristicId, value, timestamp) {
+          bleLog.fine(describeMessage('raw', characteristicId, value));
+        };
   }
 
   @override
@@ -63,7 +70,8 @@ class UniversalBleLink implements BleLink {
   }
 
   @override
-  Future<void> startScan(List<String> serviceUuids) => plugin.UniversalBle.startScan(
+  Future<void> startScan(List<String> serviceUuids) =>
+      plugin.UniversalBle.startScan(
         scanFilter: plugin.ScanFilter(withServices: serviceUuids),
       );
 
@@ -87,19 +95,21 @@ class UniversalBleLink implements BleLink {
     final services = await plugin.UniversalBle.discoverServices(deviceId);
     return [
       for (final service in services)
-        DiscoveredService(
-          service.uuid,
-          [for (final characteristic in service.characteristics) characteristic.uuid],
-        ),
+        DiscoveredService(service.uuid, [
+          for (final characteristic in service.characteristics)
+            characteristic.uuid,
+        ]),
     ];
   }
 
   @override
-  Future<void> disconnect(String deviceId) => plugin.UniversalBle.disconnect(deviceId);
+  Future<void> disconnect(String deviceId) =>
+      plugin.UniversalBle.disconnect(deviceId);
 
   @override
   void onConnectionChange(
-      void Function(String deviceId, bool connected, String? error) callback) {
+    void Function(String deviceId, bool connected, String? error) callback,
+  ) {
     plugin.UniversalBle.onConnectionChange = (deviceId, isConnected, error) {
       bleLog.fine(
         'raw connection $deviceId connected=$isConnected'
@@ -110,12 +120,22 @@ class UniversalBleLink implements BleLink {
   }
 
   @override
-  Future<void> subscribe(String deviceId, String serviceUuid, String characteristicUuid) =>
-      plugin.UniversalBle.subscribeNotifications(deviceId, serviceUuid, characteristicUuid);
+  Future<void> subscribe(
+    String deviceId,
+    String serviceUuid,
+    String characteristicUuid,
+  ) => plugin.UniversalBle.subscribeNotifications(
+    deviceId,
+    serviceUuid,
+    characteristicUuid,
+  );
 
   @override
   Stream<Uint8List> valueStream(String deviceId, String characteristicUuid) =>
-      plugin.UniversalBle.characteristicValueStream(deviceId, characteristicUuid);
+      plugin.UniversalBle.characteristicValueStream(
+        deviceId,
+        characteristicUuid,
+      );
 
   @override
   Future<void> write(
@@ -123,6 +143,10 @@ class UniversalBleLink implements BleLink {
     String serviceUuid,
     String characteristicUuid,
     Uint8List value,
-  ) =>
-      plugin.UniversalBle.write(deviceId, serviceUuid, characteristicUuid, value);
+  ) => plugin.UniversalBle.write(
+    deviceId,
+    serviceUuid,
+    characteristicUuid,
+    value,
+  );
 }

@@ -9,8 +9,8 @@ class CalypsoApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'Calypso',
-        theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
-        home: const RepListScreen(),
-      );
+    title: 'Calypso',
+    theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
+    home: const RepListScreen(),
+  );
 }
