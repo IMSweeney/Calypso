@@ -122,12 +122,34 @@ device's typed request decode with it.
       (a pipe sizes transfers, not values), and `pipe_msg_max` sized for a whole
       `TraceChunk` rather than for a third of one. That number is the point: one
       notification then carries a chunk instead of a third of one, so
-      `sync::BLE_CHUNK_SAMPLES`, `TraceChunk.total_chunks` and the app's
-      `TraceAssembler` all go away with it. **This is where the "size chunks to
-      the negotiated MTU" item went** — sizing the pipe's chunks from the MTU is
-      what that item was reaching for, and its ~12 points per notification was
-      never reachable by reading the MTU alone, because the budget behind
-      `SYNC_CHUNK_MAX` is a 64-byte worst-case point.
+      `sync::BLE_CHUNK_SAMPLES` and the trace streamer that used it go away.
+      `TraceChunk.total_chunks` and the app's `TraceAssembler` **stay**: they
+      delimit a *trace* (several `TraceChunk` messages), not a transfer, and the
+      pipe only changes how each message travels. **This is where the "size chunks
+      to the negotiated MTU" item went** — sizing the pipe's chunks from the MTU
+      is what that item was reaching for, and its ~12 points per notification was
+      never reachable by reading the MTU alone, because the budget behind the old
+      ceiling was a 64-byte worst-case point.
+
+      Two things the first attempt at this turned up, both of which decide the
+      shape of the work:
+
+      - **The write flavour decides how the device sends.** A transfer larger than
+        the window cannot progress without an acknowledgement, and an
+        acknowledgement arrives as a *write event* on the other characteristic —
+        so a small window turns the firmware's send path from "build it and
+        notify it" into a queue pumped by the connection's event loop. At
+        `window = MAX_WINDOW` (127) no message this device sends can exceed the
+        window, so the send path stays a loop, at the price of the pipe's own
+        flow control: what bounds a burst is the link — `notify` awaits the packet
+        pool, and the app serialises its writes — and the acknowledgements only
+        report delivery.
+      - **The schema's `max_len` module disappears** when no characteristic is
+        single-shot, and so does `SYNC_CHUNK_MAX <= RECORD_BUF_BYTES`: the message
+        ceiling (the pipe's reassembly buffer) is larger than the flash record
+        buffer, which was never the relationship that mattered. What matters — that
+        `micropb`'s bound for `SyncMessage` fits the pipe — the generated table
+        already asserts at compile time.
 - [ ] **The device session**, in `calypso-core`: the pipe's two ends over the
       buffers, turning a write into a message and a message into notifications.
       No embassy and no radio, so this half is host-testable like the rest of that
