@@ -59,7 +59,10 @@ Where Calypso is and what is left. Feature documentation lives in
   (`tools/gatt-gen`) so anything else that speaks proto-defined BLE can use it; see
   its `PLAN.md` for what was verified against `trouble-host` and what it cannot do.
   **Not yet checked on hardware**, and the app still speaks the same three UUIDs by
-  hand.
+  hand. The chunked pipe those two characteristics will carry is written and
+  tested — `tools/gatt-pipe`, the app's mirror of it, and the generator's glue for
+  a schema that declares one — but nothing uses it yet: see the migration under
+  Open.
 - **The app's BLE client is generated from the same schema** — `SyncClient` in
   `calypso-app/lib/gatt/gatt_client.dart` carries the service and characteristic
   UUIDs, subscribes, and decodes and encodes the two messages, all from
@@ -104,6 +107,42 @@ Where Calypso is and what is left. Feature documentation lives in
 - [ ] Confirm on hardware that the profile really does survive a power cycle, given
       the above.
 
+### Sync over the pipe
+
+The device and the app exchange one message per characteristic value today, which
+is why traces are re-chunked to three points a notification and why the app
+reassembles them by index with `total_chunks` as its only end-of-stream signal.
+The chunked pipe is written and tested — `tools/gatt-pipe` for the protocol, its
+mirror in `calypso-app/lib/gatt/pipe.dart`, and the generator's glue for a schema
+that declares one — and it is unused. Moving Calypso onto it is one change rather
+than five: the schema edit makes both generated files different, and takes the
+device's typed request decode with it.
+
+- [ ] **The schema.** `pipe: "sync"` on `Requests` and `Messages`, `max_len` gone
+      (a pipe sizes transfers, not values), and `pipe_msg_max` sized for a whole
+      `TraceChunk` rather than for a third of one. That number is the point: one
+      notification then carries a chunk instead of a third of one, so
+      `sync::BLE_CHUNK_SAMPLES`, `TraceChunk.total_chunks` and the app's
+      `TraceAssembler` all go away with it. **This is where the "size chunks to
+      the negotiated MTU" item went** — sizing the pipe's chunks from the MTU is
+      what that item was reaching for, and its ~12 points per notification was
+      never reachable by reading the MTU alone, because the budget behind
+      `SYNC_CHUNK_MAX` is a 64-byte worst-case point.
+- [ ] **The device session**, in `calypso-core`: the pipe's two ends over the
+      buffers, turning a write into a message and a message into notifications.
+      No embassy and no radio, so this half is host-testable like the rest of that
+      crate.
+- [ ] **The device wiring**, in `calypso-esp32`: write events into the session,
+      chunks out as notifications, the MTU read from the connection rather than
+      assumed, and a tick for the timeouts.
+- [ ] **The app**, in `transport/`: writes as transfers, notifications reassembled
+      through `lib/gatt/pipe.dart`, and the trace path collapsed to "one transfer,
+      one `TraceChunk`".
+- [ ] **A bench session** for what no host replaces: negotiation, subscription,
+      throughput, and whether the latency below is actually gone.
+- [ ] `docs/APP_SYNC.md` describes the wire protocol as it is today, so it moves
+      with this.
+
 ### BLE link stability
 
 - [ ] **The link drops while idle, for no reason we can see.** Four drops in one
@@ -116,9 +155,12 @@ Where Calypso is and what is left. Feature documentation lives in
 - [ ] **Trace latency is tens of seconds**, and it is head-of-line blocking: the
       firmware's GATT loop `await`s the ATT response to a trace request, and that waits
       behind the previous rep's ~150 trace notifications in the controller's queue. The
-      app now tolerates it (its trace timeout is an *idle* timeout, 30 s of silence,
+      app tolerates it (its trace timeout is an *idle* timeout, 30 s of silence,
       reset by every chunk) and logs which shape a failure was, but the latency is
-      real. The MTU item under BLE protocol is the lever.
+      real. The pipe is the lever — a request becomes a transfer, the response a
+      stream of transfers, and nothing waits behind a queue of three-point
+      notifications — and the *measurement* belongs to the migration's bench
+      session above, since the cause may not be the only one.
 - [ ] `universal_ble`'s own command queue throws an **unhandled** `TimeoutException`
       when a command is issued against a link that has already gone (our code logs its
       side as `trace …: request failed: TimeoutException`). Nothing the caller can
@@ -127,7 +169,10 @@ Where Calypso is and what is left. Feature documentation lives in
 - [ ] Values that arrive **between a teardown and the next subscribe** are delivered by
       the plugin and dropped by the transport: 507 of 2422 `raw` summary values in one
       session. Harmless today (the summaries are re-streamed), but the `raw` line is
-      what makes it visible, and it is not obviously wrong to leave it.
+      what makes it visible, and it is not obviously wrong to leave it. The pipe
+      changes the shape again — a dropped value is a *chunk* of a transfer, so it is
+      something the pipe notices and retries rather than a message that quietly never
+      arrives — which is one more reason to do the migration before tuning this.
 
 ### First real device capture
 - [ ] Run the app against the hardware and check in a capture as a fixture.
@@ -146,22 +191,6 @@ Where Calypso is and what is left. Feature documentation lives in
       comparable or documenting the difference.
 
 ### BLE protocol
-- [ ] **Size outgoing chunks to the negotiated MTU** instead of the fixed
-      conservative 3 samples (`sync::BLE_CHUNK_SAMPLES`). The device learns the
-      MTU per connection; `TraceChunk.total_chunks` already means the client
-      copes with any chunk size. A rep's trace from ~150 packets to ~40 is most of
-      the latency above.
-
-      The ~12 points per notification this item used to promise does not come
-      from reading the MTU alone: the budget behind `SYNC_CHUNK_MAX` is
-      `1 + 3 * 64`, a 64-byte *worst-case* point (`tests/sync.rs` encodes
-      `u32::MAX` timestamps and `i32::MIN` quats to prove it fits), and a
-      244-byte payload still divides into ~3 of those. The win needs chunks sized
-      by filling until the encoding does not fit — the generated value type's
-      `encode_into` reports exactly that — which means raising the characteristic's
-      `max_len` to the payload size in `proto/calypso_gatt.proto`, and making
-      `total_chunks` a computed number rather than `points.div_ceil(3)`, since the
-      app treats it as the only end-of-stream signal.
 - [ ] `SyncStatus` is defined in the proto and encodable in core, but the
       firmware never sends it — so "this trace is no longer in the log" is
       answered by the client timing out instead of by a message. Either wire it
