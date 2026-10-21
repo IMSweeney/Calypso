@@ -114,17 +114,21 @@ fn the_file_is_named_by_the_target_and_says_how_to_regenerate_itself() {
         .generate(&gatt, &TargetConfig::RustTrouble(config))
         .unwrap();
 
-    assert_eq!(output.file_name, "gatt.rs");
+    assert_eq!(output.file_name, "gatt_generated.rs");
     assert!(
         output
             .source
-            .starts_with("//! The BLE GATT table the device serves."),
+            .starts_with("// The BLE GATT table for Schema: "),
         "{}",
         output.source
     );
+    // Mountable either way: a consumer that `include!`s this cannot carry inner
+    // attributes, so the file has none of its own.
+    assert!(!output.source.contains("//!"), "{}", output.source);
+    assert!(!output.source.contains("#!["), "{}", output.source);
     assert!(
         output.source.contains(
-            "//! Regenerate with `gatt-gen rust-trouble --out src schema.proto` after \
+            "// Regenerate with `gatt-gen rust-trouble --out src schema.proto` after \
              changing the schema."
         ),
         "{}",

@@ -338,11 +338,19 @@ dependencies = [
 name = "gatt-gen"
 version = "0.1.0"
 dependencies = [
+ "prost-reflect",
+ "protoc-bin-vendored",
+]
+
+[[package]]
+name = "gatt-gen-example-server"
+version = "0.1.0"
+dependencies = [
  "embassy-sync",
+ "gatt-gen",
  "heapless 0.9.3",
  "micropb",
  "micropb-gen",
- "prost-reflect",
  "protoc-bin-vendored",
  "static_cell",
  "trouble-host",

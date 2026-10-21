@@ -57,11 +57,11 @@ fn the_committed_table_is_what_the_tool_generates() {
     )
     .expect("the schema is emittable");
 
-    assert_eq!(generated.file_name, "gatt.rs");
+    assert_eq!(generated.file_name, "gatt_generated.rs");
     assert_eq!(
         generated.source,
-        include_str!("../src/gatt.rs"),
-        "src/gatt.rs is stale: run {RUST_SCRIPT}"
+        include_str!("../src/gatt_generated.rs"),
+        "src/gatt_generated.rs is stale: run {RUST_SCRIPT}"
     );
 }
 

@@ -1,5 +1,6 @@
 #!/bin/sh
-# Regenerates the BLE GATT table (src/gatt.rs) from proto/calypso_gatt.proto.
+# Regenerates the BLE GATT table (src/gatt_generated.rs, included by src/gatt.rs)
+# from proto/calypso_gatt.proto.
 #
 # The output is checked in on purpose: the firmware build then needs no codegen
 # toolchain, no protoc and nothing from the network, and a change to the table
@@ -21,4 +22,4 @@ cargo run --quiet --manifest-path tools/gatt-gen/Cargo.toml -- \
   --regenerate-with calypso-core/tool/gen_gatt.sh \
   proto/calypso_gatt.proto
 
-echo "wrote calypso-core/src/gatt.rs (commit it)"
+echo "wrote calypso-core/src/gatt_generated.rs (commit it)"

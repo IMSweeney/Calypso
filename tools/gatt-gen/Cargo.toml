@@ -11,23 +11,14 @@ repository   = "https://github.com/IMSweeney/gatt-gen"
 rust-version = "1.88"
 version      = "0.1.0"
 
+# The example is a member so that `cargo test` here builds it: an example that is
+# never built is an example that is wrong.
+[workspace]
+members = ["examples/server"]
+
 [dependencies]
 # Reads the descriptor set protoc produces, including the custom options
 # (`gatt.service` / `gatt.characteristic`) that carry the GATT schema.
 prost-reflect = "0.16"
 # Prebuilt protoc, so the generator needs no system install.
 protoc-bin-vendored = "3"
-
-# So that `cargo test` builds `examples/device_server`, which is a generated
-# table and the messages it refers to: compiling them is the only thing that
-# checks the code this crate emits, and an example is built where a string
-# comparison would only look at it.
-[dev-dependencies]
-trouble-host = { version = "0.5.0", features = ["gatt"] }
-micropb = { version = "0.6.0", features = ["container-heapless-0-9"] }
-heapless = "0.9"
-# Both are what the generated table's macros expand to.
-static_cell = "2.1.1"
-embassy-sync = "0.7.2"
-# For `tests/example_files.rs`, which regenerates the example's two files.
-micropb-gen = "0.6.0"
