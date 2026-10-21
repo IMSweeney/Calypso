@@ -131,3 +131,52 @@ fn the_file_is_named_by_the_target_and_says_how_to_regenerate_itself() {
         output.source
     );
 }
+
+#[test]
+fn a_pipe_gets_the_glue_its_runtime_reads() {
+    let (gatt, _) = load("valid/device.proto").unwrap();
+    let source = rust_trouble::generate(
+        &gatt,
+        &Config {
+            pipe_msg_max: 4096,
+            window: 4,
+            xfer_timeout_ms: 2500,
+            ..Config::default()
+        },
+    )
+    .unwrap()
+    .source;
+
+    // One module per pipe, named after it, holding the numbers the runtime was
+    // configured with.
+    assert!(source.contains("pub mod pipe_main {"), "{source}");
+    assert!(
+        source.contains("pub const CHUNK_MAX: usize = 244;"),
+        "{source}"
+    );
+    assert!(
+        source.contains("pub const MESSAGE_MAX: usize = 4096;"),
+        "{source}"
+    );
+    assert!(source.contains("pub const WINDOW: u8 = 4;"), "{source}");
+    assert!(
+        source.contains("pub const XFER_TIMEOUT_MS: u32 = 2500;"),
+        "{source}"
+    );
+
+    // And the codecs for the two directions, since a chunk is not a message.
+    assert!(
+        source.contains("pub fn encode_request(message: &crate::pb::msg::Command"),
+        "{source}"
+    );
+    assert!(
+        source.contains("pub fn decode_response(bytes: &[u8]) -> Option<crate::pb::msg::Event>"),
+        "{source}"
+    );
+
+    // The reassembly bound is the same number, checked by the compiler.
+    assert!(
+        source.contains("micropb::size::max_encoded_size::<crate::pb::msg::Command>() <= 4096"),
+        "{source}"
+    );
+}

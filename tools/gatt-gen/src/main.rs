@@ -89,6 +89,12 @@ fn parse(args: &[String]) -> Result<Command, String> {
             }
             "--chunk-max" => rust.pipe_chunk_max = number(args.next(), "--chunk-max")?,
             "--pipe-msg-max" => rust.pipe_msg_max = number(args.next(), "--pipe-msg-max")?,
+            "--window" => {
+                rust.window = number(args.next(), "--window")? as u8;
+            }
+            "--xfer-timeout" => {
+                rust.xfer_timeout_ms = number(args.next(), "--xfer-timeout")? as u32;
+            }
             "--fdset" => {
                 fdset = Some(PathBuf::from(
                     args.next()
@@ -216,6 +222,8 @@ fn usage(problem: &str) -> ExitCode {
     eprintln!("                     --server NAME         the generated server struct");
     eprintln!("                     --chunk-max N         pipe chunk buffer");
     eprintln!("                     --pipe-msg-max N      largest message a pipe carries");
+    eprintln!("                     --window N            chunks in flight before waiting");
+    eprintln!("                     --xfer-timeout MS     no-progress timeout per transfer");
     eprintln!();
     eprintln!("dart-universal-ble   --dart-messages PATH  import of the protobuf classes");
     eprintln!("                     --dart-prefix NAME     prefix they arrive under");

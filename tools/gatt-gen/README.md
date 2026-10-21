@@ -61,6 +61,12 @@ The Dart target talks to BLE through an interface it declares in its own output
 implements as a fake. That is what keeps a generated client testable without a
 radio; `universal_ble`'s static API is never called directly.
 
+A crate that takes the generated table needs `trouble-host` (with `gatt`),
+`micropb` (with a heapless container) and `heapless`, plus two the macros expand
+into: `static_cell` (each characteristic's storage) and `embassy-sync` (the
+attribute table's mutex). Found by compiling a generated table in a crate that
+had the first three.
+
 The schema vocabulary ships with the crate: a consumer imports
 `gatt_options.proto` and the include path is added for it, so nothing has to be
 vendored, and a schema that carries a *different* vocabulary is rejected rather
