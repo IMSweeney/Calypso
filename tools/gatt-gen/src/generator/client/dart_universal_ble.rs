@@ -501,11 +501,15 @@ fn message_of(characteristic: &Characteristic, config: &Config) -> Option<String
 
 /// Encode and decode, per direction, so that the runtime never names a message
 /// class itself: a schema change then stops at the generated file.
+///
+/// Each pair is a member of its own, laid out the way `dart format` leaves it: a
+/// blank line before it (the class's last constant is on the line above) and one
+/// between the pairs. Each direction gets a pair whether or not it carries a
+/// message — a bare-bytes end encodes to itself — so neither can be empty.
 fn dart_codecs(inbound: &Option<String>, outbound: &Option<String>, _config: &Config) -> String {
-    let mut out = String::new();
-    out.push_str(&codec_pair("request", inbound.as_deref()));
-    out.push_str(&codec_pair("response", outbound.as_deref()));
-    out
+    let request = codec_pair("request", inbound.as_deref());
+    let response = codec_pair("response", outbound.as_deref());
+    format!("\n\n{request}\n\n{response}")
 }
 
 /// One direction's pair of codecs, laid out the way `dart format` leaves it: the
@@ -518,27 +522,31 @@ fn codec_pair(what: &str, message: Option<&str>) -> String {
         None => ("Uint8List".to_string(), "bytes".to_string()),
     };
 
+    // Each line is built with a trailing space after `=>`: that space is the
+    // separator when the body follows on the same line, and has to go when it does
+    // not. `dart format` strips trailing whitespace, and this file is committed as
+    // whatever `dart format` leaves, so the wrap has to strip it here.
     let encode_line = format!("  static Uint8List encode{name}({ty} message) => ");
-    // `encode_line` already carries the indentation.
     let encode = if encode_line.len() + "message.writeToBuffer();".len() <= MAX_WIDTH {
         format!("{encode_line}message.writeToBuffer();")
     } else {
-        format!("{encode_line}\n      message.writeToBuffer();")
+        format!("{}\n      message.writeToBuffer();", encode_line.trim_end())
     };
     let decode_line = format!("  static {ty} decode{name}(Uint8List bytes) => ");
     // The trailing semicolon has to fit as well.
     let decode = if decode_line.len() + decode.len() < MAX_WIDTH {
         format!("{decode_line}{decode};")
     } else {
-        format!("{decode_line}\n      {decode};")
+        format!("{}\n      {decode};", decode_line.trim_end())
     };
 
+    // No newline of its own at either end: `dart_codecs` spaces the members out.
     format!(
-        "\n  /// Encode a `{ty}` for a transfer.\n\
+        "  /// Encode a `{ty}` for a transfer.\n\
          {encode}\n\
          \n\
          \x20 /// Decode a reassembled `{ty}`.\n\
-         {decode}\n"
+         {decode}"
     )
 }
 
