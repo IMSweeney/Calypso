@@ -55,6 +55,7 @@ fn parse(args: &[String]) -> Result<Command, String> {
 
     let target = Target::from_name(first).ok_or_else(|| format!("unknown target {first:?}"))?;
     let mut rust = rust_trouble::Config::default();
+    let mut dart = dart_universal_ble::Config::default();
     let mut out: Option<PathBuf> = None;
     let mut input = Input::new([] as [String; 0]);
     let mut fdset = None;
@@ -95,11 +96,24 @@ fn parse(args: &[String]) -> Result<Command, String> {
                 ));
             }
             "--regenerate-with" => {
-                rust.regenerate_with = Some(
-                    args.next()
-                        .ok_or_else(|| "--regenerate-with needs a command".to_string())?
-                        .clone(),
-                );
+                let command = args
+                    .next()
+                    .ok_or_else(|| "--regenerate-with needs a command".to_string())?
+                    .clone();
+                rust.regenerate_with = Some(command.clone());
+                dart.regenerate_with = Some(command);
+            }
+            "--dart-messages" => {
+                dart.messages_import = args
+                    .next()
+                    .ok_or_else(|| "--dart-messages needs an import path".to_string())?
+                    .clone();
+            }
+            "--dart-prefix" => {
+                dart.messages_prefix = args
+                    .next()
+                    .ok_or_else(|| "--dart-prefix needs a prefix".to_string())?
+                    .clone();
             }
             "--print" => print = true,
             other if other.starts_with('-') => return Err(format!("unknown option {other}")),
@@ -114,7 +128,7 @@ fn parse(args: &[String]) -> Result<Command, String> {
 
     let config = match target {
         Target::RustTrouble => Config::RustTrouble(rust),
-        Target::DartUniversalBle => Config::DartUniversalBle(dart_universal_ble::Config),
+        Target::DartUniversalBle => Config::DartUniversalBle(dart),
     };
 
     Ok(Command::Generate(Plan {
@@ -188,24 +202,24 @@ fn fail(message: &str) -> ExitCode {
 fn usage(problem: &str) -> ExitCode {
     eprintln!("error: {problem}");
     let targets: Vec<&str> = TARGETS.iter().map(|target| target.name()).collect();
-    eprintln!(
-        "usage: gatt-gen <target> --out DIR [options] <proto>...\n\
-         \x20      gatt-gen --write-options DIR\n\
-         \n\
-         targets          {}\n\
-         --out            folder for the generated file (the target names the file)\n\
-         --include        a directory the proto files' imports resolve from\n\
-         --fdset          write the descriptor set here as well\n\
-         --print          print the parsed schema\n\
-         \n\
-         rust-trouble     --messages MODULE  where the generated protobuf types live\n\
-         \x20                --server NAME      the generated server struct\n\
-         \x20                --chunk-max N      pipe chunk buffer\n\
-         \x20                --pipe-msg-max N   largest message a pipe carries\n\
-         \x20                --regenerate-with  how the file says to remake it\n\
-         \n\
-         --write-options  write the schema vocabulary (gatt_options.proto) into a directory",
-        targets.join(", ")
-    );
+    eprintln!("usage: gatt-gen <target> --out DIR [options] <proto>...");
+    eprintln!("       gatt-gen --write-options DIR");
+    eprintln!();
+    eprintln!("targets              {}", targets.join(", "));
+    eprintln!("--out                folder for the generated file (the target names the file)");
+    eprintln!("--include            a directory the proto files' imports resolve from");
+    eprintln!("--fdset              write the descriptor set here as well");
+    eprintln!("--print              print the parsed schema");
+    eprintln!("--regenerate-with    how the generated file says to remake itself");
+    eprintln!();
+    eprintln!("rust-trouble         --messages MODULE     where the protobuf types live");
+    eprintln!("                     --server NAME         the generated server struct");
+    eprintln!("                     --chunk-max N         pipe chunk buffer");
+    eprintln!("                     --pipe-msg-max N      largest message a pipe carries");
+    eprintln!();
+    eprintln!("dart-universal-ble   --dart-messages PATH  import of the protobuf classes");
+    eprintln!("                     --dart-prefix NAME     prefix they arrive under");
+    eprintln!();
+    eprintln!("--write-options      write the schema vocabulary into a directory");
     ExitCode::FAILURE
 }

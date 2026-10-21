@@ -131,13 +131,3 @@ fn the_file_is_named_by_the_target_and_says_how_to_regenerate_itself() {
         output.source
     );
 }
-
-#[test]
-fn a_target_that_is_not_written_yet_says_so() {
-    let (gatt, _) = load("valid/device.proto").unwrap();
-    let error = Target::DartUniversalBle
-        .generate(&gatt, &TargetConfig::DartUniversalBle(Default::default()))
-        .unwrap_err();
-
-    assert!(error.to_string().contains("not written yet"), "{error}");
-}

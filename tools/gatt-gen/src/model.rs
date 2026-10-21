@@ -101,7 +101,7 @@ impl Perm {
 
 /// A bare-value marker from `gatt_options.proto`: a fixed raw encoding rather
 /// than a serialized protobuf message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Bare {
     U8,
     U16,

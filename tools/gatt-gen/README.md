@@ -21,7 +21,7 @@ src/
   descriptor.rs  model.rs  validate.rs  uuid.rs  vocabulary.rs   <- the schema
   generator/
     server/rust_trouble.rs         trouble-host, no_std, for the device
-    client/dart_universal_ble.rs   universal_ble, for the app (not written yet)
+    client/dart_universal_ble.rs   universal_ble, for the app
 ```
 
 Adding a target is adding a file: it declares `NAME`, `OUTPUT_FILE`, a `Config`
@@ -33,6 +33,9 @@ and a `generate`, and `generator::Target` picks it up.
 cargo install --path .                     # or `cargo run --` from a checkout
 gatt-gen rust-trouble --out ../calypso-core/src \
   --messages crate::pb::msg --server CalypsoGatt ../proto/calypso_gatt.proto
+gatt-gen dart-universal-ble --out ../calypso-app/lib/gatt \
+  --dart-messages ../protocol/calypso.pb.dart --dart-prefix pb \
+  ../proto/calypso_gatt.proto
 gatt-gen --write-options proto             # the vocabulary, if you want a copy
 ```
 
@@ -45,11 +48,18 @@ the interface shows up in review as a diff. (Calypso does exactly this — see
 `calypso-core/tests/gatt_generated.rs`, which fails if the committed file and the
 schema disagree.)
 
-Because the output is committed, it is written **format-clean**: the file is an
-ordinary source file of the crate that holds it, so the repo's own
-`cargo fmt --check` has to pass on it. That is why the emitter lays out byte
-arrays and attributes the way `rustfmt` would rather than relying on a
-post-processing step — there is no rustfmt in the generation path.
+Because the output is committed, it is written **format-clean**, for the same
+reason: the file is an ordinary source file of the project that holds it, so the
+repo's own `cargo fmt --check` (Rust) and `dart format --set-exit-if-changed`
+(Dart) both cover it. Neither formatter skips a file that says `@generated` —
+that was measured, not assumed — so the emitters lay their output out the way the
+formatters leave it, rather than there being a formatting step in the generation
+path.
+
+The Dart target talks to BLE through an interface it declares in its own output
+(`GattClientLink`), which the app implements over `universal_ble` and a test
+implements as a fake. That is what keeps a generated client testable without a
+radio; `universal_ble`'s static API is never called directly.
 
 The schema vocabulary ships with the crate: a consumer imports
 `gatt_options.proto` and the include path is added for it, so nothing has to be
