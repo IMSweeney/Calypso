@@ -13,6 +13,14 @@ pub mod ble;
 pub mod calibration;
 pub mod fixtures;
 pub mod flashlog;
+/// The BLE GATT table the device serves, generated from `proto/calypso_gatt.proto`
+/// by `gatt-gen` (see `tool/gen_gatt.sh`).
+///
+/// The allow is here rather than in the generated file because the generated file
+/// is items and nothing else: a file that carried its own `//!` docs and `#![allow]`
+/// could not be `include!`d, so it could not be generated into `$OUT_DIR` — and
+/// mounting is the consumer's business, not the generator's.
+#[allow(clippy::all, nonstandard_style, unused, irrefutable_let_patterns)]
 pub mod gatt;
 pub mod pb;
 pub mod rep;

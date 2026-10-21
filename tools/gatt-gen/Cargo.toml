@@ -11,6 +11,11 @@ repository   = "https://github.com/IMSweeney/gatt-gen"
 rust-version = "1.88"
 version      = "0.1.0"
 
+# The example is a member so that `cargo test` here builds it: an example that is
+# never built is an example that is wrong.
+[workspace]
+members = ["examples/server", "examples/pipe"]
+
 [dependencies]
 # Reads the descriptor set protoc produces, including the custom options
 # (`gatt.service` / `gatt.characteristic`) that carry the GATT schema.

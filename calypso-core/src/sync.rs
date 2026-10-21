@@ -153,13 +153,6 @@ pub fn summary_message(summary: msg::RepSummary) -> msg::SyncMessage {
     }
 }
 
-/// A status message (rep counts etc.) as a `SyncMessage`.
-pub fn status_message(status: msg::SyncStatus) -> msg::SyncMessage {
-    msg::SyncMessage {
-        body: Some(msg::SyncMessage_::Body::Status(status)),
-    }
-}
-
 /// The IMU's calibration status as a `SyncMessage`.
 pub fn calibration_message(calibration: &Calibration) -> msg::SyncMessage {
     msg::SyncMessage {

@@ -43,7 +43,28 @@ The tool writes `<out>/<the target's file name>`, creates the directory if it
 needs to, prints the warnings the schema earned, and never runs as part of
 anyone's build: **the generated code is meant to be committed**, so a firmware
 build needs no generator, no protoc and nothing from the network, and a change to
-the interface shows up in review as a diff. (Calypso does exactly this — see
+the interface shows up in review as a diff.
+
+The generated Rust is **items only** — no `//!` docs, no `#![allow]` — because
+both are inner attributes and an inner attribute is not permitted in an `include!`
+expansion. Mount it in a module of your own and allow the lints there, and it
+works whether you commit it and declare `pub mod`:
+
+```rust
+#[allow(clippy::all, nonstandard_style, unused, irrefutable_let_patterns)]
+pub mod gatt;   // src/gatt.rs, generated and committed
+```
+
+or generate it in a build script and include it:
+
+```rust
+#[allow(clippy::all, nonstandard_style, unused, irrefutable_let_patterns)]
+mod gatt {
+    include!(concat!(env!("OUT_DIR"), "/gatt.rs"));
+}
+```
+
+`examples/server` is the second shape, end to end. (Calypso does exactly this — see
 `calypso-core/tool/gen_gatt.sh` and `calypso-core/src/gatt.rs`. It also has
 `calypso-core/tests/gatt_generated.rs`, which fails if the committed file and the
 schema disagree.)
@@ -60,6 +81,12 @@ The Dart target talks to BLE through an interface it declares in its own output
 (`GattClientLink`), which the app implements over `universal_ble` and a test
 implements as a fake. That is what keeps a generated client testable without a
 radio; `universal_ble`'s static API is never called directly.
+
+A crate that takes the generated table needs `trouble-host` (with `gatt`),
+`micropb` (with a heapless container) and `heapless`, plus two the macros expand
+into: `static_cell` (each characteristic's storage) and `embassy-sync` (the
+attribute table's mutex). Found by compiling a generated table in a crate that
+had the first three.
 
 The schema vocabulary ships with the crate: a consumer imports
 `gatt_options.proto` and the include path is added for it, so nothing has to be

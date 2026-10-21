@@ -1,0 +1,41 @@
+// A minimal device: one service, one bare characteristic, one message.
+//
+// The vocabulary this imports (`gatt_options.proto`) ships with `gatt-gen`.
+
+syntax = "proto3";
+
+package sensor;
+
+import "gatt_options.proto";
+import "google/protobuf/empty.proto";
+
+message Config {
+  uint32 period_ms = 1;
+}
+
+service Sensor {
+  option (gatt.service) = {
+    uuid: "e3a10001-1f2c-4a5b-9d3e-8c7f6a5b4c3d"
+    primary: true
+  };
+
+  // A bare value, the way a SIG characteristic is: one byte of level, so a stock
+  // client reads the number it expects.
+  rpc Level(google.protobuf.Empty) returns (gatt.U8) {
+    option (gatt.characteristic) = {
+      uuid: "e3a10002-1f2c-4a5b-9d3e-8c7f6a5b4c3d"
+      props: [READ, NOTIFY]
+      max: 100
+    };
+  }
+
+  // A message that fits in one value, both read and written: the characteristic
+  // has one value type, so both directions name the same message.
+  rpc Settings(Config) returns (Config) {
+    option (gatt.characteristic) = {
+      uuid: "e3a10003-1f2c-4a5b-9d3e-8c7f6a5b4c3d"
+      props: [READ, WRITE]
+      max_len: 16
+    };
+  }
+}

@@ -1,0 +1,21 @@
+[package]
+name         = "gatt-gen-example-server"
+edition      = "2021"
+rust-version = "1.88"
+version      = "0.1.0"
+publish      = false
+description  = "A minimal BLE GATT server whose table gatt-gen writes at build time."
+
+[dependencies]
+trouble-host = { version = "0.5.0", features = ["gatt"] }
+micropb = { version = "0.6.0", features = ["container-heapless-0-9"] }
+heapless = "0.9"
+# Both are what the generated table's macros expand to.
+static_cell = "2.1.1"
+embassy-sync = "0.7.2"
+
+[build-dependencies]
+# The generator this example is about, and the message codec it is used with.
+gatt-gen = { path = "../.." }
+micropb-gen = "0.6.0"
+protoc-bin-vendored = "3"

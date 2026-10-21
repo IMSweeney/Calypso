@@ -45,8 +45,18 @@ Both ends now come from the one schema: the app's typed client is
 `tool/gen_gatt.sh` and committed, and the transport above it is left with what a
 schema cannot say (scanning, reconnecting, reassembly, timeouts).
 
-Not written yet: `gatt-pipe` (the chunked transport of §7), the config file of
-§5.2, and the schema-version characteristic of §9 (the hash itself is generated).
+- `tools/gatt-pipe` — the chunked transport of §7 (`src/lib.rs` was this crate's
+  for a while, which made a code generator something a device would have to depend
+  on): the frame, a sender and a receiver that hold no buffers and no clock, and
+  17 tests that drive them against each other over a link which drops, corrupts,
+  duplicates and stalls chunks.
+
+Still to do for the pipe to be usable: the generator emitting the per-pipe glue
+(§8.1's fixed-capacity buffers and the handles the runtime owns), the device-side
+embassy driver, the app's Dart mirror — driven from the same cases, so the two
+implementations cannot disagree — and a schema that declares a pipe. The config
+file of §5.2 and the schema-version characteristic of §9 (the hash itself is
+already generated) are also still open.
 Section 4 is the order; section 3 is what is still open.
 
 Decided by the review's first round: this stack's property enforcement gap is

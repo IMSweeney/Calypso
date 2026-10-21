@@ -47,7 +47,11 @@ fn the_committed_table_is_what_the_tool_generates() {
             message_module: "crate::pb::msg".to_string(),
             server_name: "CalypsoGatt".to_string(),
             pipe_chunk_max: 244,
+            // No pipe in this schema yet, so neither of these reaches the file;
+            // they have to match what `tool/gen_gatt.sh` passes all the same.
             pipe_msg_max: 0,
+            window: 8,
+            xfer_timeout_ms: 5000,
             regenerate_with: Some(RUST_SCRIPT.to_string()),
         },
     )
@@ -69,6 +73,12 @@ fn the_committed_client_is_what_the_tool_generates() {
             &gatt_gen::generator::Config::DartUniversalBle(dart_universal_ble::Config {
                 messages_import: "../protocol/calypso.pb.dart".to_string(),
                 messages_prefix: "pb".to_string(),
+                // No pipe in this schema, so these do not reach the file; they
+                // have to match what `tool/gen_gatt.sh` passes all the same.
+                pipe_chunk_max: 244,
+                pipe_msg_max: 0,
+                window: 8,
+                xfer_timeout_ms: 5000,
                 regenerate_with: Some(DART_SCRIPT.to_string()),
             }),
         )

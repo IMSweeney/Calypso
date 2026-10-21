@@ -87,8 +87,26 @@ fn parse(args: &[String]) -> Result<Command, String> {
                     .ok_or_else(|| "--server needs a name".to_string())?
                     .clone();
             }
-            "--chunk-max" => rust.pipe_chunk_max = number(args.next(), "--chunk-max")?,
-            "--pipe-msg-max" => rust.pipe_msg_max = number(args.next(), "--pipe-msg-max")?,
+            "--chunk-max" => {
+                let value = number(args.next(), "--chunk-max")?;
+                rust.pipe_chunk_max = value;
+                dart.pipe_chunk_max = value;
+            }
+            "--pipe-msg-max" => {
+                let value = number(args.next(), "--pipe-msg-max")?;
+                rust.pipe_msg_max = value;
+                dart.pipe_msg_max = value;
+            }
+            "--window" => {
+                let value = number(args.next(), "--window")? as u8;
+                rust.window = value;
+                dart.window = value;
+            }
+            "--xfer-timeout" => {
+                let value = number(args.next(), "--xfer-timeout")? as u32;
+                rust.xfer_timeout_ms = value;
+                dart.xfer_timeout_ms = value;
+            }
             "--fdset" => {
                 fdset = Some(PathBuf::from(
                     args.next()
@@ -216,6 +234,8 @@ fn usage(problem: &str) -> ExitCode {
     eprintln!("                     --server NAME         the generated server struct");
     eprintln!("                     --chunk-max N         pipe chunk buffer");
     eprintln!("                     --pipe-msg-max N      largest message a pipe carries");
+    eprintln!("                     --window N            chunks in flight before waiting");
+    eprintln!("                     --xfer-timeout MS     no-progress timeout per transfer");
     eprintln!();
     eprintln!("dart-universal-ble   --dart-messages PATH  import of the protobuf classes");
     eprintln!("                     --dart-prefix NAME     prefix they arrive under");
