@@ -118,7 +118,7 @@ that declares one — and it is unused. Moving Calypso onto it is one change rat
 than five: the schema edit makes both generated files different, and takes the
 device's typed request decode with it.
 
-- [ ] **The schema.** `pipe: "sync"` on `Requests` and `Messages`, `max_len` gone
+- [x] **The schema.** `pipe: "sync"` on `Requests` and `Messages`, `max_len` gone
       (a pipe sizes transfers, not values), and `pipe_msg_max` sized for a whole
       `TraceChunk` rather than for a third of one. That number is the point: one
       notification then carries a chunk instead of a third of one, so
@@ -150,13 +150,18 @@ device's typed request decode with it.
         buffer, which was never the relationship that mattered. What matters — that
         `micropb`'s bound for `SyncMessage` fits the pipe — the generated table
         already asserts at compile time.
-- [ ] **The device session**, in `calypso-core`: the pipe's two ends over the
+- [x] **The device session**, in `calypso-core`: the pipe's two ends over the
       buffers, turning a write into a message and a message into notifications.
       No embassy and no radio, so this half is host-testable like the rest of that
-      crate.
-- [ ] **The device wiring**, in `calypso-esp32`: write events into the session,
+      crate. It is `src/pipe.rs`, and `tests/pipe.rs` runs it against the app's own
+      half: a chunk lost, an acknowledgement swallowed, a transfer that stalls
+      until it is given up on, a trace whose chunk never arrived.
+- [x] **The device wiring**, in `calypso-esp32`: write events into the session,
       chunks out as notifications, the MTU read from the connection rather than
-      assumed, and a tick for the timeouts.
+      assumed, and a tick for the timeouts. The queue a small window would have
+      needed is three lines of ordering instead (`keep_sending`), because at
+      `window = MAX_WINDOW` the pipe never fills: what gates a message now is the
+      *acknowledgement* of the one before it, not the window.
 - [ ] **The app**, in `transport/`: writes as transfers, notifications reassembled
       through `lib/gatt/pipe.dart`, and the trace path collapsed to "one transfer,
       one `TraceChunk`".

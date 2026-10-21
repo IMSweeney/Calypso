@@ -37,12 +37,13 @@ use bno055::Bno055;
 use bno055::{BNO055_CALIB_SIZE, BNO055Calibration, BNO055OperationMode};
 use calypso_core::calibration::Calibration;
 use calypso_core::flashlog::{self, FlashLog};
-use calypso_core::gatt::{CalypsoGatt, Request, SyncMessagesValue};
+use calypso_core::gatt::{CalypsoGatt, PIPE_STORAGE_MAX};
 use calypso_core::pb::msg;
+use calypso_core::pipe::{self, Session, Stalled};
 use calypso_core::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, compute_rep};
 use calypso_core::sampler::{QUAT_SCALE, SAMPLE_RATE_HZ, Sample, SampleRing, quantize};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
-use calypso_core::sync::{self, SummaryCursor, TraceStreamer, trace_request};
+use calypso_core::sync::{SummaryCursor, trace_request};
 use calypso_core::uuid::{self, RepUuid};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -367,6 +368,10 @@ async fn main(spawner: Spawner) -> ! {
 
     // Buffers for the sync path: a trace read back from the log, and a
     // reusable record scratch (both heap: too big for the stack/static RAM).
+    //
+    // The trace storage goes to the session rather than staying here: the cursor
+    // that streams it lives there too (see `calypso_core::pipe`), so the points a
+    // request is read into and the transfers they go out as are one thing.
     let mut trace_vec = AllocVec::new();
     trace_vec.resize(TRACE_POINTS, TracePoint::ZERO);
     let sync_trace_storage: &'static mut [TracePoint] = Box::leak(trace_vec.into_boxed_slice());
@@ -378,9 +383,12 @@ async fn main(spawner: Spawner) -> ! {
     // live on the main task's stack, and a 2 KB frame inside one is 2 KB of it.
     let sync_rec_msg: &'static mut msg::RepRecord = leak_record_scratch();
     // ...and the summary batch, for the same reason: `SUMMARY_BATCH` of them is
-    // ~1.2 KB, which has no business sitting in a task's future.
+    // ~1.2 KB, which has no business sitting in a task's future. It carries how far
+    // through it the pipe has got, so it is also the queue the pipe's
+    // one-message-at-a-time rule needs.
     let sync_batch: &'static mut AllocVec<msg::RepSummary> =
         Box::leak(Box::new(AllocVec::with_capacity(SUMMARY_BATCH)));
+    let mut batch = SummaryBatch::new(sync_batch);
     // **One characteristic means one payload buffer.** Every notification goes out on
     // `messages` now, so every sender has to build the same `BleVec` — sized for the
     // largest message, which is a trace chunk, on a task stack that has none to
@@ -388,9 +396,18 @@ async fn main(spawner: Spawner) -> ! {
     // are awaited from the same loop, so they never overlap).
     // The value type the schema declares for the notify characteristic: it owns the
     // buffer, so a sender encodes into it rather than into a buffer of its own.
-    let notify_payload: &'static mut SyncMessagesValue =
-        Box::leak(Box::new(SyncMessagesValue::default()));
-    let mut notify = Notify {
+    // The pipe's two message buffers and the frame each chunk is notified from.
+    // All three on the heap, and leaked: a task's future lives on the stack, and
+    // 8 KB of message buffer has no business in one.
+    let sync_outgoing: &'static mut [u8] =
+        Box::leak(alloc::vec![0u8; pipe::MESSAGE_MAX].into_boxed_slice());
+    let sync_incoming: &'static mut [u8] =
+        Box::leak(alloc::vec![0u8; pipe::MESSAGE_MAX].into_boxed_slice());
+    let notify_payload: &'static mut BleVec = Box::leak(Box::new(BleVec::new()));
+    let session: &'static mut pipe::Session<'static> =
+        leak_session(sync_outgoing, sync_incoming, sync_trace_storage);
+    let mut sync = Sync {
+        session,
         characteristic: &gatt.sync.messages,
         payload: notify_payload,
     };
@@ -453,12 +470,17 @@ async fn main(spawner: Spawner) -> ! {
                 };
                 info!("BLE connection established (stack {} B)", stack_used());
 
-                // Sync state: how many summaries this subscriber has been sent.
-                // The cursor advances one per send, and a send to nobody reports
-                // success — so the caller has to know whether anybody is listening
-                // (see `is_subscribed`).
+                // Sync state: how many summaries this subscriber has been sent,
+                // the batch they are read from, and the clock the pipe's timeouts
+                // are measured against.
+                //
+                // A fresh session per connection: whatever was in flight is gone
+                // with the link, and half a message is not a message.
                 let mut cursor = SummaryCursor::new();
                 let mut subscribed = false;
+                let start = Instant::now();
+                batch.reset();
+                sync.session.reset();
 
                 loop {
                     // Service GATT events; once a second, tell the app the IMU's
@@ -467,6 +489,7 @@ async fn main(spawner: Spawner) -> ! {
                     let event = match select(conn.next(), Timer::after(Duration::from_secs(1))).await {
                         Either::First(event) => event,
                         Either::Second(()) => {
+                            let now = now_ms(start);
                             // Who is listening, asked of the server rather than
                             // inferred from a notify result, because a notify result
                             // says nothing (see `is_subscribed`). Once a tick is
@@ -480,23 +503,42 @@ async fn main(spawner: Spawner) -> ! {
                                 } else {
                                     info!("app unsubscribed from sync notifications");
                                 }
+                                // An emptied batch, so a resubscribing app starts
+                                // from the cursor rather than from the middle of a
+                                // batch the last one left behind.
+                                batch.reset();
                             }
-                            // Calibration first: it is what tells the app whether
-                            // to expect reps at all, so it should not queue behind
-                            // a burst of summaries.
-                            notify_calibration(&mut notify, &conn).await;
-                            // Auto-sync, but only while somebody is listening: the
-                            // cursor advances on every send, and a send to nobody is
-                            // a "success", so streaming with no subscriber would
-                            // walk the whole log into the void and the app would
-                            // never see it on that connection.
+                            // A transfer that has stopped moving is this end's to
+                            // notice: `tick` sends it again, and gives up on it
+                            // after three attempts.
+                            match sync.session.tick(now) {
+                                Stalled::No => {}
+                                Stalled::Retrying { attempt } => info!(
+                                    "sync {}: no answer, sending it again (attempt {})",
+                                    sync.session.kind().name(),
+                                    attempt
+                                ),
+                                Stalled::Abandoned { attempt } => warn!(
+                                    "sync {}: unanswered after {} attempts, dropped",
+                                    sync.session.kind().name(),
+                                    attempt
+                                ),
+                            }
                             if subscribed {
-                                stream_new_summaries(
+                                // Nothing goes out to nobody: a transfer nobody
+                                // acknowledges stalls, retries and is abandoned, and
+                                // it would hold the pipe for the whole 15 s.
+                                // Auto-sync, and the trace the app is waiting on: the
+                                // cursor advances one per message the pipe took, and a
+                                // transfer to nobody is abandoned, so streaming with
+                                // no subscriber would walk the whole log into the void
+                                // and the app would never see it on that connection.
+                                keep_sending(
                                     store,
                                     sync_rec_buf,
                                     sync_rec_msg,
-                                    sync_batch,
-                                    &mut notify,
+                                    &mut batch,
+                                    &mut sync,
                                     &conn,
                                     &mut cursor,
                                 )
@@ -511,20 +553,44 @@ async fn main(spawner: Spawner) -> ! {
                             break;
                         }
                         GattConnectionEvent::Gatt { event } => {
-                            // What the app wrote, decoded by the generated code from
-                            // the schema: `Request` has a variant per written
-                            // characteristic, so a second one is a new match arm rather
-                            // than a second handle comparison here.
-                            let wrote = Request::from_event(&gatt, &event);
+                            // A write is a chunk of a request, or the app's
+                            // acknowledgement of a message this end sent — the frame
+                            // says which, and the session is the only place either is
+                            // believed. Read it *after* the event is accepted: until
+                            // the server has stored the value, the table still holds
+                            // the one before it.
+                            let is_write = matches!(event, GattEvent::Write(_));
                             if let Ok(reply) = event.accept() {
                                 let _ = reply.send().await;
                             }
-                            // The app asked for a rep's trace: read it back from the
-                            // log and stream it.
-                            if let Some(Request::Requests(request)) = wrote
-                                && let Some(request) = trace_request(&request)
-                            {
-                                {
+                            if is_write {
+                                let wrote = {
+                                    let Ok(value) = gatt.get(&gatt.sync.requests) else {
+                                        warn!("sync: a write with no stored value");
+                                        continue;
+                                    };
+                                    sync.session.written(value.as_slice(), now_ms(start))
+                                };
+
+                                // The app is owed an acknowledgement, and its sender
+                                // is waiting on it: notify it before anything else
+                                // this write set off.
+                                if wrote.reply {
+                                    sync.flush(&conn).await;
+                                }
+
+                                // The app asked for something. `Request` used to
+                                // decode this out of the table; with a pipe the
+                                // bytes are reassembled here first.
+                                if wrote.message {
+                                    let Some(request) = sync.session.request() else {
+                                        warn!("sync: a reassembled request that does not decode");
+                                        continue;
+                                    };
+                                    let Some(request) = trace_request(&request) else {
+                                        warn!("sync: a request this device will not serve");
+                                        continue;
+                                    };
                                     let wanted =
                                         calypso_core::pb::uuid_from_field(&request.rep_uuid);
                                     info!("trace request: rep {}", UuidShort(wanted.as_ref()));
@@ -533,17 +599,34 @@ async fn main(spawner: Spawner) -> ! {
                                             store,
                                             sync_rec_buf,
                                             sync_rec_msg,
-                                            &mut *sync_trace_storage,
-                                            &mut notify,
+                                            &mut sync,
                                             &conn,
                                             request,
                                         )
                                         .await;
                                     } else {
-                                        // Every chunk of `stream_trace` would report
-                                        // success and send nothing.
-                                        warn!("trace request ignored: chunk notifications are not subscribed");
+                                        // A transfer nobody acknowledges would stall
+                                        // and be abandoned, and the app would wait
+                                        // for a trace that is not coming.
+                                        warn!("trace request ignored: notifications are not subscribed");
                                     }
+                                }
+
+                                // Then send whatever that write freed — an
+                                // acknowledgement of this end's own transfer, most
+                                // often — with a trace chunk ahead of everything
+                                // else, since the app is waiting on its trace.
+                                if subscribed {
+                                    keep_sending(
+                                        store,
+                                        sync_rec_buf,
+                                        sync_rec_msg,
+                                        &mut batch,
+                                        &mut sync,
+                                        &conn,
+                                        &mut cursor,
+                                    )
+                                    .await;
                                 }
                             }
                         }
@@ -1016,64 +1099,185 @@ fn log_partition_table(pt: &partitions::PartitionTable<'_>) {
     }
 }
 
-/// The notification side of the sync service: the one characteristic the device talks
-/// on, and the buffer its payloads are built in.
+/// The value a pipe characteristic stores: a chunk's frame, in the table's own type.
 ///
-/// They travel together because the interface is *one* characteristic: a summary, a
-/// trace chunk and a calibration status are the same type on the wire, so they are one
-/// buffer on the stack — sized for the largest of them, a trace chunk. The buffer
-/// itself is on the heap (see `main`), and the senders encode straight into it.
-struct Notify<'a> {
-    characteristic: &'a Characteristic<SyncMessagesValue>,
-    payload: &'a mut SyncMessagesValue,
+/// `PIPE_STORAGE_MAX` because that is what the generated characteristic is typed as —
+/// `notify` takes the type the table holds — and the spare byte over a frame is what
+/// keeps a full-frame write out of `trouble-host`'s equal-length path (see
+/// `docs/GOTCHAS.md`). What is notified is only ever a frame, `pipe::FRAME_MAX` bytes
+/// at most.
+type BleVec = heapless::Vec<u8, PIPE_STORAGE_MAX>;
+
+/// The sending side of the sync service: the pipe's session, the one characteristic
+/// every message goes out on, and the buffer each frame is built in.
+///
+/// One characteristic means one payload buffer, and the pipe means one *message* at a
+/// time: a summary, a trace chunk and a calibration status are all transfers, and
+/// only one of them can be in flight.
+struct Sync<'a> {
+    session: &'a mut Session<'static>,
+    characteristic: &'a Characteristic<BleVec>,
+    payload: &'a mut BleVec,
+}
+
+impl Sync<'_> {
+    /// Notify everything the pipe has ready: the frame it owes for the last write,
+    /// and the chunks of the message in flight.
+    ///
+    /// The buffer is reused for each, so it is resized to a whole frame before the
+    /// pipe writes one into it and truncated back to the frame's length afterwards.
+    async fn flush(&mut self, conn: &GattConnection<'_, '_, DefaultPacketPool>) {
+        let Sync {
+            session,
+            characteristic,
+            payload,
+        } = self;
+        let mtu = conn.raw().att_mtu() as usize;
+
+        loop {
+            if payload.resize(pipe::FRAME_MAX, 0).is_err() {
+                return;
+            }
+            let len = match session.reply(payload.as_mut_slice()) {
+                // An acknowledgement first: the app's sender is waiting on it, and
+                // the chunk it is about would otherwise go out ahead of it.
+                Some(len) => len,
+                None => match session.next_chunk(mtu, payload.as_mut_slice()) {
+                    Some(len) => len,
+                    None => break,
+                },
+            };
+            payload.truncate(len);
+            // A notification to nobody reports success (see `is_subscribed`), so
+            // this result is ever only a radio failure.
+            if characteristic.notify(conn, payload).await.is_err() {
+                warn!("sync: notify failed");
+                return;
+            }
+        }
+        payload.clear();
+    }
+
+    /// Send `summary` if the pipe is free, and notify its chunks.
+    ///
+    /// `false` means the pipe is still finishing the message before this one: the
+    /// caller keeps its message and asks again when the acknowledgement arrives.
+    async fn send_summary(
+        &mut self,
+        summary: &msg::RepSummary,
+        conn: &GattConnection<'_, '_, DefaultPacketPool>,
+    ) -> bool {
+        if !self.session.send_summary(summary) {
+            return false;
+        }
+        self.flush(conn).await;
+        true
+    }
+
+    /// Send the IMU's calibration status, if the pipe is free.
+    async fn send_calibration(
+        &mut self,
+        calibration: &Calibration,
+        conn: &GattConnection<'_, '_, DefaultPacketPool>,
+    ) -> bool {
+        if !self.session.send_calibration(calibration) {
+            return false;
+        }
+        self.flush(conn).await;
+        true
+    }
+
+    /// Send the next chunk of the trace being streamed, if there is one and the pipe
+    /// is free.
+    async fn send_trace_chunk(&mut self, conn: &GattConnection<'_, '_, DefaultPacketPool>) -> bool {
+        if !self.session.send_next_trace_chunk() {
+            return false;
+        }
+        self.flush(conn).await;
+        true
+    }
+}
+
+/// The summaries read out of the log and waiting for the pipe, and how far the pipe
+/// has got through them.
+///
+/// One batch is read at a time and drained one *transfer* at a time, because that is
+/// what the pipe carries: a batch of sixteen is sixteen round trips, so it is refilled
+/// and drained across event loop iterations rather than in one call.
+struct SummaryBatch {
+    messages: &'static mut AllocVec<msg::RepSummary>,
+    next: usize,
+}
+
+impl SummaryBatch {
+    fn new(messages: &'static mut AllocVec<msg::RepSummary>) -> Self {
+        messages.clear();
+        SummaryBatch { messages, next: 0 }
+    }
+
+    fn spent(&self) -> bool {
+        self.next >= self.messages.len()
+    }
+
+    fn peek(&self) -> Option<&msg::RepSummary> {
+        self.messages.get(self.next)
+    }
+
+    fn advance(&mut self) {
+        self.next += 1;
+    }
+
+    /// Back to an empty batch: a new connection, or a subscriber that came back.
+    fn reset(&mut self) {
+        self.messages.clear();
+        self.next = 0;
+    }
 }
 
 /// Push any log summaries the subscriber hasn't been sent yet, oldest first.
 ///
 /// **Call this only while the peer is subscribed** ([`is_subscribed`]). The cursor
-/// advances on every send and a send to nobody reports success, so calling it with
-/// no subscriber walks the log into the void and the app never sees those reps on
-/// that connection.
+/// advances on every message the pipe took, and a transfer to nobody is abandoned
+/// after three attempts, so calling it with no subscriber walks the log into the void
+/// and the app never sees those reps on that connection.
 ///
-/// Stops without advancing the cursor on a *real* notification failure, so the next
-/// tick picks up where this one left off.
+/// One summary per call, at most: a message is a transfer, a transfer ends when the
+/// app acknowledges it, and the acknowledgement arrives as a *write* — so this is
+/// called from the tick, from each write, and from nothing else. Whatever is not sent
+/// this time is still in the batch, and the cursor has not moved past it.
 async fn stream_new_summaries(
     store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
     rec_buf: &mut [u8],
     rec: &mut msg::RepRecord,
-    batch: &mut AllocVec<msg::RepSummary>,
-    notify: &mut Notify<'_>,
+    batch: &mut SummaryBatch,
+    sync: &mut Sync<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     cursor: &mut SummaryCursor,
 ) {
-    let Notify {
-        characteristic,
-        payload,
-    } = notify;
-    // Collect the next batch, then notify them one at a time: notifications are
-    // async, so they cannot happen inside the log's sync iteration.
-    let total = {
-        let mut guard = store.lock().await;
-        collect_summaries(&mut guard, rec_buf, rec, cursor.next(), batch)
-    };
-    let Some(total) = total else {
-        return;
-    };
-    // Reps fall off the ring as it wraps; never point past the end.
-    cursor.clamp_to(total);
-
-    for summary in batch.iter() {
-        // Encoded straight into the shared notification buffer: no scratch, no copy,
-        // and nothing on this frame. A summary too large to fit would not have fitted
-        // the characteristic either, so nothing is lost by failing at the encode.
-        //
-        // A `RepSummary` carries a uuid container now, so it is not `Copy`.
-        if !payload.encode_into(&sync::summary_message(summary.clone())) {
+    // The next batch is read only when the last one is spent *and* the pipe is free:
+    // reading the log is a flash scan, and running it while a transfer was in flight
+    // would hold the event loop for a batch that could not go out yet anyway.
+    if batch.spent() {
+        if !sync.session.is_idle() {
             return;
         }
-        if characteristic.notify(conn, payload).await.is_err() {
-            return; // nobody subscribed (yet)
-        }
+        let total = {
+            let mut guard = store.lock().await;
+            collect_summaries(&mut guard, rec_buf, rec, cursor.next(), batch.messages)
+        };
+        let Some(total) = total else {
+            return;
+        };
+        // Reps fall off the ring as it wraps; never point past the end.
+        cursor.clamp_to(total);
+        batch.next = 0;
+    }
+
+    let Some(summary) = batch.peek() else {
+        return;
+    };
+    if sync.send_summary(summary, conn).await {
+        batch.advance();
         cursor.advance(1);
     }
 }
@@ -1114,76 +1318,66 @@ fn collect_summaries(
     Some(seen)
 }
 
-/// Read a requested rep's trace back from the log and notify it to the app in
-/// MTU-sized chunks.
+/// Read a requested rep's trace out of the log into the session, and start streaming
+/// it: one `TraceChunk` per transfer, in chunk order.
 ///
-/// Still the widest frame in the firmware, and knowingly so — hence the exemption.
-/// It is 1086 bytes, down from 1476: the encode scratch and the notification payload
-/// used to live here and are now one heap buffer shared by every sender (see
-/// [`Notify`]). What is left is the inlined MIR of the chunk encoder and the log
-/// calls. There is no buffer left to move — extracting the log work is already done
-/// (see [`read_trace_from_log`]) — and suppressing inlining across `calypso-core` to
-/// satisfy the lint would trade a bounded, once-per-trace cost for a real one.
-#[allow(
-    clippy::large_stack_frames,
-    reason = "1086 B: the inlined chunk encoder and the log/notify frames; the buffers are the caller's now"
-)]
+/// The transfers themselves are the tick's business, and each one is a round trip:
+/// this reads the trace into the session's storage and points the cursor at it, and
+/// the tick (or the next write, which is the app's acknowledgement) sends the next
+/// chunk. That is what the latency item in the roadmap was reaching for — nothing here
+/// waits behind a queue of notifications, and the connection's event loop keeps
+/// running to the acknowledgements that move it along.
+///
+/// This used to be the widest frame in the firmware, with an exemption for it: the
+/// chunk message was built here (a `SyncMessage` is 2 KB by value, one of its variants
+/// being a whole `TraceChunk`). It is built inside the session now — a plain method
+/// call, so the 2 KB is a stack frame that is gone before anything is awaited, rather
+/// than something a task's future holds — and this fits the lint's budget without
+/// help. The log work was already extracted (see [`read_trace_from_log`]).
 async fn stream_trace(
     store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
     rec_buf: &mut [u8],
     rec: &mut msg::RepRecord,
-    trace_storage: &mut [TracePoint],
-    notify: &mut Notify<'_>,
+    sync: &mut Sync<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     request: msg::TraceRequest,
 ) {
-    let Notify {
-        characteristic,
-        payload,
-    } = notify;
     let Some(rep_uuid) = calypso_core::pb::uuid_from_field(&request.rep_uuid) else {
         warn!("trace request with a malformed uuid");
         return;
     };
-    let mut trace = TraceBuf::new(trace_storage);
-    {
-        let mut guard = store.lock().await;
-        // The log work stays out of this future: see `collect_summaries`.
-        if !read_trace_from_log(&mut guard, rec_buf, rec, rep_uuid, &mut trace) {
-            warn!(
-                "trace for rep {} is no longer in the log",
-                UuidShort(Some(&rep_uuid))
-            );
-            return;
-        }
-    }
 
-    let t0_ms = trace.get(0).map(|p| p.t_ms).unwrap_or(0);
-    let points = trace.as_slice();
-    let mut streamer = if request.all_chunks {
-        TraceStreamer::all(rep_uuid, t0_ms, points)
-    } else {
-        TraceStreamer::one(rep_uuid, t0_ms, points, request.chunk_index)
+    // Read it into the session's storage, which is where the cursor that streams it
+    // looks: one copy, and no lifetime dance to hand the points over.
+    let (t0_ms, points) = {
+        let mut trace = TraceBuf::new(sync.session.trace_storage());
+        {
+            let mut guard = store.lock().await;
+            // The log work stays out of this future: see `collect_summaries`.
+            if !read_trace_from_log(&mut guard, rec_buf, rec, rep_uuid, &mut trace) {
+                warn!(
+                    "trace for rep {} is no longer in the log",
+                    UuidShort(Some(&rep_uuid))
+                );
+                return;
+            }
+        }
+        let t0_ms = trace.get(0).map(|p| p.t_ms).unwrap_or(0);
+        (t0_ms, trace.len())
     };
 
-    // Encoded straight into the shared notification buffer, which is sized to the
-    // worst case a chunk can encode to. It used to be sized to a summary, and a chunk
-    // that did not fit was dropped here in silence: the stream stopped part-way and
-    // the app timed out with a rep whose trace was missing, with nothing said at
-    // either end (see `docs/GOTCHAS.md`).
-    loop {
-        let Some(message) = streamer.next_message() else {
-            return;
-        };
-        if !payload.encode_into(&message) {
-            warn!("trace chunk does not fit the notify characteristic");
-            return;
-        }
-        if characteristic.notify(conn, payload).await.is_err() {
-            warn!("trace stream interrupted (unsubscribed?)");
-            return;
-        }
-    }
+    // A request for one chunk sends one chunk; a request for the trace sends all of
+    // it. Which is a cursor position and a stop, not a different stream.
+    let only = if request.all_chunks {
+        None
+    } else {
+        Some(request.chunk_index)
+    };
+    sync.session.start_trace(rep_uuid, t0_ms, points, only);
+
+    // The first transfer goes now; the rest go as the app acknowledges them (see
+    // `keep_sending`).
+    sync.send_trace_chunk(conn).await;
 }
 
 /// Read one rep's trace out of the log into `trace`, returning whether it was
@@ -1491,18 +1685,8 @@ fn is_subscribed(
 /// one (see `proto/calypso.proto`). Best-effort, and note that a *successful*
 /// notification means nothing — see [`is_subscribed`], which is also where the
 /// "did anybody hear it" line is logged.
-async fn notify_calibration(
-    notify: &mut Notify<'_>,
-    conn: &GattConnection<'_, '_, DefaultPacketPool>,
-) {
-    let Notify {
-        characteristic,
-        payload,
-    } = notify;
+async fn notify_calibration(sync: &mut Sync<'_>, conn: &GattConnection<'_, '_, DefaultPacketPool>) {
     let calibration = Calibration::from_bits(CALIBRATION_BITS.load(Ordering::Relaxed));
-    if !payload.encode_into(&sync::calibration_message(&calibration)) {
-        return;
-    }
     // **No success line, and the reason is worth keeping here.** `notify` returns
     // `Ok(())` even when nobody is subscribed — it checks the peer's CCCD table and
     // returns early without sending — so its result cannot distinguish "sent" from
@@ -1510,11 +1694,51 @@ async fn notify_calibration(
     // app` on success, once a second, and did exactly that for a device whose
     // subscription could not be established at all (one CCCD slot, and the table's
     // first CCCD was not ours — see `docs/GOTCHAS.md`). Whether anybody is
-    // listening is reported where it can be known:
-    // `is_subscribed`, once a tick, in the caller.
-    if characteristic.notify(conn, payload).await.is_err() {
-        warn!("calibration notify failed");
+    // listening is reported where it can be known: `is_subscribed`, once a tick, in
+    // the caller.
+    sync.send_calibration(&calibration, conn).await;
+}
+
+/// Send everything the app is owed, in the order it is waiting for it.
+///
+/// The whole send path, and the reason it is a call rather than a loop that runs to
+/// completion: the pipe carries one *message* at a time, and a message is finished by
+/// an acknowledgement that arrives as a write. So this is called whenever something
+/// might have freed the pipe — a tick, a write, a trace request — and does as little
+/// as it can get away with.
+///
+/// The order is the app's: a trace it asked for (and is timing out on), then the
+/// calibration status (which is what tells it whether to expect reps at all), then
+/// the summaries, which are the bulk and can wait.
+///
+/// The exemption is the composition: three awaited futures in one function is one
+/// future holding all three, and the lint adds them up. It is the same stack the
+/// event loop held before the pipe — the calibration and summary steps were awaited
+/// side by side in that block — and the alternative is writing this order down twice,
+/// once per call site, for the lint's benefit rather than the device's.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "1724 B: the three senders' futures, composed because the pipe carries one message at a time"
+)]
+async fn keep_sending(
+    store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
+    rec_buf: &mut [u8],
+    rec: &mut msg::RepRecord,
+    batch: &mut SummaryBatch,
+    sync: &mut Sync<'_>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
+    cursor: &mut SummaryCursor,
+) {
+    if !sync.session.is_idle() {
+        return;
     }
+    // A trace chunk, if one is being streamed. Asking for the next one *moves* the
+    // cursor, so this is only asked once the pipe is free.
+    if sync.session.streaming() && sync.send_trace_chunk(conn).await {
+        return;
+    }
+    notify_calibration(sync, conn).await;
+    stream_new_summaries(store, rec_buf, rec, batch, sync, conn, cursor).await;
 }
 
 /// A decoded-record scratch on the heap.
@@ -1537,6 +1761,26 @@ async fn notify_calibration(
 #[inline(never)]
 fn leak_record_scratch() -> &'static mut msg::RepRecord {
     Box::leak(Box::new(msg::RepRecord::default()))
+}
+
+/// The pipe's session on the heap, for the same reason as the record scratch: the
+/// buffers it holds are handed over rather than built here, but the struct itself is
+/// not small, and `main`'s frame is the bottom of the stack the BLE stack runs on.
+#[inline(never)]
+fn leak_session(
+    outgoing: &'static mut [u8],
+    incoming: &'static mut [u8],
+    points: &'static mut [TracePoint],
+) -> &'static mut Session<'static> {
+    Box::leak(Box::new(Session::new(outgoing, incoming, points)))
+}
+
+/// Milliseconds since `start`, which is what the pipe's timeouts are measured in.
+///
+/// Any monotonic reference will do — a transfer's stall timeout is a difference — so
+/// this is the connection's own start rather than the device's uptime.
+fn now_ms(start: Instant) -> u32 {
+    start.elapsed().as_millis() as u32
 }
 
 /// Bytes of stack used so far, from the bottom of the main stack.

@@ -189,6 +189,72 @@ impl<'a> Session<'a> {
         self.trace.is_some()
     }
 
+    /// What is in flight, for the log line when a transfer is retried or given up
+    /// on. [`Kind::Summary`] when nothing is — the only caller that asks is writing
+    /// about a transfer that exists.
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// Send a summary, a message built here rather than by the caller.
+    ///
+    /// The three `send_*` methods exist because a `SyncMessage` is 2 KB *by value*
+    /// — one of its variants is a whole trace chunk — and a firmware task's future
+    /// is the wrong place for that: a value built and encoded inside a plain method
+    /// call is a stack frame that is gone before the notification is awaited. The
+    /// general `send` below is for callers whose message is not one of Calypso's
+    /// three, and for tests.
+    pub fn send_summary(&mut self, summary: &msg::RepSummary) -> bool {
+        self.send(
+            Kind::Summary,
+            &crate::sync::summary_message(summary.clone()),
+        )
+    }
+
+    /// Send the IMU's calibration status.
+    pub fn send_calibration(&mut self, calibration: &crate::calibration::Calibration) -> bool {
+        self.send(
+            Kind::Calibration,
+            &crate::sync::calibration_message(calibration),
+        )
+    }
+
+    /// Send the next chunk of the trace being streamed, if there is one: the cursor
+    /// moves here, so this is only called when the pipe is free.
+    ///
+    /// `false` when the trace is finished (or was never started), which is also when
+    /// the stream is forgotten.
+    pub fn send_next_trace_chunk(&mut self) -> bool {
+        let Some(index) = self.take_trace_chunk() else {
+            self.trace = None;
+            return false;
+        };
+        let (rep_uuid, t0_ms, total_chunks) = match self.trace {
+            Some(trace) => (trace.rep_uuid, trace.t0_ms, trace.total_chunks),
+            None => return false,
+        };
+        let start = (index as usize) * TRACE_CHUNK_SAMPLES;
+        let end = (start + TRACE_CHUNK_SAMPLES).min(self.points_len);
+        let Some(points) = self.points.get(start..end) else {
+            return false;
+        };
+        let chunk = pb::chunk_message(rep_uuid, index, t0_ms, total_chunks, points);
+        self.send(
+            Kind::Trace,
+            &msg::SyncMessage {
+                body: Some(msg::SyncMessage_::Body::Trace(chunk)),
+            },
+        )
+    }
+
+    /// The next chunk index of the trace being streamed, moving the cursor.
+    fn take_trace_chunk(&mut self) -> Option<u32> {
+        let mut trace = self.trace?;
+        let index = trace.take_next()?;
+        self.trace = Some(trace);
+        Some(index)
+    }
+
     /// Begin sending `message`, which is one transfer whatever its size.
     ///
     /// `false` if a transfer is still in flight (the caller tries again when the
@@ -395,35 +461,5 @@ impl<'a> Session<'a> {
     /// Stop streaming a trace, whatever is left of it.
     pub fn stop_trace(&mut self) {
         self.trace = None;
-    }
-
-    /// The next `TraceChunk` to send, as the message the pipe carries, or `None`
-    /// when there is no trace or the last chunk has gone out.
-    ///
-    /// One chunk per transfer, so this is called once per acknowledgement: the
-    /// trace travels as a sequence of transfers rather than as a stream of
-    /// three-point notifications, and the app reassembles it by `index` exactly as
-    /// it did before.
-    pub fn next_trace_message(&mut self) -> Option<msg::SyncMessage> {
-        let mut trace = self.trace?;
-        let Some(index) = trace.take_next() else {
-            self.trace = None;
-            return None;
-        };
-        self.trace = Some(trace);
-
-        let start = (index as usize) * TRACE_CHUNK_SAMPLES;
-        let end = (start + TRACE_CHUNK_SAMPLES).min(self.points_len);
-        let points = self.points.get(start..end)?;
-        let chunk = pb::chunk_message(
-            trace.rep_uuid,
-            index,
-            trace.t0_ms,
-            trace.total_chunks,
-            points,
-        );
-        Some(msg::SyncMessage {
-            body: Some(msg::SyncMessage_::Body::Trace(chunk)),
-        })
     }
 }

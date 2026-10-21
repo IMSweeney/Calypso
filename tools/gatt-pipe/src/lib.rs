@@ -51,6 +51,13 @@
 //! receiver acknowledges at least every `window / 2` chunks and always on END. Both
 //! directions use the same frame and the same rules, and an acknowledgement travels
 //! on the opposite characteristic from the data it is about.
+//!
+//! `no_std`, and no dependency beyond `core`: half of it runs on a device with no
+//! allocator, and the other half in an app. The unit tests below are the exception,
+//! since the test harness itself needs `std` — hence `not(test)` rather than a bare
+//! `#![no_std]`, which is the same spelling `calypso-core` uses.
+
+#![cfg_attr(not(test), no_std)]
 
 use core::fmt;
 

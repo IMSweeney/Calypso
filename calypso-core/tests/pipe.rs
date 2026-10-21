@@ -400,8 +400,7 @@ fn a_trace_stream_survives_the_transfers_it_is_made_of() {
     let mut indices = Vec::new();
     let mut samples = Vec::new();
     let mut now = 0u32;
-    while let Some(message) = session.next_trace_message() {
-        assert!(session.send(Kind::Trace, &message), "the pipe was free");
+    while session.send_next_trace_chunk() {
         let mut got = None;
         for frame in drain(&mut session, MTU) {
             now += 10;
@@ -439,16 +438,25 @@ fn a_single_chunk_request_sends_the_one_chunk() {
     }
     session.start_trace(fixture_uuid(3), 1000, 48, Some(0));
 
-    let message = session.next_trace_message().expect("one chunk");
-    match &message.body {
+    assert!(session.send_next_trace_chunk(), "one chunk");
+    let frames = drain(&mut session, MTU);
+    let mut phone = Phone::new();
+    let mut now = 0;
+    let mut got = None;
+    for frame in &frames {
+        now += 10;
+        got = phone.take(&mut session, frame, now).or(got);
+    }
+    match pb::decode_sync(&got.expect("it arrived")).unwrap().body {
         Some(msg::SyncMessage_::Body::Trace(chunk)) => {
             assert_eq!(chunk.index, 0);
             assert_eq!(chunk.samples.len(), TRACE_CHUNK_SAMPLES);
         }
         other => panic!("expected a trace chunk, got {other:?}"),
     }
-    assert!(session.next_trace_message().is_none(), "and no more");
+    assert!(!session.send_next_trace_chunk(), "and no more");
     assert!(!session.streaming());
+    assert!(session.is_idle());
 }
 
 #[test]
@@ -457,7 +465,7 @@ fn an_empty_trace_streams_nothing() {
     let mut session = buffers.session();
     session.trace_storage();
     session.start_trace(fixture_uuid(1), 0, 0, None);
-    assert!(session.next_trace_message().is_none());
+    assert!(!session.send_next_trace_chunk());
     assert!(!session.streaming());
 }
 
@@ -471,8 +479,7 @@ fn a_lost_chunk_leaves_the_app_waiting_for_the_rest_of_a_trace() {
     session.start_trace(fixture_uuid(2), 1000, 48, None);
     assert!(session.streaming());
 
-    let message = session.next_trace_message().expect("a chunk");
-    assert!(session.send(Kind::Trace, &message));
+    assert!(session.send_next_trace_chunk(), "a chunk");
     let frames = drain(&mut session, MTU);
     assert!(!frames.is_empty());
 
