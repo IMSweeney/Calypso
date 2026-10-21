@@ -122,13 +122,18 @@ pub fn overhead(total_len: Option<u32>) -> usize {
 ///
 /// The MTU is the negotiated one, read from the connection: assuming 247 is how a
 /// notification becomes a silent no-op on a link that negotiated less.
+///
+/// Two ceilings, whichever is lower. The link's: the MTU, less the ATT header and
+/// the frame. And the buffer's: `chunk_max` is the characteristic's backing
+/// buffer, which holds the *frame*, so the header and the CRC come out of it too.
+/// A peer that negotiates more than `chunk_max + 3` would otherwise be handed a
+/// chunk too big for the buffer it is built in — and every phone negotiates more
+/// if it is asked to.
 pub fn capacity(mtu: usize, chunk_max: usize, total_len: u32) -> Option<usize> {
-    let usable = mtu.checked_sub(ATT_HEADER + overhead(Some(total_len)))?;
-    let limit = if chunk_max < usable {
-        chunk_max
-    } else {
-        usable
-    };
+    let frame = overhead(Some(total_len));
+    let usable = mtu.checked_sub(ATT_HEADER + frame)?;
+    let buffer = chunk_max.checked_sub(frame)?;
+    let limit = if usable < buffer { usable } else { buffer };
     if limit == 0 {
         None
     } else {
@@ -748,6 +753,13 @@ mod tests {
         // MTU: the rest is the frame.
         assert_eq!(
             capacity(247, DEFAULT_CHUNK_MAX, 100),
+            Some(244 - overhead(Some(100)))
+        );
+        // A link the buffer cannot fill: an MTU of 517 (an Android phone asking
+        // for the most it can) would put 244 bytes of payload and a five-byte
+        // frame into a 244-byte buffer, so the buffer's ceiling wins.
+        assert_eq!(
+            capacity(517, DEFAULT_CHUNK_MAX, 100),
             Some(244 - overhead(Some(100)))
         );
         // A link that cannot carry a frame is not a link.

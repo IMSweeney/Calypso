@@ -22,6 +22,22 @@ void main() {
     throw StateError('the vector file parsed to nothing');
   }
 
+  test('capacity keeps the frame inside the chunk buffer', () {
+    // The same ceilings as the Rust reference: the link's, and the buffer's.
+    expect(capacity(23, defaultChunkMax, 100), 15);
+    expect(
+      capacity(247, defaultChunkMax, 100),
+      defaultChunkMax - overhead(100),
+    );
+    // An MTU a phone asked the most of would otherwise put a five-byte frame on
+    // top of 244 bytes of payload in a 244-byte buffer.
+    expect(
+      capacity(517, defaultChunkMax, 100),
+      defaultChunkMax - overhead(100),
+    );
+    expect(capacity(6, defaultChunkMax, 0), isNull);
+  });
+
   for (final pipeCase in cases) {
     test(pipeCase.name, () {
       final outcome = _pump(pipeCase);

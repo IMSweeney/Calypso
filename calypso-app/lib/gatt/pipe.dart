@@ -76,10 +76,18 @@ int overhead(int? totalLen) =>
     _header + _crc + (totalLen == null ? 0 : varintLen(totalLen));
 
 /// How much payload fits in one chunk of a link whose ATT MTU is [mtu].
+///
+/// Two ceilings, whichever is lower: the link's ([mtu] less the ATT header and
+/// the frame), and the buffer's — [chunkMax] is the characteristic's backing
+/// buffer and holds the *frame*, so the header and the CRC come out of it too.
+/// A peer negotiating more than `chunkMax + 3` would otherwise get a chunk too
+/// big for the buffer it is built in.
 int? capacity(int mtu, int chunkMax, int totalLen) {
-  final usable = mtu - _attHeader - overhead(totalLen);
-  if (usable < 0) return null;
-  final limit = chunkMax < usable ? chunkMax : usable;
+  final frame = overhead(totalLen);
+  final usable = mtu - _attHeader - frame;
+  final buffer = chunkMax - frame;
+  if (usable < 0 || buffer < 0) return null;
+  final limit = usable < buffer ? usable : buffer;
   return limit == 0 ? null : limit;
 }
 
