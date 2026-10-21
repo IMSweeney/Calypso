@@ -397,13 +397,18 @@ impl Sender {
     ///
     /// `capacity` is what the link carries ([`capacity`], from the negotiated
     /// MTU), and the flags say whether the chunk starts, ends or *is* the message.
+    ///
+    /// `Done` once the END chunk has gone out, which is what an empty message
+    /// needs as much as a long one: the whole message is on the wire, and only the
+    /// acknowledgement is outstanding. The transfer stays `active` until then —
+    /// that is what keeps the next message waiting.
     pub fn next(
         &mut self,
         message: &[u8],
         capacity: usize,
         out: &mut [u8],
     ) -> Result<Send, SendError> {
-        if !self.active {
+        if !self.active || self.end_sent {
             return Ok(Send::Done);
         }
         if self.in_flight >= self.window {
@@ -586,6 +591,13 @@ impl Receiver {
 
     pub fn in_transfer(&self) -> bool {
         self.expected.is_some()
+    }
+
+    /// The next sequence number this end expects, which is what a refusal names:
+    /// a NAK tells the sender where the receiver is, so that it can send the
+    /// transfer again from the beginning.
+    pub fn next_expected(&self) -> u8 {
+        self.seq
     }
 
     /// Take one chunk. `buffer` is the reassembly buffer and `max_message` its

@@ -17,6 +17,13 @@ pub const SCHEMA_HASH: u64 = 0xbf459163d32876f6;
 
 /// Backing buffer for a pipe characteristic's chunk.
 pub const PIPE_CHUNK_MAX: usize = 244;
+/// What a chunk's *frame* is stored in, which is one byte more than the
+/// largest frame. `trouble-host`'s attribute table keeps a
+/// variable-length value's length from the value it was built with and
+/// does not update it for a write that fills the buffer *exactly*, so a
+/// buffer a frame can fill reads back empty. One spare byte means no
+/// frame can be that size (see docs/GOTCHAS.md).
+pub const PIPE_STORAGE_MAX: usize = PIPE_CHUNK_MAX + 1;
 
 /// The UUIDs the schema declares.
 ///
@@ -63,13 +70,13 @@ pub struct SyncService {
     /// Pipe "sync": this value carries chunks and the pipe runtime owns it,
     /// so nothing here decodes it as a message.
     #[characteristic(uuid = "0000ca22-b0cd-11ec-871f-d45ddf138840", write_without_response)]
-    pub requests: Vec<u8, PIPE_CHUNK_MAX>,
+    pub requests: Vec<u8, PIPE_STORAGE_MAX>,
     /// `Messages` (0000ca21-b0cd-11ec-871f-d45ddf138840), calypso.SyncMessage.
     ///
     /// Pipe "sync": this value carries chunks and the pipe runtime owns it,
     /// so nothing here decodes it as a message.
     #[characteristic(uuid = "0000ca21-b0cd-11ec-871f-d45ddf138840", notify)]
-    pub messages: Vec<u8, PIPE_CHUNK_MAX>,
+    pub messages: Vec<u8, PIPE_STORAGE_MAX>,
 }
 
 /// Every service in the schema, and the table they are built into.

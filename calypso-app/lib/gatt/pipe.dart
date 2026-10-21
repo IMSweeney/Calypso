@@ -258,8 +258,13 @@ class Sender {
   }
 
   /// The next chunk to send, written into [out].
+  ///
+  /// [SendState.done] once the END chunk has gone out, which is what an empty
+  /// message needs as much as a long one: the whole message is on the wire, and
+  /// only the acknowledgement is outstanding. The transfer stays active until
+  /// then, which is what keeps the next message waiting.
   Send next(Uint8List message, int capacity, Uint8List out) {
-    if (!_active) return const Send.done();
+    if (!_active || _endSent) return const Send.done();
     if (_inFlight >= window) return const Send.windowFull();
 
     final remaining = _messageLen - _offset;
@@ -377,6 +382,11 @@ class Receiver {
   bool _repeated = false;
 
   bool get inTransfer => _expected != null;
+
+  /// The next sequence number this end expects, which is what a refusal names:
+  /// a NAK tells the sender where the receiver is, so that it can send the
+  /// transfer again from the beginning.
+  int get nextExpected => _seq;
 
   /// Take one chunk. [buffer] is the reassembly buffer and [maxMessage] its size.
   Received onChunk(Uint8List chunk, Uint8List buffer, int maxMessage) {

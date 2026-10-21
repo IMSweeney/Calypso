@@ -111,7 +111,14 @@ pub fn generate(gatt: &Gatt, config: &Config) -> Result<Output, Error> {
          /// believed. Protobuf would otherwise decode a mismatch silently.\n\
          pub const SCHEMA_HASH: u64 = {:#018x};\n\n\
          /// Backing buffer for a pipe characteristic's chunk.\n\
-         pub const PIPE_CHUNK_MAX: usize = {};\n",
+         pub const PIPE_CHUNK_MAX: usize = {};\n\
+         /// What a chunk's *frame* is stored in, which is one byte more than the\n\
+         /// largest frame. `trouble-host`'s attribute table keeps a\n\
+         /// variable-length value's length from the value it was built with and\n\
+         /// does not update it for a write that fills the buffer *exactly*, so a\n\
+         /// buffer a frame can fill reads back empty. One spare byte means no\n\
+         /// frame can be that size (see docs/GOTCHAS.md).\n\
+         pub const PIPE_STORAGE_MAX: usize = PIPE_CHUNK_MAX + 1;\n",
         gatt.schema_hash(),
         config.pipe_chunk_max
     );
@@ -730,9 +737,12 @@ fn decoded_type(characteristic: &Characteristic, config: &Config) -> String {
 }
 
 /// The characteristic's storage: the value itself, or a chunk buffer for a pipe.
+///
+/// A pipe's is `PIPE_STORAGE_MAX`, one byte wider than the largest frame it can
+/// hold: see the constant for why the spare byte is not slack.
 fn storage_type(characteristic: &Characteristic, len: u32) -> String {
     if characteristic.pipe.is_some() {
-        return "Vec<u8, PIPE_CHUNK_MAX>".to_string();
+        return "Vec<u8, PIPE_STORAGE_MAX>".to_string();
     }
     match characteristic.value_type() {
         ValueType::Message(_) => value_type_name(characteristic),

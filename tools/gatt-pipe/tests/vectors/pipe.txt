@@ -30,7 +30,7 @@ small mtu|300|23|512|0|0|0|0|500|1|22
 exactly the buffer|256|247|256|0|0|0|0|500|1|2
 empty message|0|247|256|0|0|0|0|500|1|1
 a chunk dropped|600|247|1024|2|0|0|0|500|1|6
-a chunk corrupted|600|247|1024|0|3|0|0|500|1|7
+a chunk corrupted|600|247|1024|0|3|0|0|500|1|6
 a chunk duplicated|600|247|1024|0|0|2|0|500|1|3
 every ack swallowed, short|600|247|1024|0|0|0|1|500|1|3
 every ack swallowed, long|4000|247|4096|0|0|0|1|500|0|24

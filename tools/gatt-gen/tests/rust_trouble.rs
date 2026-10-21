@@ -29,7 +29,7 @@ fn a_characteristic_gets_exactly_the_properties_the_schema_declared() {
     // decoded message.
     assert!(source.contains("write_without_response)]"), "{source}");
     assert!(
-        source.contains("pub rx: Vec<u8, PIPE_CHUNK_MAX>"),
+        source.contains("pub rx: Vec<u8, PIPE_STORAGE_MAX>"),
         "{source}"
     );
 }

@@ -364,6 +364,35 @@ message kind, and the three senders encode into one shared buffer. The remaining
 to get this wrong is the *other* direction: a request the app writes is rejected by the
 stack if it does not fit `sync.requests`, and the app sees the failure.
 
+**Since the pipe.** Both characteristics carry chunks rather than messages, and the
+numbers are the schema's (`--chunk-max`, `--pipe-msg-max`): a message larger than one
+value is cut up and reassembled by the other end, and the generated table asserts
+`micropb`'s worst case for each message against the reassembly buffer *at build time*,
+so a message that could not arrive is a failed build rather than a stream that stops.
+What is left of the truncation is the stack's own: `gatt::assemble` truncates an
+over-long PDU to the negotiated ATT MTU, which is why a chunk is sized from
+`conn.raw().att_mtu()` and never from an assumed 247.
+
+### A write that fills a chunk characteristic reads back empty
+
+**Symptom.** The device stores a chunk and reads it back as nothing: the pipe sees an
+empty write, refuses it as a frame that does not check out, and the app's transfer is
+retried three times and then given up on. Nothing is logged, at either end.
+
+**Cause.** `trouble-host`'s attribute table keeps a variable-length value as a fixed
+buffer plus a length, and the length comes from the value the characteristic was *built*
+with — `Vec::<u8, N>::default()`, whose length is zero. A write shorter than the buffer
+takes `set_raw`'s variable-length branch and updates that length; a write that fills the
+buffer *exactly* takes the equal-length branch, which copies the bytes and returns
+without touching the length, so `table.get` reads `&value[..0]`.
+
+**Fix.** The generator gives a pipe characteristic one byte more than the largest frame
+it can receive (`PIPE_STORAGE_MAX`), so no frame can be exactly the buffer's size. The
+spare byte is not slack — it is what keeps that branch out of reach.
+
+**How it was found.** `calypso-core/tests/gatt.rs` writes a full frame through the table
+and reads it back. It failed at 244 bytes into a 244-byte buffer and passes at 245.
+
 ### The app's trace timeout is about silence, not the size of the rep
 
 **Symptom.** A long rep's trace stops part-way and the rep lands in the archive without
