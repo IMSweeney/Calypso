@@ -35,6 +35,31 @@ DumpReadResult readDump(Uint8List bytes) {
   return DumpReadResult(records, truncated: pos != bytes.length);
 }
 
+/// What a `SyncMessage` carries, for a log line: its body and what that body is
+/// about.
+///
+/// The bytes are logged at the plugin seam (`raw`), which is where "the value
+/// arrived at all" is answered. Above the seam this is the more useful half of
+/// the pair: what the transport actually handled, without re-reading hex.
+String describeSyncMessage(SyncMessage message) {
+  switch (message.whichBody()) {
+    case SyncMessage_Body.summary:
+      return 'summary rep=${uuidFromBytes(message.summary.repUuid) ?? '?'}';
+    case SyncMessage_Body.trace:
+      final chunk = message.trace;
+      final rep = uuidFromBytes(chunk.repUuid) ?? '?';
+      return 'trace rep=$rep chunk=${chunk.index + 1}/${chunk.totalChunks}';
+    case SyncMessage_Body.status:
+      return 'status reps=${message.status.repCount}';
+    case SyncMessage_Body.calibration:
+      final status = message.calibration;
+      return 'calibration sys=${status.sys} accel=${status.accel} '
+          'gyro=${status.gyro} mag=${status.mag} ready=${status.ready}';
+    case SyncMessage_Body.notSet:
+      return 'empty';
+  }
+}
+
 List<RepSummary> summariesOf(List<RepRecord> records) =>
     records.where((r) => r.hasSummary()).map((r) => r.summary).toList();
 

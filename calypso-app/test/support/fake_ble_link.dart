@@ -30,6 +30,9 @@ class FakeBleLink implements BleLink {
 
   final List<(String, Uint8List)> writes = [];
 
+  /// Whether each write asked for a response, in the order they were issued.
+  final List<bool> writeResponses = [];
+
   void Function(String deviceId, String? name)? _onScanResult;
   void Function(String deviceId, bool connected, String? error)?
   _onConnectionChange;
@@ -107,14 +110,18 @@ class FakeBleLink implements BleLink {
           )
           .stream;
 
+  /// Every write, as (characteristic, bytes), and whether each asked for a
+  /// response.
   @override
   Future<void> write(
     String deviceId,
     String serviceUuid,
     String characteristicUuid,
-    Uint8List value,
-  ) async {
+    Uint8List value, {
+    bool withResponse = true,
+  }) async {
     writes.add((characteristicUuid, value));
+    writeResponses.add(withResponse);
   }
 
   void seeDevice(String deviceId, [String? name]) =>

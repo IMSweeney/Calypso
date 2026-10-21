@@ -6,6 +6,7 @@ import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:calypso/state/ble_status.dart';
 import 'package:calypso/store/memory_archive.dart';
 import 'package:calypso/store/archive_sync.dart';
+import 'package:calypso/gatt/gatt_client.dart';
 import 'package:calypso/transport/ble_link.dart';
 import 'package:calypso/transport/ble_transport.dart';
 import 'package:calypso/model/calibration.dart';
@@ -96,13 +97,13 @@ void main() {
       final link = FakeBleLink();
       final transport = await connectedTransport(link);
 
-      expect(link.scans.single, [CalypsoGatt.service]);
+      expect(link.scans.single, [SyncClient.serviceUuid]);
       expect(
         link.scanning,
         isFalse,
         reason: 'the scan stops once a device is found',
       );
-      expect(link.subscribed, [CalypsoGatt.messages]);
+      expect(link.subscribed, [SyncClient.messagesUuid]);
       expect(transport.status.status, BleStatus.connected);
       expect(transport.status.deviceId, 'device-1');
     },
@@ -115,7 +116,7 @@ void main() {
     expect(link.calls, [
       'connect',
       'discoverServices',
-      'subscribe:${CalypsoGatt.messages}',
+      'subscribe:${SyncClient.messagesUuid}',
     ]);
     expect(link.discovered, ['device-1']);
     expect(transport.status.status, BleStatus.connected);
@@ -202,9 +203,9 @@ void main() {
       final seen = <String>[];
       final sub = transport.watchSummaries().listen((s) => seen.add(s.uuid!));
 
-      link.notify(CalypsoGatt.messages, summaryMessage(u(1)));
-      link.notify(CalypsoGatt.messages, summaryMessage(u(2)));
-      link.notify(CalypsoGatt.messages, summaryMessage(u(2)));
+      link.notify(SyncClient.messagesUuid, summaryMessage(u(1)));
+      link.notify(SyncClient.messagesUuid, summaryMessage(u(2)));
+      link.notify(SyncClient.messagesUuid, summaryMessage(u(2)));
       await pumpEventQueue();
 
       expect(seen, [u(1), u(2)]);
@@ -222,25 +223,25 @@ void main() {
     () async {
       final link = FakeBleLink();
       final transport = await connectedTransport(link);
-      link.notify(CalypsoGatt.messages, summaryMessage(u(1), traceLen: 7));
+      link.notify(SyncClient.messagesUuid, summaryMessage(u(1), traceLen: 7));
       await pumpEventQueue();
 
       final pending = transport.trace(u(1));
       await pumpEventQueue();
 
       final request = pb.SyncRequest.fromBuffer(
-        link.lastWriteTo(CalypsoGatt.requests),
+        link.lastWriteTo(SyncClient.requestsUuid),
       ).trace;
       expect(uuidFromBytes(request.repUuid), u(1));
       expect(request.allChunks, isTrue);
 
       link.notify(
-        CalypsoGatt.messages,
+        SyncClient.messagesUuid,
         chunkMessage(u(1), 2, 3, points: 1, from: 6),
       );
-      link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 3, from: 0));
-      link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 3, from: 0));
-      link.notify(CalypsoGatt.messages, chunkMessage(u(1), 1, 3, from: 3));
+      link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 0, 3, from: 0));
+      link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 0, 3, from: 0));
+      link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 1, 3, from: 3));
       await pumpEventQueue();
 
       final trace = await pending;
@@ -258,8 +259,8 @@ void main() {
     final pending = transport.trace(u(1));
     await pumpEventQueue();
 
-    link.notify(CalypsoGatt.messages, chunkMessage(u(99), 0, 1, from: 0));
-    link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 1, from: 0));
+    link.notify(SyncClient.messagesUuid, chunkMessage(u(99), 0, 1, from: 0));
+    link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 0, 1, from: 0));
     await pumpEventQueue();
 
     expect((await pending).length, 3);
@@ -273,7 +274,7 @@ void main() {
     await pumpEventQueue();
 
     link.notify(
-      CalypsoGatt.messages,
+      SyncClient.messagesUuid,
       chunkMessage(u(1), 0, 0, totalOverride: 0),
     );
     await pumpEventQueue();
@@ -313,8 +314,8 @@ void main() {
     final pending = transport.trace(u(3));
     await pumpEventQueue();
 
-    link.notify(CalypsoGatt.messages, chunkMessage(u(3), 0, 5, from: 0));
-    link.notify(CalypsoGatt.messages, chunkMessage(u(3), 1, 5, from: 3));
+    link.notify(SyncClient.messagesUuid, chunkMessage(u(3), 0, 5, from: 0));
+    link.notify(SyncClient.messagesUuid, chunkMessage(u(3), 1, 5, from: 3));
     await pumpEventQueue();
 
     await expectLater(
@@ -357,7 +358,7 @@ void main() {
     final transport = await connectedTransport(link);
     final first = transport.trace(u(1));
     await pumpEventQueue();
-    link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 1, from: 0));
+    link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 0, 1, from: 0));
     await first;
 
     final writesBefore = link.writes.length;
@@ -378,9 +379,9 @@ void main() {
 
       final pending = transport.trace(u(1));
       await pumpEventQueue();
-      link.notify(CalypsoGatt.messages, chunkMessage(u(1), 0, 2));
+      link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 0, 2));
       await Future<void>.delayed(const Duration(milliseconds: 90));
-      link.notify(CalypsoGatt.messages, chunkMessage(u(1), 1, 2));
+      link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 1, 2));
       await Future<void>.delayed(const Duration(milliseconds: 90));
 
       expect((await pending).length, 6, reason: 'two 3-point chunks');
@@ -397,7 +398,7 @@ void main() {
       expect(transport.calibration.latest, isNull);
 
       link.notify(
-        CalypsoGatt.messages,
+        SyncClient.messagesUuid,
         calibrationMessage(sys: 1, accel: 1, gyro: 2),
       );
       await pumpEventQueue();
@@ -411,13 +412,13 @@ void main() {
       var notifications = 0;
       transport.calibration.addListener(() => notifications++);
       link.notify(
-        CalypsoGatt.messages,
+        SyncClient.messagesUuid,
         calibrationMessage(sys: 1, accel: 1, gyro: 2),
       );
       await pumpEventQueue();
       expect(notifications, 0);
 
-      link.notify(CalypsoGatt.messages, calibrationMessage());
+      link.notify(SyncClient.messagesUuid, calibrationMessage());
       await pumpEventQueue();
       expect(notifications, 1);
       expect(transport.calibration.isReady, isTrue);
@@ -434,10 +435,10 @@ void main() {
     final transport = await connectedTransport(link);
 
     link.notify(
-      CalypsoGatt.messages,
+      SyncClient.messagesUuid,
       Uint8List.fromList([0xFF, 0xFF, 0xFF, 0xFF]),
     );
-    link.notify(CalypsoGatt.messages, Uint8List.fromList([0x00]));
+    link.notify(SyncClient.messagesUuid, Uint8List.fromList([0x00]));
     await pumpEventQueue();
 
     expect(await transport.summaries(), isEmpty);
@@ -447,7 +448,7 @@ void main() {
       reason: 'still connected',
     );
 
-    link.notify(CalypsoGatt.messages, summaryMessage(u(4)));
+    link.notify(SyncClient.messagesUuid, summaryMessage(u(4)));
     await pumpEventQueue();
     expect((await transport.summaries()).single.uuid, u(4));
     await transport.close();
@@ -458,8 +459,8 @@ void main() {
     () async {
       final link = FakeBleLink();
       final transport = await connectedTransport(link);
-      link.notify(CalypsoGatt.messages, summaryMessage(u(1), traceLen: 7));
-      link.notify(CalypsoGatt.messages, summaryMessage(u(2), traceLen: 7));
+      link.notify(SyncClient.messagesUuid, summaryMessage(u(1), traceLen: 7));
+      link.notify(SyncClient.messagesUuid, summaryMessage(u(2), traceLen: 7));
       await pumpEventQueue();
 
       transport.watchSummaries().listen((_) {});
@@ -468,13 +469,13 @@ void main() {
           await Future<void>.delayed(const Duration(milliseconds: 5));
           if (link.writes.isEmpty) continue;
           final request = pb.SyncRequest.fromBuffer(
-            link.lastWriteTo(CalypsoGatt.requests),
+            link.lastWriteTo(SyncClient.requestsUuid),
           ).trace;
           final requested = uuidFromBytes(request.repUuid);
           if (requested == null) continue;
           for (var index = 0; index < 3; index++) {
             link.notify(
-              CalypsoGatt.messages,
+              SyncClient.messagesUuid,
               chunkMessage(
                 requested,
                 index,

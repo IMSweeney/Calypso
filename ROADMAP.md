@@ -60,6 +60,15 @@ Where Calypso is and what is left. Feature documentation lives in
   its `PLAN.md` for what was verified against `trouble-host` and what it cannot do.
   **Not yet checked on hardware**, and the app still speaks the same three UUIDs by
   hand.
+- **The app's BLE client is generated from the same schema** — `SyncClient` in
+  `calypso-app/lib/gatt/gatt_client.dart` carries the service and characteristic
+  UUIDs, subscribes, and decodes and encodes the two messages, all from
+  `proto/calypso_gatt.proto` by way of `calypso-app/tool/gen_gatt.sh` (committed,
+  like the table, with `calypso-core/tests/gatt_generated.rs` checking both). It
+  reaches the radio through a four-method interface it declares itself, which the
+  app implements over `BleLink` and the tests implement as a fake — so the
+  generated client is exercised without hardware. `BleTransport` keeps what a
+  schema cannot say: scanning, connecting, trace reassembly and its timeouts.
 - **A device name that cannot be written** — the name is a compile-time constant, GAP
   is read-only, and the NVS name blob and its codec are gone. The gravity service and
   characteristic went the same way (the level verdict in the firmware log is now its

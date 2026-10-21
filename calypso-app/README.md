@@ -92,6 +92,17 @@ PROTOC="$(find ~/.cargo/registry/src -name protoc -path '*macos*' | head -1)" \
   ./tool/gen_proto.sh
 ```
 
+The BLE client is generated from the same schema by `gatt-gen`, also checked in:
+
+```sh
+./tool/gen_gatt.sh          # needs a Rust toolchain; brings its own protoc
+```
+
+`lib/gatt/gatt_client.dart` is the schema's typed client, and `lib/transport/`
+is what wraps it: scanning, connecting, reassembly and the timeouts a schema
+cannot describe. `calypso-core/tests/gatt_generated.rs` fails if the committed
+client and `proto/calypso_gatt.proto` disagree.
+
 Fixtures are generated from the core crate, not written by hand:
 
 ```sh

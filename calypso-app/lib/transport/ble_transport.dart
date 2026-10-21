@@ -5,23 +5,27 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show debugPrint;
 
+import '../gatt/gatt_client.dart';
 import '../logging/loggers.dart';
 import '../model/uuid.dart';
 import '../protocol/calypso.pb.dart' as pb;
+import '../protocol/pblog.dart';
 import '../state/ble_status.dart';
 import '../state/calibration.dart';
 import '../sync/trace_reassembly.dart';
 import 'ble_link.dart';
+import 'gatt_link.dart';
 import 'transport.dart';
-
-class CalypsoGatt {
-  static const String service = '0000ca20-b0cd-11ec-871f-d45ddf138840';
-  static const String messages = '0000ca21-b0cd-11ec-871f-d45ddf138840';
-  static const String requests = '0000ca22-b0cd-11ec-871f-d45ddf138840';
-}
 
 enum _Direction { rx, tx }
 
+/// Reaching the device through the generated client: [SyncClient] and its
+/// `GattClientLink` come from `proto/calypso_gatt.proto` (see
+/// `lib/gatt/gatt_client.dart`), so the UUIDs, the directions and the message
+/// types are the schema's rather than this file's.
+///
+/// What stays here is what a schema cannot say: scanning, connecting, the trace
+/// reassembly and its timeouts, and what the archive is told.
 class BleTransport implements RepTransport {
   BleTransport(
     this._link, {
@@ -37,7 +41,8 @@ class BleTransport implements RepTransport {
   final CalibrationNotifier calibration = CalibrationNotifier();
 
   String? _deviceId;
-  StreamSubscription<Uint8List>? _messagesSub;
+  SyncClient? _client;
+  StreamSubscription<pb.SyncMessage>? _messagesSub;
   final StreamController<pb.RepSummary> _summaryCtrl =
       StreamController<pb.RepSummary>.broadcast();
 
@@ -73,14 +78,14 @@ class BleTransport implements RepTransport {
       return;
     }
 
-    bleLog.info('scanning for ${CalypsoGatt.service}');
+    bleLog.info('scanning for ${SyncClient.serviceUuid}');
     status.set(BleStatus.scanning);
     final found = Completer<String>();
     _link.onScanResult((deviceId, name) {
       if (!found.isCompleted) found.complete(deviceId);
     });
 
-    await _link.startScan([CalypsoGatt.service]);
+    await _link.startScan([SyncClient.serviceUuid]);
     String deviceId;
     try {
       deviceId = await found.future.timeout(scanTimeout);
@@ -102,7 +107,7 @@ class BleTransport implements RepTransport {
       var services = await _link.discoverServices(deviceId);
       debugPrint(
         'calypso: device offers ${_describe(services)}; '
-        'want ${CalypsoGatt.service}[${CalypsoGatt.messages}, ${CalypsoGatt.requests}]',
+        'want ${SyncClient.serviceUuid}[${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}]',
       );
       if (!_offersSync(services)) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -112,7 +117,7 @@ class BleTransport implements RepTransport {
         if (_offersReversed(services)) {
           throw StateError(
             'the device looks like it exposes its UUIDs reversed '
-            '(${_reversed(CalypsoGatt.service)}). Either it is running firmware from '
+            '(${_reversed(SyncClient.serviceUuid)}). Either it is running firmware from '
             'before the byte order was settled (reflash it), or this device has a '
             'cached GATT database from an older build — CoreBluetooth caches one per '
             'peripheral address and the plugin prefers it. Try turning Bluetooth '
@@ -121,16 +126,15 @@ class BleTransport implements RepTransport {
         }
         throw StateError(
           'device offers ${_describe(services)}, not both characteristics of '
-          '${CalypsoGatt.service} (${CalypsoGatt.messages}, ${CalypsoGatt.requests})',
+          '${SyncClient.serviceUuid} (${SyncClient.messagesUuid}, ${SyncClient.requestsUuid})',
         );
       }
-      await _link.subscribe(
-        deviceId,
-        CalypsoGatt.service,
-        CalypsoGatt.messages,
+      _client = SyncClient(BleLinkGattClient(_link, deviceId));
+      await _client!.subscribeMessages();
+      debugPrint(
+        'calypso: notifications enabled for ${SyncClient.messagesUuid}',
       );
-      debugPrint('calypso: notifications enabled for ${CalypsoGatt.messages}');
-      bleLog.info('subscribed to ${CalypsoGatt.messages}');
+      bleLog.info('subscribed to ${SyncClient.messagesUuid}');
     } catch (e) {
       bleLog.warning('could not connect to $deviceId: $e');
       status.set(BleStatus.failed, deviceId: deviceId, error: '$e');
@@ -143,9 +147,16 @@ class BleTransport implements RepTransport {
       if (!connected) _onConnectionLost(error);
     });
     try {
-      _messagesSub = _link
-          .valueStream(deviceId, CalypsoGatt.messages)
-          .listen(_onMessage);
+      // The client decodes, so a payload that will not decode arrives here as a
+      // stream error rather than as bytes the transport quietly drops. Say so and
+      // keep listening: the next notification may be fine, and the alternative is
+      // a session with nothing in it to read.
+      _messagesSub = _client!.messagesUpdates.listen(
+        _onMessage,
+        onError: (Object error) => bleLog.warning(
+          'undecodable message on ${SyncClient.messagesUuid}: $error',
+        ),
+      );
     } catch (e) {
       bleLog.warning('could not listen to $deviceId: $e');
       status.set(BleStatus.failed, deviceId: deviceId, error: '$e');
@@ -159,11 +170,13 @@ class BleTransport implements RepTransport {
 
   static bool _offersSync(List<DiscoveredService> services) => services.any(
     (service) =>
-        _sameUuid(service.uuid, CalypsoGatt.service) &&
+        _sameUuid(service.uuid, SyncClient.serviceUuid) &&
         service.characteristics.any(
-          (c) => _sameUuid(c, CalypsoGatt.messages),
+          (c) => _sameUuid(c, SyncClient.messagesUuid),
         ) &&
-        service.characteristics.any((c) => _sameUuid(c, CalypsoGatt.requests)),
+        service.characteristics.any(
+          (c) => _sameUuid(c, SyncClient.requestsUuid),
+        ),
   );
 
   static bool _sameUuid(String a, String b) =>
@@ -173,7 +186,7 @@ class BleTransport implements RepTransport {
       services.isEmpty ? 'no services' : services.join('; ');
 
   static bool _offersReversed(List<DiscoveredService> services) => services.any(
-    (service) => _sameUuid(service.uuid, _reversed(CalypsoGatt.service)),
+    (service) => _sameUuid(service.uuid, _reversed(SyncClient.serviceUuid)),
   );
 
   static String _reversed(String uuid) {
@@ -195,6 +208,7 @@ class BleTransport implements RepTransport {
     calibration.clear();
     _messagesSub?.cancel();
     _messagesSub = null;
+    _client = null;
     final deviceId = _deviceId;
     _deviceId = null;
     if (deviceId != null) {
@@ -261,15 +275,15 @@ class BleTransport implements RepTransport {
         allChunks: true,
       ),
     );
-    final payload = request.writeToBuffer();
-    _logMessage(_Direction.tx, CalypsoGatt.requests, payload);
+    // The bytes the client is about to send are logged as they go out; the
+    // encode is the same one, done twice on a path that runs once a trace.
+    _logMessage(
+      _Direction.tx,
+      SyncClient.requestsUuid,
+      request.writeToBuffer(),
+    );
     try {
-      await _link.write(
-        deviceId,
-        CalypsoGatt.service,
-        CalypsoGatt.requests,
-        payload,
-      );
+      await _client!.writeRequests(request);
     } catch (e) {
       _pending.remove(uuid);
       _assemblers.remove(uuid);
@@ -319,15 +333,14 @@ class BleTransport implements RepTransport {
     status.set(BleStatus.idle);
   }
 
-  void _onMessage(Uint8List bytes) {
-    _logMessage(_Direction.rx, CalypsoGatt.messages, bytes);
+  void _onMessage(pb.SyncMessage message) {
+    // The bytes are logged at the plugin seam (`raw`); this is what the
+    // transport made of them.
+    bleLog.fine(
+      '${_Direction.rx.name} ${SyncClient.messagesUuid} '
+      '${describeSyncMessage(message)}',
+    );
     if (_closed || _deviceId == null) return;
-    final pb.SyncMessage message;
-    try {
-      message = pb.SyncMessage.fromBuffer(bytes);
-    } catch (_) {
-      return;
-    }
     final kind = message.whichBody();
     final seen = _rxCounts.update(kind, (n) => n + 1, ifAbsent: () => 1);
     if (kind != pb.SyncMessage_Body.trace || seen % 60 == 0) {

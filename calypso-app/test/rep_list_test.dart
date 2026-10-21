@@ -5,6 +5,7 @@ import 'package:calypso/model/uuid.dart';
 import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:calypso/state/ble_status.dart';
 import 'package:calypso/store/memory_archive.dart';
+import 'package:calypso/gatt/gatt_client.dart';
 import 'package:calypso/transport/ble_transport.dart';
 import 'package:calypso/store/rep_archive.dart';
 import 'package:calypso/transport/fixture_transport.dart';
@@ -179,7 +180,7 @@ void _calibrationHint() {
     expect(find.textContaining('IMU not calibrated'), findsNothing);
 
     link.notify(
-      CalypsoGatt.messages,
+      SyncClient.messagesUuid,
       calibrationMessage(sys: 1, accel: 1, gyro: 2),
     );
     await tester.pumpAndSettle();
@@ -190,7 +191,7 @@ void _calibrationHint() {
     expect(find.textContaining('accel 1/3'), findsOneWidget);
     expect(find.textContaining('mag 0/3'), findsOneWidget);
 
-    link.notify(CalypsoGatt.messages, calibrationMessage());
+    link.notify(SyncClient.messagesUuid, calibrationMessage());
     await tester.pumpAndSettle();
     expect(find.textContaining('IMU not calibrated'), findsNothing);
   });
@@ -201,7 +202,7 @@ void _calibrationHint() {
     final link = await pumpConnected(tester);
 
     link.notify(
-      CalypsoGatt.messages,
+      SyncClient.messagesUuid,
       calibrationMessage(sys: 1, accel: 1, gyro: 1),
     );
     await tester.pumpAndSettle();
@@ -258,7 +259,7 @@ void _liveSummaries() {
       }
       expect(find.text('Connected'), findsOneWidget);
 
-      link.notify(CalypsoGatt.messages, summaryMessage(u(0)));
+      link.notify(SyncClient.messagesUuid, summaryMessage(u(0)));
       await tester.pumpAndSettle();
 
       expect(
@@ -268,7 +269,7 @@ void _liveSummaries() {
       );
       expect(archive.contains(u(0)), isTrue, reason: 'and the log has it');
 
-      link.notify(CalypsoGatt.messages, summaryMessage(u(0)));
+      link.notify(SyncClient.messagesUuid, summaryMessage(u(0)));
       await tester.pumpAndSettle();
       expect(
         find.textContaining('Rep ${uuidShort(u(0))}'),
@@ -310,8 +311,8 @@ void _bleWiring() {
     }
 
     expect(find.text('Connected'), findsOneWidget);
-    expect(link.scans.single, [CalypsoGatt.service]);
-    expect(link.subscribed, [CalypsoGatt.messages]);
+    expect(link.scans.single, [SyncClient.serviceUuid]);
+    expect(link.subscribed, [SyncClient.messagesUuid]);
     expect(find.text('Disconnect'), findsOneWidget);
 
     await tester.tap(find.text('Disconnect'));

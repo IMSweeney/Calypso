@@ -33,12 +33,17 @@ abstract class BleLink {
 
   Stream<Uint8List> valueStream(String deviceId, String characteristicUuid);
 
+  /// Write a characteristic.
+  ///
+  /// `withResponse` is the write that reports failure, so it is the default; a
+  /// characteristic that offers only write-without-response asks for the other.
   Future<void> write(
     String deviceId,
     String serviceUuid,
     String characteristicUuid,
-    Uint8List value,
-  );
+    Uint8List value, {
+    bool withResponse = true,
+  });
 }
 
 class DiscoveredService {
@@ -142,11 +147,13 @@ class UniversalBleLink implements BleLink {
     String deviceId,
     String serviceUuid,
     String characteristicUuid,
-    Uint8List value,
-  ) => plugin.UniversalBle.write(
+    Uint8List value, {
+    bool withResponse = true,
+  }) => plugin.UniversalBle.write(
     deviceId,
     serviceUuid,
     characteristicUuid,
     value,
+    withoutResponse: !withResponse,
   );
 }

@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:calypso/logging/setup.dart';
+import 'package:calypso/gatt/gatt_client.dart';
 import 'package:calypso/transport/ble_transport.dart';
 import 'package:calypso/transport/transport.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -36,13 +37,6 @@ void main() {
   }
 
   String message(int i) => 'rx ca21 1B ${i.toRadixString(16).padLeft(2, '0')}';
-
-  String line(String direction, String characteristic, List<int> bytes) {
-    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
-    return hex.isEmpty
-        ? '$direction $characteristic ${bytes.length}B'
-        : '$direction $characteristic ${bytes.length}B $hex';
-  }
 
   group('startFileLogging', () {
     test('says so at startup, so a quiet file is never ambiguous', () async {
@@ -173,8 +167,8 @@ void main() {
     await connecting;
 
     final calibration = calibrationMessage(sys: 1, accel: 1, gyro: 2);
-    link.notify(CalypsoGatt.messages, calibration);
-    link.notify(CalypsoGatt.messages, Uint8List(0));
+    link.notify(SyncClient.messagesUuid, calibration);
+    link.notify(SyncClient.messagesUuid, Uint8List(0));
     await pumpEventQueue();
 
     await expectLater(
@@ -190,9 +184,9 @@ void main() {
       for (final record in records)
         if (record.level >= Level.INFO) record.message,
     ];
-    expect(session, contains('scanning for ${CalypsoGatt.service}'));
+    expect(session, contains('scanning for ${SyncClient.serviceUuid}'));
     expect(session, contains('connecting to device-1'));
-    expect(session, contains('subscribed to ${CalypsoGatt.messages}'));
+    expect(session, contains('subscribed to ${SyncClient.messagesUuid}'));
     expect(session, contains('connected to device-1'));
     expect(session, contains('connection lost: out of range'));
 
@@ -200,16 +194,16 @@ void main() {
     final messages = [for (final record in records) record.message];
     expect(
       messages,
-      contains(line('rx', CalypsoGatt.messages, calibration)),
-      reason: 'inbound, on the characteristic it arrived on, bytes and all',
+      contains(startsWith('rx ${SyncClient.messagesUuid} calibration ')),
+      reason: 'inbound, on the characteristic it arrived on, decoded',
     );
     expect(
       messages,
-      contains(line('rx', CalypsoGatt.messages, Uint8List(0))),
-      reason: 'the other stream is named separately',
+      contains(startsWith('rx ${SyncClient.messagesUuid} empty')),
+      reason: 'a message with no body is still named',
     );
     expect(
-      messages.where((m) => m.startsWith('tx ${CalypsoGatt.requests} ')),
+      messages.where((m) => m.startsWith('tx ${SyncClient.requestsUuid} ')),
       hasLength(1),
       reason: 'the request the app sent',
     );
