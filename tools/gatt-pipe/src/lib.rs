@@ -1,12 +1,17 @@
-//! The chunked pipe: the framing both ends of a BLE link share, and the two
-//! state machines that use it.
+//! The chunked pipe: the framing both ends of a BLE link share, and the two state
+//! machines that use it.
 //!
-//! This is the reference the device and the app are implemented against. It is
-//! deliberately not a runtime: it holds no buffers of its own, calls nothing, and
-//! knows nothing about BLE, embassy or `universal_ble`. Bytes in, decisions out —
-//! so it can be tested on the host with injected loss, duplication, reordering and
-//! corruption, which is the only way to test a protocol whose failure modes are
-//! all timing.
+//! What a BLE characteristic cannot carry in one value travels as a transfer: a
+//! message cut into chunks, each with a header and a CRC, reassembled at the
+//! other end. `SPEC.md` in `tools/gatt-gen` describes the protocol and why it
+//! acknowledges itself.
+//!
+//! The generator writes the parts only the schema knows — which characteristic
+//! carries which direction, how big a chunk and a message may be, how to turn
+//! bytes into a message — and this crate is the rest: no buffers of its own, no
+//! clock, no BLE, no embassy. Bytes in, decisions out, which is what makes the
+//! failure modes that matter (a chunk lost, duplicated, corrupted, an
+//! acknowledgement that never comes) testable on a host.
 //!
 //! # Frame
 //!

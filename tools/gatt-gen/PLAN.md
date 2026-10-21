@@ -45,10 +45,11 @@ Both ends now come from the one schema: the app's typed client is
 `tool/gen_gatt.sh` and committed, and the transport above it is left with what a
 schema cannot say (scanning, reconnecting, reassembly, timeouts).
 
-- `src/pipe.rs` — the chunked transport of §7 as a reference: the frame, a sender
-  and a receiver that hold no buffers and no clock, and 17 tests that drive them
-  against each other over a link which drops, corrupts, duplicates and stalls
-  chunks.
+- `tools/gatt-pipe` — the chunked transport of §7 (`src/lib.rs` was this crate's
+  for a while, which made a code generator something a device would have to depend
+  on): the frame, a sender and a receiver that hold no buffers and no clock, and
+  17 tests that drive them against each other over a link which drops, corrupts,
+  duplicates and stalls chunks.
 
 Still to do for the pipe to be usable: the generator emitting the per-pipe glue
 (§8.1's fixed-capacity buffers and the handles the runtime owns), the device-side

@@ -1,0 +1,23 @@
+[package]
+name         = "gatt-gen-example-pipe"
+edition      = "2021"
+rust-version = "1.88"
+version      = "0.1.0"
+publish      = false
+description  = "A minimal pipe: gatt-gen's glue over the gatt-pipe runtime."
+
+[dependencies]
+# The runtime, which is not generated: it owns no buffers and no clock, and the
+# two ends below drive it from the host.
+gatt-pipe = { path = "../../../gatt-pipe" }
+trouble-host = { version = "0.5.0", features = ["gatt"] }
+micropb = { version = "0.6.0", features = ["container-heapless-0-9"] }
+heapless = "0.9"
+# Both are what the generated table's macros expand to.
+static_cell = "2.1.1"
+embassy-sync = "0.7.2"
+
+[build-dependencies]
+gatt-gen = { path = "../.." }
+micropb-gen = "0.6.0"
+protoc-bin-vendored = "3"

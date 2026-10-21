@@ -1,0 +1,11 @@
+[package]
+name         = "gatt-pipe"
+edition      = "2021"
+rust-version = "1.88"
+version      = "0.1.0"
+publish      = false
+description  = "Chunked transfers over a BLE GATT characteristic pair."
+license      = "Apache-2.0"
+readme       = "README.md"
+
+[dependencies]

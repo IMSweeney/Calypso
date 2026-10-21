@@ -343,6 +343,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "gatt-gen-example-pipe"
+version = "0.1.0"
+dependencies = [
+ "embassy-sync",
+ "gatt-gen",
+ "gatt-pipe",
+ "heapless 0.9.3",
+ "micropb",
+ "micropb-gen",
+ "protoc-bin-vendored",
+ "static_cell",
+ "trouble-host",
+]
+
+[[package]]
 name = "gatt-gen-example-server"
 version = "0.1.0"
 dependencies = [
@@ -355,6 +370,10 @@ dependencies = [
  "static_cell",
  "trouble-host",
 ]
+
+[[package]]
+name = "gatt-pipe"
+version = "0.1.0"
 
 [[package]]
 name = "getrandom"

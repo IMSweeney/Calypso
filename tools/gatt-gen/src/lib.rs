@@ -27,7 +27,6 @@ pub mod descriptor;
 pub mod error;
 pub mod generator;
 pub mod model;
-pub mod pipe;
 pub mod uuid;
 pub mod validate;
 pub mod vocabulary;

@@ -5,7 +5,7 @@
 //! produced on a bench on demand — which is why the state machines hold no
 //! buffers and no clock, and can be driven from a test.
 
-use gatt_gen::pipe::{
+use gatt_pipe::{
     self, Header, Received, Receiver, Send, Sender, DEFAULT_CHUNK_MAX, MAX_ATTEMPTS, MAX_WINDOW,
 };
 
@@ -53,7 +53,7 @@ fn pump(message: &[u8], mtu: usize, max_message: usize, faults: Faults) -> Outco
     // ever would not say so.
     for _ in 0..10_000 {
         now += 10;
-        let capacity = pipe::capacity(mtu, DEFAULT_CHUNK_MAX, message.len() as u32)
+        let capacity = gatt_pipe::capacity(mtu, DEFAULT_CHUNK_MAX, message.len() as u32)
             .expect("the link carries a frame");
 
         let chunk = match sender
@@ -119,17 +119,17 @@ fn pump(message: &[u8], mtu: usize, max_message: usize, faults: Faults) -> Outco
             }
             Received::Ack { next_expected } => {
                 if !faults.swallow_acks {
-                    let len = pipe::encode(
+                    let len = gatt_pipe::encode(
                         Header {
                             seq: next_expected,
-                            flags: pipe::flags::ACK,
+                            flags: gatt_pipe::flags::ACK,
                             total_len: None,
                         },
                         &[],
                         &mut reply,
                     )
                     .expect("an ack encodes");
-                    let (header, _) = pipe::decode(&reply[..len]).expect("an ack decodes");
+                    let (header, _) = gatt_pipe::decode(&reply[..len]).expect("an ack decodes");
                     sender.on_ack(header.seq);
                 }
                 sender.note_progress(now);
@@ -194,7 +194,7 @@ fn a_message_larger_than_the_reassembly_buffer_is_refused_before_it_starts() {
     let error = sender.start(300, 256).unwrap_err();
     assert!(matches!(
         error,
-        pipe::SendError::TooLarge { len: 300, max: 256 }
+        gatt_pipe::SendError::TooLarge { len: 300, max: 256 }
     ));
     // Exactly the limit is fine: the buffer is the promise.
     assert!(sender.start(256, 256).is_ok());
@@ -295,10 +295,10 @@ fn a_start_promising_more_than_the_buffer_gets_a_nak() {
     let mut buffer = [0u8; 64];
     let mut chunk = [0u8; 64];
 
-    let len = pipe::encode(
+    let len = gatt_pipe::encode(
         Header {
             seq: 0,
-            flags: pipe::flags::START,
+            flags: gatt_pipe::flags::START,
             total_len: Some(65),
         },
         &[],
@@ -312,10 +312,10 @@ fn a_start_promising_more_than_the_buffer_gets_a_nak() {
     assert!(!receiver.in_transfer(), "and nothing was kept");
 
     // The same promise within the buffer is taken.
-    let len = pipe::encode(
+    let len = gatt_pipe::encode(
         Header {
             seq: 0,
-            flags: pipe::flags::START,
+            flags: gatt_pipe::flags::START,
             total_len: Some(64),
         },
         &[],
@@ -334,7 +334,7 @@ fn a_chunk_from_the_middle_of_nowhere_gets_a_nak() {
     let mut receiver = Receiver::new(8);
     let mut buffer = [0u8; 64];
     let mut chunk = [0u8; 64];
-    let len = pipe::encode(
+    let len = gatt_pipe::encode(
         Header {
             seq: 3,
             flags: 0,
@@ -358,10 +358,10 @@ fn a_second_start_restarts_the_transfer() {
     let mut chunk = [0u8; 64];
 
     // A first transfer, abandoned part-way: the peer timed out and will retry.
-    let len = pipe::encode(
+    let len = gatt_pipe::encode(
         Header {
             seq: 0,
-            flags: pipe::flags::START,
+            flags: gatt_pipe::flags::START,
             total_len: Some(8),
         },
         b"half",
@@ -371,10 +371,10 @@ fn a_second_start_restarts_the_transfer() {
     receiver.on_chunk(&chunk[..len], &mut buffer, 64);
 
     // The retry begins again, with a sequence number of its own.
-    let len = pipe::encode(
+    let len = gatt_pipe::encode(
         Header {
             seq: 5,
-            flags: pipe::flags::START | pipe::flags::END,
+            flags: gatt_pipe::flags::START | gatt_pipe::flags::END,
             total_len: Some(5),
         },
         b"whole",
@@ -417,7 +417,7 @@ fn a_disconnect_resets_both_ends() {
         panic!("a chunk goes out");
     };
     assert_eq!(chunk[0], 0, "the sequence starts at zero again");
-    let (header, payload) = pipe::decode(&chunk[..len]).unwrap();
+    let (header, payload) = gatt_pipe::decode(&chunk[..len]).unwrap();
     assert!(header.is_start() && header.is_end());
     assert_eq!(payload, b"again");
 }
@@ -443,7 +443,10 @@ fn the_window_is_what_stops_a_sender_running_ahead() {
     );
 
     // An acknowledgement of the first chunk frees exactly one slot.
-    assert_eq!(sender.on_ack(1), pipe::Acked::Advanced { in_flight: 1 });
+    assert_eq!(
+        sender.on_ack(1),
+        gatt_pipe::Acked::Advanced { in_flight: 1 }
+    );
     assert!(matches!(
         sender.next(&message, 32, &mut chunk).unwrap(),
         Send::Chunk(_)

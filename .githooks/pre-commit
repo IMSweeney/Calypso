@@ -46,6 +46,7 @@ check_rust() {
 check_rust calypso-core
 check_rust calypso-esp32
 check_rust tools/gatt-gen
+check_rust tools/gatt-pipe
 
 if printf '%s\n' "$staged" | grep -q '^calypso-app/.*\.dart$'; then
 	if command -v dart >/dev/null 2>&1; then

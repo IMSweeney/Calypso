@@ -14,7 +14,7 @@ version      = "0.1.0"
 # The example is a member so that `cargo test` here builds it: an example that is
 # never built is an example that is wrong.
 [workspace]
-members = ["examples/server"]
+members = ["examples/server", "examples/pipe"]
 
 [dependencies]
 # Reads the descriptor set protoc produces, including the custom options
