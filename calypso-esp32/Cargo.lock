@@ -138,6 +138,7 @@ dependencies = [
  "micropb",
  "micropb-gen",
  "protoc-bin-vendored",
+ "static_cell",
  "trouble-host",
 ]
 

@@ -1,0 +1,61 @@
+// The BLE GATT table the device serves, described the way `tools/gatt-gen`
+// reads it: a `service` is a GATT service, an `rpc` is a characteristic, the
+// request type is what the central writes and the response type is what the
+// peripheral reads or notifies.
+//
+// Separate from `calypso.proto`, which holds the messages: that file is the wire
+// format both sides encode, while this one is the device's table. The device
+// generates its attribute table from this file; the app generates its message
+// classes from the other, and needs nothing from here but the UUIDs the schema
+// declares (which `gatt-gen` will emit for its client when that exists).
+
+syntax = "proto3";
+
+package calypso;
+
+import "calypso.proto";
+import "gatt_options.proto";
+import "google/protobuf/empty.proto";
+
+// --- The table -------------------------------------------------------------
+//
+// The generated Rust lands in `calypso_core::gatt`.
+//
+// Both characteristics are single-shot (`max_len`): one write is one
+// `SyncRequest` and one notification is one `SyncMessage`. The chunked pipe in
+// tools/gatt-gen/SPEC.md is how large payloads will travel later; until then the
+// ceiling is what one notification can carry, which is why traces are re-chunked
+// by `calypso_core::sync`.
+
+service Sync {
+  option (gatt.service) = {
+    uuid: "0000ca20-b0cd-11ec-871f-d45ddf138840"
+    primary: true
+  };
+
+  // Everything the app sends: a `SyncRequest`, write (app -> device).
+  //
+  // Sized for a `TraceRequest` and its envelope
+  // (`calypso_core::gatt::max_len::SYNC_REQUESTS`).
+  rpc Requests(SyncRequest) returns (google.protobuf.Empty) {
+    option (gatt.characteristic) = {
+      uuid: "0000ca22-b0cd-11ec-871f-d45ddf138840"
+      props: [WRITE, WRITE_NO_RSP]
+      max_len: 32
+    };
+  }
+
+  // Everything the device sends: a `SyncMessage`, notify. Summaries and
+  // calibration stream to a subscriber; trace chunks answer a request.
+  //
+  // Sized for the largest message the device builds
+  // (`calypso_core::sync::SYNC_CHUNK_MAX`), because a payload that does not fit
+  // the characteristic it is notified on fails to notify *silently*.
+  rpc Messages(google.protobuf.Empty) returns (SyncMessage) {
+    option (gatt.characteristic) = {
+      uuid: "0000ca21-b0cd-11ec-871f-d45ddf138840"
+      props: [NOTIFY]
+      max_len: 193
+    };
+  }
+}

@@ -71,10 +71,13 @@ impl<'a> TraceStreamer<'a> {
         points.div_ceil(BLE_CHUNK_SAMPLES) as u32
     }
 
-    /// Encode the next chunk into `out` as a `SyncMessage`, returning its
-    /// length. `None` when the stream is finished (including when a
-    /// single-chunk request points past the end of the trace).
-    pub fn next_message(&mut self, out: &mut [u8]) -> Option<usize> {
+    /// The next chunk as a `SyncMessage`. `None` when the stream is finished
+    /// (including when a single-chunk request points past the end of the trace).
+    ///
+    /// Returns the message rather than its encoding: the value type the
+    /// generated table stores owns the buffer, and encodes it once (see
+    /// [`crate::gatt`]).
+    pub fn next_message(&mut self) -> Option<msg::SyncMessage> {
         if self.only.is_some_and(|i| i != self.next_index) {
             return None;
         }
@@ -92,13 +95,14 @@ impl<'a> TraceStreamer<'a> {
             Self::chunk_count(self.points.len()),
             &self.points[start..end],
         );
-        let n = pb::encode_sync(msg::SyncMessage_::Body::Trace(chunk), out).ok()?;
         self.next_index += 1;
         if self.only.is_some() {
             self.only = None;
             self.next_index = Self::chunk_count(self.points.len());
         }
-        Some(n)
+        Some(msg::SyncMessage {
+            body: Some(msg::SyncMessage_::Body::Trace(chunk)),
+        })
     }
 }
 
@@ -142,50 +146,61 @@ impl SummaryCursor {
     }
 }
 
-/// Encode one summary as a `SyncMessage` for the summary characteristic.
-pub fn encode_summary_message(summary: msg::RepSummary, out: &mut [u8]) -> Option<usize> {
-    pb::encode_sync(msg::SyncMessage_::Body::Summary(summary), out).ok()
+/// One summary as the `SyncMessage` the notify characteristic carries.
+pub fn summary_message(summary: msg::RepSummary) -> msg::SyncMessage {
+    msg::SyncMessage {
+        body: Some(msg::SyncMessage_::Body::Summary(summary)),
+    }
 }
 
-/// Encode a status message (rep counts etc.) for the summary characteristic.
-pub fn encode_status_message(status: msg::SyncStatus, out: &mut [u8]) -> Option<usize> {
-    pb::encode_sync(msg::SyncMessage_::Body::Status(status), out).ok()
+/// A status message (rep counts etc.) as a `SyncMessage`.
+pub fn status_message(status: msg::SyncStatus) -> msg::SyncMessage {
+    msg::SyncMessage {
+        body: Some(msg::SyncMessage_::Body::Status(status)),
+    }
 }
 
-/// Encode an IMU calibration status message for the summary characteristic.
-pub fn encode_calibration_message(calibration: &Calibration, out: &mut [u8]) -> Option<usize> {
-    pb::encode_sync(
-        msg::SyncMessage_::Body::Calibration(pb::calibration_message(calibration)),
-        out,
-    )
-    .ok()
+/// The IMU's calibration status as a `SyncMessage`.
+pub fn calibration_message(calibration: &Calibration) -> msg::SyncMessage {
+    msg::SyncMessage {
+        body: Some(msg::SyncMessage_::Body::Calibration(
+            pb::calibration_message(calibration),
+        )),
+    }
 }
 
-/// The trace request inside the `SyncRequest` the app wrote, rejecting anything
+/// The trace request inside a `SyncRequest` the app wrote, rejecting anything
 /// absurd.
 ///
 /// The envelope is why the write characteristic carries one kind of message and can
 /// carry more later — a request to clear the log, say — without a characteristic,
-/// and a UUID, of its own.
-pub fn decode_trace_request(bytes: &[u8]) -> Option<msg::TraceRequest> {
-    let request = pb::decode_trace_request(bytes).ok()?;
+/// and a UUID, of its own. Taking the decoded message rather than its bytes is the
+/// generated table's doing: [`crate::gatt`] decodes the write, and this decides
+/// whether the request inside it is one this device will serve.
+pub fn trace_request(request: &msg::SyncRequest) -> Option<msg::TraceRequest> {
+    let trace = match &request.body {
+        Some(msg::SyncRequest_::Body::Trace(trace)) => trace.clone(),
+        None => return None,
+    };
     // A short uuid is not an identity.
-    pb::uuid_from_field(&request.rep_uuid)?;
-    if !request.all_chunks && request.chunk_index >= 64 {
+    pb::uuid_from_field(&trace.rep_uuid)?;
+    if !trace.all_chunks && trace.chunk_index >= 64 {
         return None;
     }
-    Some(request)
+    Some(trace)
 }
 
 /// Largest encoded `SyncMessage` we may need to build: a full BLE chunk.
 ///
-/// This is the notify characteristic's ceiling. Every message the device sends goes
-/// out on that one characteristic and the largest of them is a trace chunk of
-/// [`BLE_CHUNK_SAMPLES`] points, so the summaries and the calibration status have to
-/// fit here too — `tests/sync.rs` asserts that rather than assuming it, because a
-/// payload that does not fit the characteristic it is notified on fails to notify
-/// *silently* (see `docs/GOTCHAS.md`).
-pub const SYNC_CHUNK_MAX: usize = 1 + BLE_CHUNK_SAMPLES * 64;
+/// This is the size the *schema* declares for the notify characteristic
+/// (`max_len` on `calypso.Sync.Messages`), so the number lives in one place and
+/// a schema change moves it. Every message the device sends goes out on that
+/// one characteristic and the largest of them is a trace chunk of
+/// [`BLE_CHUNK_SAMPLES`] points, so the summaries and the calibration status
+/// have to fit here too — `tests/sync.rs` asserts that rather than assuming it,
+/// because a payload that does not fit the characteristic it is notified on
+/// fails to notify *silently* (see `docs/GOTCHAS.md`).
+pub const SYNC_CHUNK_MAX: usize = crate::gatt::max_len::SYNC_MESSAGES;
 
 /// Compile-time sanity: the BLE chunk max is what the record buffer holds.
 const _: () = assert!(SYNC_CHUNK_MAX <= crate::store::RECORD_BUF_BYTES);

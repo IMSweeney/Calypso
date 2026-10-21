@@ -35,17 +35,14 @@ use trouble_host::prelude::*;
 use alloc::boxed::Box;
 use bno055::Bno055;
 use bno055::{BNO055_CALIB_SIZE, BNO055Calibration, BNO055OperationMode};
-use calypso_core::DEVICE_NAME_MAX;
-use calypso_core::ble::{BleVec, SYNC_REQUEST_MAX};
 use calypso_core::calibration::Calibration;
 use calypso_core::flashlog::{self, FlashLog};
+use calypso_core::gatt::{CalypsoGatt, Request, SyncMessagesValue};
 use calypso_core::pb::msg;
 use calypso_core::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, compute_rep};
 use calypso_core::sampler::{QUAT_SCALE, SAMPLE_RATE_HZ, Sample, SampleRing, quantize};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
-use calypso_core::sync::{
-    self, SYNC_CHUNK_MAX, SummaryCursor, TraceStreamer, decode_trace_request,
-};
+use calypso_core::sync::{self, SummaryCursor, TraceStreamer, trace_request};
 use calypso_core::uuid::{self, RepUuid};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -279,9 +276,9 @@ async fn main(spawner: Spawner) -> ! {
     // seen from the other end of the link. A client reports a mismatch here as
     // "characteristic not found", naming a UUID that is correct.
     info!(
-        "sync service uuid {=[u8]:02x} (wire), {=[u8]:02x} (as a client sees it)",
-        calypso_core::ble::SYNC_SERVICE_UUID_BYTES,
-        calypso_core::ble::reverse16(calypso_core::ble::SYNC_SERVICE_UUID_BYTES)
+        "sync service uuid {=[u8]:02x} (wire), {} (as a client sees it)",
+        calypso_core::gatt::uuid::SYNC_SERVICE_BYTES,
+        calypso_core::gatt::uuid::SYNC_SERVICE_TEXT
     );
 
     // Mount the rep-record flash log (see docs/REP_TRACKING.md).
@@ -352,27 +349,21 @@ async fn main(spawner: Spawner) -> ! {
         ..
     } = stack.build();
 
-    // GATT table: GAP with a read-only Device Name characteristic (0x2A00) and a
-    // read-only Appearance characteristic, the mandatory GATT service declaration,
-    // and the sync service. Built in calypso-core so host integration tests can
-    // exercise the exact same table (see calypso-core/tests/gatt_table.rs).
-    let mut name_store = [0u8; DEVICE_NAME_MAX];
-    // One characteristic each way: `messages` has to hold the largest thing the
-    // device ever sends (a streamed trace chunk — see `calypso_core::sync`), and
-    // `requests` the largest thing the app sends. A store smaller than its
-    // characteristic is the same silent truncation as a characteristic smaller than
-    // its payload.
-    let mut messages_store = [0u8; SYNC_CHUNK_MAX];
-    let mut requests_store = [0u8; SYNC_REQUEST_MAX];
-    let gatt = calypso_core::ble::build_gatt_table::<NoopRawMutex>(
-        DEVICE_NAME,
-        &mut name_store[..],
-        &mut messages_store[..],
-        &mut requests_store[..],
-    )
-    .unwrap();
-    let messages_char = gatt.messages;
-    let requests_char = gatt.requests;
+    // GATT table: generated from `proto/calypso.proto` by `gatt-gen` at build time
+    // (`calypso-core/src/gatt.rs`), which is where the services, the
+    // characteristics, their properties and their sizes are declared now. GAP comes
+    // from the config below: a device name a client can read and the sensor
+    // appearance, which is what makes a scanner show what this is.
+    //
+    // **One table per process.** The macros that build it back each characteristic
+    // with a `static StaticCell`, so this cannot be called twice — a constraint a
+    // build script and the host tests live with (see tools/gatt-gen/PLAN.md).
+    let gatt =
+        calypso_core::gatt::CalypsoGatt::new_with_config(GapConfig::Peripheral(PeripheralConfig {
+            name: DEVICE_NAME,
+            appearance: &appearance::sensor::GENERIC_SENSOR,
+        }))
+        .expect("the device name fits the GAP name length");
 
     // Buffers for the sync path: a trace read back from the log, and a
     // reusable record scratch (both heap: too big for the stack/static RAM).
@@ -395,30 +386,15 @@ async fn main(spawner: Spawner) -> ! {
     // largest message, which is a trace chunk, on a task stack that has none to
     // spare. One buffer, on the heap, and the senders encode straight into it (they
     // are awaited from the same loop, so they never overlap).
-    let notify_payload: &'static mut BleVec<SYNC_CHUNK_MAX> = Box::leak(Box::new(BleVec::new()));
+    // The value type the schema declares for the notify characteristic: it owns the
+    // buffer, so a sender encodes into it rather than into a buffer of its own.
+    let notify_payload: &'static mut SyncMessagesValue =
+        Box::leak(Box::new(SyncMessagesValue::default()));
     let mut notify = Notify {
-        characteristic: &messages_char,
+        characteristic: &gatt.sync.messages,
         payload: notify_payload,
     };
     info!("Sync buffers ready, heap free {} B", esp_alloc::HEAP.free());
-    // **That is the number of CCCD slots, and it was hard-coded to 1 here once.**
-    // The server keeps one CCCD table per client with exactly this many entries and
-    // drops any CCCD that does not fit without a word, so that single slot went to
-    // whichever CCCD came first in the table. Subscribing to the sync service was
-    // then accepted by the ATT layer, forgotten by the server, and "notified" into
-    // the void: `should_notify` false means `Characteristic::notify` returns `Ok`
-    // without sending anything, which is why the device could log `calibration
-    // status delivered to the app` once a second while the app — and an off-the-shelf
-    // client — saw nothing at all. See `calypso_core::ble` for the count, the host
-    // test that keeps it equal to the table, and `docs/GOTCHAS.md` for the story.
-    let server = AttributeServer::<
-        NoopRawMutex,
-        DefaultPacketPool,
-        { calypso_core::ble::GATT_TABLE_MAX },
-        { calypso_core::ble::NOTIFIABLE_CHARACTERISTICS },
-        CONNECTIONS_MAX,
-    >::new(gatt.table);
-
     info!("Starting BLE stack");
     // How much of the stack `main`'s own frame is holding before the tasks start.
     // This is the number that says whether the setup above is thrifty with the
@@ -469,7 +445,7 @@ async fn main(spawner: Spawner) -> ! {
                 info!("advertising");
 
                 let conn = match advertiser.accept().await {
-                    Ok(conn) => match conn.with_attribute_server(&server) {
+                    Ok(conn) => match conn.with_attribute_server(&gatt) {
                         Ok(conn) => conn,
                         Err(_) => continue,
                     },
@@ -495,7 +471,8 @@ async fn main(spawner: Spawner) -> ! {
                             // inferred from a notify result, because a notify result
                             // says nothing (see `is_subscribed`). Once a tick is
                             // often enough to say when it changes.
-                            let listening = is_subscribed(&server, &conn, messages_char.cccd_handle);
+                            let listening =
+                                is_subscribed(&gatt, &conn, gatt.sync.messages.cccd_handle);
                             if listening != subscribed {
                                 subscribed = listening;
                                 if subscribed {
@@ -534,20 +511,24 @@ async fn main(spawner: Spawner) -> ! {
                             break;
                         }
                         GattConnectionEvent::Gatt { event } => {
-                            let wrote_request = matches!(&event, GattEvent::Write(w)
-                                if w.handle() == requests_char.handle);
+                            // What the app wrote, decoded by the generated code from
+                            // the schema: `Request` has a variant per written
+                            // characteristic, so a second one is a new match arm rather
+                            // than a second handle comparison here.
+                            let wrote = Request::from_event(&gatt, &event);
                             if let Ok(reply) = event.accept() {
                                 let _ = reply.send().await;
                             }
-                            if wrote_request {
-                                // The app asked for a rep's trace: read it
-                                // back from the log and stream it.
-                                if let Ok(request) = server.table().get(&requests_char)
-                                    && let Some(request) = decode_trace_request(&request)
+                            // The app asked for a rep's trace: read it back from the
+                            // log and stream it.
+                            if let Some(Request::Requests(request)) = wrote
+                                && let Some(request) = trace_request(&request)
+                            {
                                 {
-                                    let wanted = calypso_core::pb::uuid_from_field(&request.rep_uuid);
+                                    let wanted =
+                                        calypso_core::pb::uuid_from_field(&request.rep_uuid);
                                     info!("trace request: rep {}", UuidShort(wanted.as_ref()));
-                                    if is_subscribed(&server, &conn, messages_char.cccd_handle) {
+                                    if is_subscribed(&gatt, &conn, gatt.sync.messages.cccd_handle) {
                                         stream_trace(
                                             store,
                                             sync_rec_buf,
@@ -1043,8 +1024,8 @@ fn log_partition_table(pt: &partitions::PartitionTable<'_>) {
 /// buffer on the stack — sized for the largest of them, a trace chunk. The buffer
 /// itself is on the heap (see `main`), and the senders encode straight into it.
 struct Notify<'a> {
-    characteristic: &'a Characteristic<BleVec<SYNC_CHUNK_MAX>>,
-    payload: &'a mut BleVec<SYNC_CHUNK_MAX>,
+    characteristic: &'a Characteristic<SyncMessagesValue>,
+    payload: &'a mut SyncMessagesValue,
 }
 
 /// Push any log summaries the subscriber hasn't been sent yet, oldest first.
@@ -1087,14 +1068,9 @@ async fn stream_new_summaries(
         // the characteristic either, so nothing is lost by failing at the encode.
         //
         // A `RepSummary` carries a uuid container now, so it is not `Copy`.
-        payload.clear();
-        if payload.resize(SYNC_CHUNK_MAX, 0).is_err() {
+        if !payload.encode_into(&sync::summary_message(summary.clone())) {
             return;
         }
-        let Some(n) = sync::encode_summary_message(summary.clone(), &mut payload[..]) else {
-            return;
-        };
-        payload.truncate(n);
         if characteristic.notify(conn, payload).await.is_err() {
             return; // nobody subscribed (yet)
         }
@@ -1196,14 +1172,13 @@ async fn stream_trace(
     // the app timed out with a rep whose trace was missing, with nothing said at
     // either end (see `docs/GOTCHAS.md`).
     loop {
-        payload.clear();
-        if payload.resize(SYNC_CHUNK_MAX, 0).is_err() {
-            return;
-        }
-        let Some(n) = streamer.next_message(&mut payload[..]) else {
+        let Some(message) = streamer.next_message() else {
             return;
         };
-        payload.truncate(n);
+        if !payload.encode_into(&message) {
+            warn!("trace chunk does not fit the notify characteristic");
+            return;
+        }
         if characteristic.notify(conn, payload).await.is_err() {
             warn!("trace stream interrupted (unsubscribed?)");
             return;
@@ -1478,16 +1453,6 @@ async fn poll_calibration(
     (calibration, saved)
 }
 
-/// The attribute server this firmware runs, spelled once so the helpers can name it.
-type Server<'d> = AttributeServer<
-    'd,
-    NoopRawMutex,
-    DefaultPacketPool,
-    { calypso_core::ble::GATT_TABLE_MAX },
-    { calypso_core::ble::NOTIFIABLE_CHARACTERISTICS },
-    CONNECTIONS_MAX,
->;
-
 /// Whether the peer has this characteristic's notifications enabled.
 ///
 /// **This is the only way to know, and it is why the logs and the summary cursor
@@ -1500,7 +1465,7 @@ type Server<'d> = AttributeServer<
 /// once a second to a device that was sending nothing, and a summary cursor that
 /// walked the whole log into the void while nobody was listening.
 fn is_subscribed(
-    server: &Server<'_>,
+    server: &CalypsoGatt<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     cccd_handle: Option<u16>,
 ) -> bool {
@@ -1535,14 +1500,9 @@ async fn notify_calibration(
         payload,
     } = notify;
     let calibration = Calibration::from_bits(CALIBRATION_BITS.load(Ordering::Relaxed));
-    payload.clear();
-    if payload.resize(SYNC_CHUNK_MAX, 0).is_err() {
+    if !payload.encode_into(&sync::calibration_message(&calibration)) {
         return;
     }
-    let Some(n) = sync::encode_calibration_message(&calibration, &mut payload[..]) else {
-        return;
-    };
-    payload.truncate(n);
     // **No success line, and the reason is worth keeping here.** `notify` returns
     // `Ok(())` even when nobody is subscribed — it checks the peer's CCCD table and
     // returns early without sending — so its result cannot distinguish "sent" from

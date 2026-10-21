@@ -15,27 +15,6 @@ import 'dart:convert' as $convert;
 import 'dart:core' as $core;
 import 'dart:typed_data' as $typed_data;
 
-@$core.Deprecated('Use sampleDescriptor instead')
-const Sample$json = {
-  '1': 'Sample',
-  '2': [
-    {'1': 't_ms', '3': 1, '4': 1, '5': 13, '10': 'tMs'},
-    {'1': 'ax', '3': 2, '4': 1, '5': 17, '10': 'ax'},
-    {'1': 'ay', '3': 3, '4': 1, '5': 17, '10': 'ay'},
-    {'1': 'az', '3': 4, '4': 1, '5': 17, '10': 'az'},
-    {'1': 'qw', '3': 5, '4': 1, '5': 17, '10': 'qw'},
-    {'1': 'qx', '3': 6, '4': 1, '5': 17, '10': 'qx'},
-    {'1': 'qy', '3': 7, '4': 1, '5': 17, '10': 'qy'},
-    {'1': 'qz', '3': 8, '4': 1, '5': 17, '10': 'qz'},
-  ],
-};
-
-/// Descriptor for `Sample`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List sampleDescriptor = $convert.base64Decode(
-    'CgZTYW1wbGUSEQoEdF9tcxgBIAEoDVIDdE1zEg4KAmF4GAIgASgRUgJheBIOCgJheRgDIAEoEV'
-    'ICYXkSDgoCYXoYBCABKBFSAmF6Eg4KAnF3GAUgASgRUgJxdxIOCgJxeBgGIAEoEVICcXgSDgoC'
-    'cXkYByABKBFSAnF5Eg4KAnF6GAggASgRUgJxeg==');
-
 @$core.Deprecated('Use traceSampleDescriptor instead')
 const TraceSample$json = {
   '1': 'TraceSample',

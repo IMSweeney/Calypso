@@ -1,10 +1,25 @@
 //! Protobuf wire format for rep records and the BLE sync protocol.
 //!
-//! The schema lives in `proto/calypso.proto` (shared with the app); the Rust
-//! types are generated from it at build time by `micropb-gen` (see
-//! `build.rs`). This module wraps them with conversions to and from the
-//! platform-independent types in [`crate::rep`] and [`crate::sampler`], plus
-//! record-level encode/decode into caller-provided byte buffers.
+//! The schema lives in `proto/calypso.proto` (shared with the app) and the Rust
+//! types are generated from it at build time by `micropb-gen` (see `build.rs`).
+//! Those generated types **are** the records and the messages — `msg::RepSummary`,
+//! `msg::TraceChunk`, `msg::SyncMessage` and the rest are used directly, by
+//! [`crate::sync`], [`crate::store`] and the firmware.
+//!
+//! What is left here is the two things a schema type cannot be:
+//!
+//! - **the framing above them**: the log's `[u32 len][record]` frame, the BLE
+//!   envelope, and encode/decode into a caller's buffer — the device has no
+//!   allocator to encode into, so the caller brings the bytes;
+//! - **the boundary types**, where the on-chip representation is not the wire one.
+//!   [`crate::sampler::Sample`] and [`crate::rep::TracePoint`] keep acceleration
+//!   and quaternions as `i16` (protobuf has no 16-bit scalar, and the 100 Hz ring
+//!   and the trace buffer are held in RAM), a trace keeps absolute timestamps
+//!   where the wire carries offsets from the rep's start, a rep's identity is
+//!   `[u8; 16]` rather than the wire's bounded byte container, and
+//!   [`crate::calibration::Calibration`] packs four levels into one word. Each
+//!   conversion below is one of those crossings, and nothing here is a mirror of
+//!   a schema type.
 //!
 //! Log layout: each rep is one `RepSummary` record followed by
 //! `chunk_count` `TraceChunk` records carrying the same `rep_uuid`. Records are

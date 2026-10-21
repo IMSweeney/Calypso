@@ -24,18 +24,6 @@ syntax = "proto3";
 
 package calypso;
 
-// One IMU sample as sampled at 100 Hz by the firmware.
-message Sample {
-  uint32 t_ms = 1;  // monotonic device uptime, milliseconds
-  sint32 ax = 2;
-  sint32 ay = 3;
-  sint32 az = 4;  // linear (gravity-removed) acceleration
-  sint32 qw = 5;
-  sint32 qx = 6;
-  sint32 qy = 7;
-  sint32 qz = 8;  // orientation quaternion
-}
-
 // One point of a stored rep trace.
 //
 // Both the derived displacement and the raw inputs are kept, so the app can

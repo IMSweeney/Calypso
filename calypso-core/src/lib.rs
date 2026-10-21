@@ -13,6 +13,7 @@ pub mod ble;
 pub mod calibration;
 pub mod fixtures;
 pub mod flashlog;
+pub mod gatt;
 pub mod pb;
 pub mod rep;
 pub mod sampler;

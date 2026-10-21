@@ -227,8 +227,11 @@ canonical text; in advertising data a 128-bit UUID goes on air least-significant
 byte first, so the same UUID must be *reversed* there. The firmware therefore
 stores **wire order in both places** and a client reverses both — `40 88 13 df …
 20 ca 00 00` is `0000ca20-b0cd-11ec-871f-d45ddf138840` to a client.
-`calypso-core/src/ble.rs` explains the rule; `tests/gatt_table.rs` and
-`tests/advertising.rs` pin each side separately.
+The UUIDs are declared once, in text form, in `proto/calypso.proto`;
+`tools/gatt-gen`'s `uuid::to_wire_order` is the single place the reversal happens,
+and the generated `calypso_core::gatt::uuid` carries the wire bytes (for the GATT
+tree and for the advertisement, which wants the same array), the `Uuid` and the
+text. `tests/advertising.rs` and `tests/gatt.rs` pin each side against the text.
 
 Getting this wrong the other way round is how the device once exposed every
 service as `408813df-…` while the app looked for `0000ca20-…`.
@@ -240,16 +243,23 @@ full, it can't be initialized twice`, but only when another test in the same
 process built one first. The firmware — which builds one table, once — is fine.
 
 **Cause.** `GapConfig::Peripheral(name, appearance).build(&mut table)` is exactly
-what a device with a read-only name wants, and it replaces the hand-built GAP
-service. But it keeps the name in a **function-local `static
-StaticCell<String<22>>`** (`trouble-host/src/gap.rs`), initialised with `.init()`,
-and `static_cell` panics when a cell is initialised twice. One table per process is
-assumed, and a host test suite is many tables in one process.
+what a device with a read-only name wants, but it keeps the name in a
+**function-local `static StaticCell<String<22>>`** (`trouble-host/src/gap.rs`),
+initialised with `.init()`, and `static_cell` panics when a cell is initialised
+twice. One table per process is assumed, and a host test suite is many tables in
+one process. (`#[gatt_service]`, which the generated table uses, does the same
+thing with each characteristic's storage — see `tools/gatt-gen/PLAN.md`, errata
+E1.)
 
-**Fix.** GAP stays hand-built in `calypso_core::ble` — four lines, with the device
-name at `&[CharacteristicProp::Read]`. Using the library's config would have made
-`tests/gatt_table.rs` unrunnable, which is worth more than those four lines: that
-suite is how the table is checked at all.
+**Fix, for the hand-built table.** GAP was built by hand in `calypso_core::ble` —
+four lines, with the device name at `&[CharacteristicProp::Read]` — because using
+the library's config would have made the table's tests unrunnable, which was worth
+more than those four lines.
+
+**Now.** The table is generated (`proto/calypso.proto` → `calypso_core::gatt`),
+which uses `GapConfig` and `#[gatt_service]`, so this is the price rather than a
+choice: `tests/gatt.rs` is **one test** that builds the table once and runs its
+checks as functions, and nothing else in that process may build one.
 
 ### A client must discover services before subscribing
 
@@ -316,9 +326,10 @@ subscription survives. (The gravity characteristic is gone now, and the sync ser
 has one notifiable characteristic rather than two — so the count cannot be got wrong
 in the same way again. It is still derived, and still checked against the table.)
 
-**Fix.** `calypso_core::ble::NOTIFIABLE_CHARACTERISTICS`, passed as the server's
-`CCCD_MAX`, with a host test asserting the constant equals the number of CCCDs
-`build_gatt_table` actually created.
+**Fix.** The constant was derived from the table that was built, with a host test
+asserting it equalled the table's own count. Then the generated table removed the
+question: `#[gatt_server]` sums the attribute and CCCD counts from the service
+declarations at compile time, so there is no number to keep in step.
 
 **Corollary: a notification's result is not evidence.** Because `notify` returns
 `Ok` when nobody is subscribed, `calibration status delivered to the app` printed
@@ -486,6 +497,7 @@ reopened" has to `await tester.pumpWidget(const SizedBox.shrink())` first
 ### A host GATT table cannot check a characteristic's properties
 
 `trouble-host`'s table exposes a characteristic's value and type, not its properties, and
-`table.set` does not consult them either. So nothing in `tests/gatt_table.rs` can tell a
-read-only characteristic from a writable one: the device name's read-only-ness is pinned
-by `build_gatt_table`, and the test there can only pin the value.
+`table.set` does not consult them either. So a host test cannot tell a read-only
+characteristic from a writable one: what keeps the declared properties honest is that
+they come from the schema (`proto/calypso.proto`), which the device and the app both
+generate from.

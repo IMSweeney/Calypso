@@ -1,4 +1,5 @@
-use calypso_core::ble::{build_advertising, ADV_MAX, SYNC_SERVICE_UUID_BYTES};
+use calypso_core::ble::{build_advertising, ADV_MAX};
+use calypso_core::gatt::uuid::SYNC_SERVICE_TEXT;
 use calypso_core::DEVICE_NAME_MAX;
 
 fn parse_structures(data: &[u8], len: usize) -> Vec<(u8, Vec<u8>)> {
@@ -51,7 +52,9 @@ fn advertises_the_service_and_the_name_together() {
         *service_type, 0x07,
         "complete list of 128-bit service UUIDs"
     );
-    assert_eq!(service, &SYNC_SERVICE_UUID_BYTES, "the array itself");
+    // The text, not the array: the array comes from the schema, and what a
+    // client prints is what the app matches against.
+    assert_eq!(canonical(service), SYNC_SERVICE_TEXT);
 
     let (name_type, name) = &fields[2];
     assert_eq!(*name_type, 0x09, "complete local name");

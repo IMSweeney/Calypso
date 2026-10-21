@@ -9,6 +9,9 @@ description  = "Platform-independent logic for the Calypso firmware; unit-testab
 # trouble-host is no_std and platform-independent: the GATT attribute table is
 # built here so host tests can poke at it exactly like a BLE client would.
 trouble-host = { version = "0.5.0", features = ["gatt"] }
+# `#[gatt_server]`/`#[gatt_service]` back each characteristic with a
+# `static_cell::StaticCell`, which is the table's storage. See src/gatt.rs.
+static_cell = "2.1.1"
 embassy-sync = "0.7.2"
 embedded-storage = "0.3.1"
 # no_std math (sqrt/atan2/asin) for the rep trace integration.
@@ -26,3 +29,7 @@ protoc-bin-vendored = "3"
 [dev-dependencies]
 # used by the synthetic fixture generators in tests/
 libm = "0.2"
+# For `tests/gatt_generated.rs`, which regenerates the table in memory and
+# compares it with the committed `src/gatt.rs`. Published separately: this crate
+# consumes it, it does not own it.
+gatt-gen = { path = "../tools/gatt-gen" }
