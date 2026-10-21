@@ -5,15 +5,17 @@
 //! process. The checks below are separate functions called from that one test —
 //! which is the price of letting the macro own the storage (see
 //! `tools/gatt-gen/PLAN.md`, errata E1).
+//!
+//! Both characteristics are halves of one pipe now, so what a client *writes* is a
+//! frame rather than a message: the table stores chunks, and the decode that turns
+//! them into a `SyncRequest` belongs to `crate::pipe` (see `tests/pipe.rs`). What
+//! is left to check here is the table itself — the UUIDs, the properties, and the
+//! size its storage will and will not take.
 
-use calypso_core::calibration::Calibration;
-use calypso_core::gatt::uuid;
-use calypso_core::gatt::{
-    max_len, CalypsoGatt, SyncMessagesValue, SyncRequestsValue, PIPE_CHUNK_MAX, SCHEMA_HASH,
-};
+use calypso_core::gatt::{uuid, CalypsoGatt, PIPE_CHUNK_MAX, PIPE_STORAGE_MAX, SCHEMA_HASH};
 use calypso_core::pb::{self, msg};
+use calypso_core::pipe::{CHUNK_MAX, FRAME_MAX, MESSAGE_MAX, XFER_TIMEOUT_MS};
 use calypso_core::rep::TracePoint;
-use calypso_core::sync::{self, SYNC_CHUNK_MAX};
 use calypso_core::uuid::{fixture_uuid, UUID_LEN};
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
@@ -23,8 +25,7 @@ fn the_generated_table_is_the_interface_the_proto_declares() {
     let gatt = table();
 
     checks_uuids_and_properties(gatt);
-    a_request_round_trips_through_the_table(gatt);
-    a_message_round_trips_through_the_table(gatt);
+    a_frame_round_trips_through_the_table(gatt);
     the_sizes_come_from_the_schema();
 }
 
@@ -91,103 +92,79 @@ fn checks_uuids_and_properties(gatt: &CalypsoGatt<'_>) {
     assert_ne!(gatt.sync.messages.handle, gatt.sync.requests.handle);
 
     // NOTIFY is what gives a characteristic a CCCD: a subscriber needs one, and
-    // the written half must not have one.
+    // the written half must not have one. `WRITE_NO_RSP` only, since the pipe's
+    // own acknowledgement is what reports a request arriving.
     assert!(gatt.sync.messages.cccd_handle.is_some());
     assert!(gatt.sync.requests.cccd_handle.is_none());
 }
 
-/// What the app writes: a `SyncRequest`, decoded out of the stored value.
-fn a_request_round_trips_through_the_table(gatt: &CalypsoGatt<'_>) {
-    let request = msg::SyncRequest {
-        body: Some(msg::SyncRequest_::Body::Trace(msg::TraceRequest {
-            rep_uuid: pb::uuid_to_field(&fixture_uuid(42)),
-            all_chunks: true,
-            chunk_index: 0,
-        })),
-    };
-
-    let value = SyncRequestsValue::encode(&request).expect("a request fits its characteristic");
+/// What the app writes is a chunk, and the table stores it as one.
+///
+/// **This is the test that found `PIPE_STORAGE_MAX`.** A buffer the frame can fill
+/// exactly is a buffer whose write reads back empty (see `docs/GOTCHAS.md`), so the
+/// storage is one byte wider than [`FRAME_MAX`] and this is where that is checked.
+fn a_frame_round_trips_through_the_table(gatt: &CalypsoGatt<'_>) {
+    let frame = [0x2Au8; FRAME_MAX];
+    let value: heapless::Vec<u8, PIPE_STORAGE_MAX> =
+        heapless::Vec::from_slice(&frame).expect("a full frame fits the characteristic");
     gatt.table().set(&gatt.sync.requests, &value).unwrap();
 
-    let stored: SyncRequestsValue = gatt.table().get(&gatt.sync.requests).unwrap();
-    let decoded = stored.decode().expect("what was stored decodes");
-    let trace = match decoded.body {
-        Some(msg::SyncRequest_::Body::Trace(trace)) => trace,
-        None => panic!("the body survived"),
-    };
-    assert_eq!(pb::uuid_from_field(&trace.rep_uuid), Some(fixture_uuid(42)));
-}
+    let stored: heapless::Vec<u8, PIPE_STORAGE_MAX> =
+        gatt.table().get(&gatt.sync.requests).unwrap();
+    assert_eq!(
+        stored.as_slice(),
+        &frame[..],
+        "a full frame survives the table"
+    );
 
-/// What the device sends: a `SyncMessage`, through the same storage.
-fn a_message_round_trips_through_the_table(gatt: &CalypsoGatt<'_>) {
-    let message = msg::SyncMessage {
-        body: Some(msg::SyncMessage_::Body::Calibration(
-            pb::calibration_message(&Calibration {
-                sys: 0,
-                accel: 3,
-                gyro: 3,
-                mag: 0,
-            }),
-        )),
-    };
-
-    let value = SyncMessagesValue::encode(&message).expect("a message fits its characteristic");
-    gatt.table().set(&gatt.sync.messages, &value).unwrap();
-
-    let stored: SyncMessagesValue = gatt.table().get(&gatt.sync.messages).unwrap();
-    assert_eq!(stored.decode().expect("what was stored decodes"), message);
+    assert_eq!(
+        <heapless::Vec<u8, PIPE_STORAGE_MAX> as AsGatt>::MAX_SIZE,
+        PIPE_STORAGE_MAX
+    );
+    assert!(
+        FRAME_MAX < PIPE_STORAGE_MAX,
+        "and a frame can never be the buffer's size"
+    );
 }
 
 /// The numbers the schema declares, and the buffers that depend on them.
 fn the_sizes_come_from_the_schema() {
+    assert_eq!(PIPE_CHUNK_MAX, 244, "the schema's chunk buffer");
     assert_eq!(
-        SYNC_CHUNK_MAX,
-        max_len::SYNC_MESSAGES,
-        "the sync chunk size is the max_len the schema declares"
+        CHUNK_MAX,
+        calypso_core::gatt::pipe_sync::CHUNK_MAX,
+        "the pipe's ceiling and the characteristic's buffer are one number"
     );
     assert_eq!(
-        max_len::SYNC_REQUESTS,
-        <SyncRequestsValue as AsGatt>::MAX_SIZE
+        FRAME_MAX, PIPE_CHUNK_MAX,
+        "a frame fits the buffer it is built in"
     );
-    assert_eq!(
-        max_len::SYNC_MESSAGES,
-        <SyncMessagesValue as AsGatt>::MAX_SIZE
-    );
-    assert_eq!(PIPE_CHUNK_MAX, 244);
-    assert_ne!(SCHEMA_HASH, 0);
+    assert_ne!(SCHEMA_HASH, 0, "the schema's hash is what the app checks");
+    assert!(XFER_TIMEOUT_MS > 0);
 
-    // The largest request, and the largest message the device can build, have
-    // to fit the characteristics those numbers describe: a payload that does
-    // not fit fails to notify *silently*, which is the failure this whole
-    // exercise exists to make impossible.
-    let mut scratch = [0u8; 32];
-    let n = pb::encode_trace_request(
-        &msg::TraceRequest {
-            rep_uuid: pb::uuid_to_field(&fixture_uuid(7)),
-            all_chunks: false,
-            chunk_index: 1,
-        },
-        &mut scratch,
-    )
-    .expect("a trace request encodes");
-    assert!(
-        n <= max_len::SYNC_REQUESTS,
-        "a request encodes to {n} bytes"
-    );
-
-    let chunk = pb::chunk_message(
-        fixture_uuid(7),
-        0,
-        0,
-        1,
-        &[TracePoint::ZERO; sync::BLE_CHUNK_SAMPLES],
-    );
-    let mut scratch = [0u8; SYNC_CHUNK_MAX];
+    // A whole trace chunk — the largest message the device sends — has to encode
+    // into the pipe's reassembly buffer. The generated table asserts the same
+    // thing about `micropb`'s *bound* for the type at compile time; this is the
+    // bytes the wire really carries.
+    // Not `TracePoint::ZERO`: protobuf omits zero-valued fields, and a chunk of an
+    // all-zero rep encodes to a third of what a real one does. This is a
+    // rep-shaped point, which is what the ceiling has to hold.
+    let point = TracePoint {
+        t_ms: 12_345,
+        pos: [0.25, -0.5, 0.125],
+        accel: [12, -981, 3],
+        quat: [16384, -2048, 1024, -512],
+    };
+    let chunk = pb::chunk_message(fixture_uuid(7), 0, 0, 1, &[point; pb::TRACE_CHUNK_SAMPLES]);
+    let mut scratch = [0u8; MESSAGE_MAX];
     let n = pb::encode_sync(msg::SyncMessage_::Body::Trace(chunk), &mut scratch)
         .expect("a full trace chunk encodes");
     assert!(
-        n <= max_len::SYNC_MESSAGES,
-        "a chunk of {n} bytes does not fit a characteristic declared as {}",
-        max_len::SYNC_MESSAGES
+        n <= MESSAGE_MAX,
+        "a chunk of {n} bytes does not fit a {MESSAGE_MAX}-byte transfer"
+    );
+    assert!(
+        n > PIPE_CHUNK_MAX,
+        "and it is more than one notification holds ({n} bytes), which is why the pipe exists"
     );
 }

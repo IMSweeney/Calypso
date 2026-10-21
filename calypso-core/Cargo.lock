@@ -77,6 +77,7 @@ dependencies = [
  "embassy-sync",
  "embedded-storage",
  "gatt-gen",
+ "gatt-pipe",
  "heapless 0.9.3",
  "libm",
  "micropb",
@@ -363,6 +364,10 @@ dependencies = [
  "prost-reflect",
  "protoc-bin-vendored",
 ]
+
+[[package]]
+name = "gatt-pipe"
+version = "0.1.0"
 
 [[package]]
 name = "getrandom"

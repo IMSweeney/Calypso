@@ -20,6 +20,11 @@ libm = "0.2"
 # heapless containers keep the generated types allocation-free.
 micropb = { version = "0.6.0", features = ["container-heapless-0-9"] }
 heapless = "0.9"
+# The chunked pipe's framing and its two state machines, which both
+# characteristics now carry (`src/pipe.rs`). A crate of its own because it is a
+# protocol rather than Calypso: the app has a mirror of it, and the two are
+# checked against the same vectors.
+gatt-pipe = { path = "../tools/gatt-pipe" }
 
 [build-dependencies]
 micropb-gen = "0.6.0"
@@ -29,6 +34,9 @@ protoc-bin-vendored = "3"
 [dev-dependencies]
 # used by the synthetic fixture generators in tests/
 libm = "0.2"
+# `tests/pipe.rs` drives the device's session against the pipe's own app-side
+# state machine, rather than against a radio.
+gatt-pipe = { path = "../tools/gatt-pipe" }
 # For `tests/gatt_generated.rs`, which regenerates the table in memory and
 # compares it with the committed `src/gatt.rs`. Published separately: this crate
 # consumes it, it does not own it.

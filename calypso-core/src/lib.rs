@@ -23,6 +23,9 @@ pub mod flashlog;
 #[allow(clippy::all, nonstandard_style, unused, irrefutable_let_patterns)]
 pub mod gatt;
 pub mod pb;
+/// The device's end of the sync pipe: a write becomes a `SyncRequest`, a
+/// `SyncMessage` becomes a run of notifications. `tools/gatt-pipe` is the framing.
+pub mod pipe;
 pub mod rep;
 pub mod sampler;
 pub mod store;
