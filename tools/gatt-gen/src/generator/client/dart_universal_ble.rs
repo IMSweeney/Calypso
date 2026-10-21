@@ -37,6 +37,15 @@ pub struct Config {
     pub messages_import: String,
     /// The prefix those classes are imported under, e.g. `pb`.
     pub messages_prefix: String,
+    /// Backing buffer of a pipe characteristic: the largest chunk that goes in
+    /// one notification.
+    pub pipe_chunk_max: usize,
+    /// Largest message a pipe may carry.
+    pub pipe_msg_max: usize,
+    /// Chunks a pipe may have in flight before it waits for an acknowledgement.
+    pub window: u8,
+    /// No-progress timeout for one pipe transfer, in milliseconds.
+    pub xfer_timeout_ms: u32,
     /// The command that regenerates this file, written into its own header.
     pub regenerate_with: Option<String>,
 }
@@ -46,6 +55,10 @@ impl Default for Config {
         Config {
             messages_import: "messages.pb.dart".to_string(),
             messages_prefix: "pb".to_string(),
+            pipe_chunk_max: 244,
+            pipe_msg_max: 0,
+            window: 8,
+            xfer_timeout_ms: 5000,
             regenerate_with: None,
         }
     }
@@ -91,6 +104,7 @@ pub fn generate(gatt: &Gatt, config: &Config) -> Result<Output, Error> {
     for service in &gatt.services {
         emit_client(&mut out, service, config);
     }
+    emit_pipes(&mut out, gatt, config);
 
     while out.ends_with("\n\n") {
         out.pop();
@@ -271,7 +285,9 @@ fn emit_client(out: &mut String, service: &Service, config: &Config) {
     }
 
     for characteristic in &service.characteristics {
-        emit_members(out, characteristic, config);
+        if characteristic.pipe.is_none() {
+            emit_members(out, characteristic, config);
+        }
     }
 
     out.push_str("}\n");
@@ -401,6 +417,130 @@ fn encode_expression(characteristic: &Characteristic, _config: &Config, value: &
 
 /// `dart format`'s line length.
 const MAX_WIDTH: usize = 80;
+
+/// One class per pipe, holding what the pipe runtime reads: the pair of
+/// characteristics, the numbers it was configured with, and the two codecs.
+///
+/// No members are generated for a pipe characteristic itself — a chunk is not a
+/// message, so a `Stream<SyncMessage>` over that characteristic would decode a
+/// fragment as a message. The runtime owns those two, and this is what it needs
+/// to: see `calypso-app/lib/gatt/pipe.dart` for the other half.
+fn emit_pipes(out: &mut String, gatt: &Gatt, config: &Config) {
+    for pipe in gatt.pipes() {
+        let class = format!("{}Pipe", pascal_case(pipe.name));
+        let inbound = message_of(pipe.to_device, config);
+        let outbound = message_of(pipe.to_host, config);
+
+        let _ = writeln!(
+            out,
+            "\n/// Pipe `{}`: `{}` in, `{}` out.\n\
+             ///\n\
+             /// A transfer carries one message, split into chunks of at most\n\
+             /// [chunkMax] bytes and reassembled by the other end. The runtime owns\n\
+             /// both characteristics; nothing here is decoded as a message except by\n\
+             /// [decodeResponse] and [decodeRequest].\n\
+             class {class} {{\n\
+             \x20 static const String serviceUuid = '{}';\n\
+             \n\
+             \x20 /// `{}`: what this end writes.\n\
+             \x20 static const String downUuid = '{}';\n\
+             \n\
+             \x20 /// `{}`: what this end subscribes to.\n\
+             \x20 static const String upUuid = '{}';\n\
+             \n\
+             \x20 /// Bytes of payload one chunk may carry, before the frame.\n\
+             \x20 static const int chunkMax = {};\n\
+             \n\
+             \x20 /// Largest message a transfer may carry, both ways.\n\
+             \x20 static const int messageMax = {};\n\
+             \n\
+             \x20 /// Chunks in flight at most, before the sender waits.\n\
+             \x20 static const int window = {};\n\
+             \n\
+             \x20 /// No-progress timeout for one transfer, in milliseconds.\n\
+             \x20 static const int xferTimeoutMs = {};{codecs}\n\
+             }}\n",
+            pipe.name,
+            inbound.as_deref().unwrap_or("raw bytes"),
+            outbound.as_deref().unwrap_or("raw bytes"),
+            service_uuid(gatt, pipe.to_device),
+            pipe.to_device.name,
+            pipe.to_device.uuid,
+            pipe.to_host.name,
+            pipe.to_host.uuid,
+            config.pipe_chunk_max,
+            config.pipe_msg_max,
+            config.window,
+            config.xfer_timeout_ms,
+            codecs = dart_codecs(&inbound, &outbound, config),
+        );
+    }
+}
+
+/// The service a pipe's characteristics belong to: the validator pairs two
+/// characteristics of one service.
+fn service_uuid<'a>(gatt: &'a Gatt, characteristic: &Characteristic) -> &'a str {
+    gatt.services
+        .iter()
+        .find(|service| service.proto_name == characteristic.service)
+        .map(|service| service.uuid.as_str())
+        .unwrap_or_default()
+}
+
+/// The message type a pipe direction carries, if it is a protobuf one.
+fn message_of(characteristic: &Characteristic, config: &Config) -> Option<String> {
+    match characteristic.value_type() {
+        ValueType::Message(message) => Some(format!(
+            "{}.{}",
+            config.messages_prefix,
+            short_name(message)
+        )),
+        _ => None,
+    }
+}
+
+/// Encode and decode, per direction, so that the runtime never names a message
+/// class itself: a schema change then stops at the generated file.
+fn dart_codecs(inbound: &Option<String>, outbound: &Option<String>, _config: &Config) -> String {
+    let mut out = String::new();
+    out.push_str(&codec_pair("request", inbound.as_deref()));
+    out.push_str(&codec_pair("response", outbound.as_deref()));
+    out
+}
+
+/// One direction's pair of codecs, laid out the way `dart format` leaves it: the
+/// file is committed, so the repo's own `dart format --set-exit-if-changed` has to
+/// pass on what the emitter writes.
+fn codec_pair(what: &str, message: Option<&str>) -> String {
+    let name = pascal_case(what);
+    let (ty, decode) = match message {
+        Some(message) => (message.to_string(), format!("{message}.fromBuffer(bytes)")),
+        None => ("Uint8List".to_string(), "bytes".to_string()),
+    };
+
+    let encode_line = format!("  static Uint8List encode{name}({ty} message) => ");
+    // `encode_line` already carries the indentation.
+    let encode = if encode_line.len() + "message.writeToBuffer();".len() <= MAX_WIDTH {
+        format!("{encode_line}message.writeToBuffer();")
+    } else {
+        format!("{encode_line}\n      message.writeToBuffer();")
+    };
+    let decode_line = format!("  static {ty} decode{name}(Uint8List bytes) => ");
+    // The trailing semicolon has to fit as well.
+    let decode = if decode_line.len() + decode.len() < MAX_WIDTH {
+        format!("{decode_line}{decode};")
+    } else {
+        format!("{decode_line}\n      {decode};")
+    };
+
+    format!(
+        "\n  /// Encode a `{ty}` for a transfer.\n\
+         {encode}\n\
+         \n\
+         \x20 /// Decode a reassembled `{ty}`.\n\
+         {decode}\n"
+    )
+}
 
 fn property_names(characteristic: &Characteristic) -> Vec<&'static str> {
     let order = [

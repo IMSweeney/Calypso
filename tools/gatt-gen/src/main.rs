@@ -87,13 +87,25 @@ fn parse(args: &[String]) -> Result<Command, String> {
                     .ok_or_else(|| "--server needs a name".to_string())?
                     .clone();
             }
-            "--chunk-max" => rust.pipe_chunk_max = number(args.next(), "--chunk-max")?,
-            "--pipe-msg-max" => rust.pipe_msg_max = number(args.next(), "--pipe-msg-max")?,
+            "--chunk-max" => {
+                let value = number(args.next(), "--chunk-max")?;
+                rust.pipe_chunk_max = value;
+                dart.pipe_chunk_max = value;
+            }
+            "--pipe-msg-max" => {
+                let value = number(args.next(), "--pipe-msg-max")?;
+                rust.pipe_msg_max = value;
+                dart.pipe_msg_max = value;
+            }
             "--window" => {
-                rust.window = number(args.next(), "--window")? as u8;
+                let value = number(args.next(), "--window")? as u8;
+                rust.window = value;
+                dart.window = value;
             }
             "--xfer-timeout" => {
-                rust.xfer_timeout_ms = number(args.next(), "--xfer-timeout")? as u32;
+                let value = number(args.next(), "--xfer-timeout")? as u32;
+                rust.xfer_timeout_ms = value;
+                dart.xfer_timeout_ms = value;
             }
             "--fdset" => {
                 fdset = Some(PathBuf::from(

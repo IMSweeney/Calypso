@@ -57,6 +57,15 @@ service Device {
     };
   }
 
+  // A plain write, outside any pipe: the write flavour is the client's choice
+  // and this is what chooses it.
+  rpc Beep(gatt.U8) returns (google.protobuf.Empty) {
+    option (gatt.characteristic) = {
+      uuid: "6e400005-b5a3-f393-e0a9-e50e24dcca9e"
+      props: [WRITE_NO_RSP]
+    };
+  }
+
   rpc Rx(Command) returns (google.protobuf.Empty) {
     option (gatt.characteristic) = {
       uuid: "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
