@@ -26,7 +26,7 @@ use crate::model::{Bare, Characteristic, Gatt, Prop, Service, ValueType};
 pub const NAME: &str = "rust-trouble";
 
 /// The file this target writes.
-pub const OUTPUT_FILE: &str = "gatt_generated.rs";
+pub const OUTPUT_FILE: &str = "gatt.rs";
 
 /// What the generated code needs to know about the crate it lands in.
 #[derive(Debug, Clone)]

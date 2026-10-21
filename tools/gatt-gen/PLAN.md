@@ -30,7 +30,7 @@ Built, tested, and in use by Calypso:
 Calypso consumes it, by hand and with the output committed: `proto/calypso_gatt.proto`
 declares the sync service (separate from `proto/calypso.proto`, which holds the
 messages the app also generates from), `calypso-core/tool/gen_gatt.sh` runs
-`gatt-gen rust-trouble` to write `calypso-core/src/gatt_generated.rs`, and the firmware builds
+`gatt-gen rust-trouble` to write `calypso-core/src/gatt.rs`, and the firmware builds
 that server (`calypso-esp32/src/bin/main.rs`). `calypso-core`'s host tests build the
 generated table and round-trip both messages through it, and
 `tests/gatt_generated.rs` fails if the committed table and the schema disagree.

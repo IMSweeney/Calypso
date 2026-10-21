@@ -114,7 +114,7 @@ fn the_file_is_named_by_the_target_and_says_how_to_regenerate_itself() {
         .generate(&gatt, &TargetConfig::RustTrouble(config))
         .unwrap();
 
-    assert_eq!(output.file_name, "gatt_generated.rs");
+    assert_eq!(output.file_name, "gatt.rs");
     assert!(
         output
             .source
