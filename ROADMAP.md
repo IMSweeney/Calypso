@@ -149,8 +149,19 @@ Where Calypso is and what is left. Feature documentation lives in
 - [ ] **Size outgoing chunks to the negotiated MTU** instead of the fixed
       conservative 3 samples (`sync::BLE_CHUNK_SAMPLES`). The device learns the
       MTU per connection; `TraceChunk.total_chunks` already means the client
-      copes with any chunk size. ~12 points per notification instead of 3 would cut
-      a rep's trace from ~150 packets to ~40, which is most of the latency above.
+      copes with any chunk size. A rep's trace from ~150 packets to ~40 is most of
+      the latency above.
+
+      The ~12 points per notification this item used to promise does not come
+      from reading the MTU alone: the budget behind `SYNC_CHUNK_MAX` is
+      `1 + 3 * 64`, a 64-byte *worst-case* point (`tests/sync.rs` encodes
+      `u32::MAX` timestamps and `i32::MIN` quats to prove it fits), and a
+      244-byte payload still divides into ~3 of those. The win needs chunks sized
+      by filling until the encoding does not fit — the generated value type's
+      `encode_into` reports exactly that — which means raising the characteristic's
+      `max_len` to the payload size in `proto/calypso_gatt.proto`, and making
+      `total_chunks` a computed number rather than `points.div_ceil(3)`, since the
+      app treats it as the only end-of-stream signal.
 - [ ] `SyncStatus` is defined in the proto and encodable in core, but the
       firmware never sends it — so "this trace is no longer in the log" is
       answered by the client timing out instead of by a message. Either wire it
@@ -160,12 +171,6 @@ Where Calypso is and what is left. Feature documentation lives in
       already gone, unknown request), the only thing that happens is a timeout —
       the device logs it and says nothing. A reply that names what it answers
       (a request id, or at least a status body) is what would close both.
-- [ ] **Let the app clear the device's log.** Today the only way is `espflash
-      erase-parts --partition-table partitions.csv log` from a host, which is the
-      wrong shape when iterating on the app. With one characteristic each way this
-      is now a new `SyncRequest` arm — calling `FlashLog::format()` and resetting
-      the summary cursor — rather than a characteristic of its own. It destroys
-      reps, so it should be deliberate and logged.
 
 ### Firmware
 - [ ] **OTA code updates** — the app partition is 1.5 MB with headroom; dual
