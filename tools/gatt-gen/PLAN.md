@@ -1,0 +1,245 @@
+# GATT codegen: spec review and build plan
+
+Review of [SPEC.md](SPEC.md) (the handoff spec, revision 2) against the code that
+would have to consume it — `trouble-host` 0.5.1, `micropb` 0.6, `universal_ble`
+2.3.0, all pinned in this repo — plus the parts of Calypso that already do this by
+hand (`calypso-core/src/ble.rs`, `calypso-esp32/src/bin/main.rs`,
+`calypso-app/lib/transport/`).
+
+The spec is sound in its shape: proto as the single source of truth, service = GATT
+service, rpc = characteristic, bare-value markers for SIG-compatible characteristics,
+an escape hatch for multi-field SIG types, and a validated model that both generators
+trust. Section 1 records what I verified by running it, section 2 what is wrong or
+missing, section 3 the decisions that block code, section 4 the sequence I propose.
+
+## 0. Status
+
+Built, tested, and in use by Calypso:
+
+- `src/descriptor.rs` — schema to descriptor set to model, custom options included.
+- `src/model.rs`, `src/uuid.rs`, `src/validate.rs`, `src/vocabulary.rs` — the model,
+  the §6.4 rules, and the vocabulary the tool ships (so a consumer does not vendor a
+  copy, and a schema that carries a *different* one is rejected rather than believed).
+- `src/generator/` — the back ends, one folder per side of the link and one file per
+  language and BLE library: `server/rust_trouble.rs` is written,
+  `client/dart_universal_ble.rs` is not.
+- `proto/gatt_options.proto` (in this crate) — the vocabulary, which ships with the tool.
+- `tests/fixtures/` — the example schema, one failing fixture per rule, the cases
+  that warn, and what `rust-trouble` emits.
+
+Calypso consumes it, by hand and with the output committed: `proto/calypso_gatt.proto`
+declares the sync service (separate from `proto/calypso.proto`, which holds the
+messages the app also generates from), `calypso-core/tool/gen_gatt.sh` runs
+`gatt-gen rust-trouble` to write `calypso-core/src/gatt.rs`, and the firmware builds
+that server (`calypso-esp32/src/bin/main.rs`). `calypso-core`'s host tests build the
+generated table and round-trip both messages through it, and
+`tests/gatt_generated.rs` fails if the committed table and the schema disagree.
+
+Checked-in output is the decision, not an accident: it keeps protoc and the tool
+out of the firmware build entirely, and it means a change to the interface is
+visible in review. The cost is that the emitter has to write the file the way
+`rustfmt` leaves it, because the repo's `cargo fmt --check` covers it.
+
+Not written yet: the Dart back end (and the typed client), `gatt-pipe`, the config
+file of §5.2, and the schema-version characteristic of §9 (the hash itself is
+generated). Section 4 is the order; section 3 is what is still open.
+
+Decided by the review's first round: this stack's property enforcement gap is
+accepted (no typed wrappers in v1 — a characteristic's declared properties are
+emitted, and calling `notify` on one that does not offer it is a runtime error, not
+a compile one), `perm` is parsed and warned about but not enforced, and the
+`#[gatt_service]` macros are acceptable even though they allow one table per
+process.
+
+## 1. Verified, not assumed
+
+Each of these was checked against the pinned crates or by running the code.
+
+**Custom options survive the descriptor set and are readable from Rust.** With the
+spec's own `gatt_options.proto` and `device.proto`, `protoc --include_imports
+--descriptor_set_out` then `prost_reflect::DescriptorPool::decode` gives a typed
+`CharOpts` back: `props`, `perm`, `max_len`, `pipe`, `max` and the nested
+`ServiceOpts` all decode. Two traps found:
+
+- `DynamicMessage::fields()` **skips extension fields** — the options look absent
+  unless you iterate `extensions()` or call `get_extension()`.
+- The descriptor set must be built with `--include_imports`, or `gatt_options.proto`
+  is not in the pool, the extensions are not registered, and the options come back
+  empty (silently).
+
+**The same descriptor set is readable from Dart.** `protoc-gen-dart` (25.1.0) emits
+`Extension` objects and `registerAllExtensions` for `extend
+google.protobuf.ServiceOptions/MethodOptions`; `FileDescriptorSet.fromBuffer(bytes,
+registry)` followed by `getExtension()` produces the same values as the Rust side.
+So a Dart generator over the descriptor set is viable without a JSON detour (though
+see 3.6).
+
+**`micropb` already answers the bounded-size question.** Every generated message
+carries `const MAX_SIZE: Result<usize, &'static str>`, and
+`micropb::size::max_encoded_size::<T>()` is a `const fn` that panics — a compile
+error — on an unbounded message. Validation rule 8 therefore needs no bound maths in
+the generator: emit
+
+```rust
+const _: () = assert!(micropb::size::max_encoded_size::<Command>() <= PIPE_MSG_MAX);
+```
+
+and let rustc enforce it. Verified by generating from the spec's `device.proto`
+(services and `option (gatt.characteristic)` in the file do not upset it).
+
+**`trouble-host` properties are runtime data, not types.** `Characteristic<T>`
+exposes `set`, `get`, `notify` and `indicate` for every characteristic regardless of
+declared properties (`attribute.rs:647`, `703`); `notify` on a characteristic with no
+CCCD fails at *runtime* with `Error::NotFound`. So the typed wrapper the spec calls
+"possibly skippable" is the only thing standing between the schema and the compile
+errors in the goal section, and `set` has to be wrapped for the same reason.
+
+**The GATT macros are unusable for the table this project needs.** `#[gatt_server]` /
+`#[gatt_service]` exist (feature `derive`) and do something valuable — they sum the
+attribute and CCCD counts and assert them at compile time, which is exactly the pair
+of hand-maintained constants that already cost this project a session
+(`calypso-core/src/ble.rs`, `NOTIFIABLE_CHARACTERISTICS`). But each characteristic's
+storage is a `static StaticCell<[u8; MAX_SIZE]>` declared *inside the generated
+`new()`* (`trouble-host-macros/src/service.rs:166`), and `StaticCell::init` panics if
+it is already initialised. A macro-generated service can be constructed **once per
+process** — the same trap `calypso-core` documents for `GapConfig`. The spec's own
+acceptance tests ("host tests build the whole table", `trybuild` cases) would be
+limited to one table per test binary.
+
+**Permissions are not expressible.** There is no per-characteristic
+encryption/authentication enforcement in `trouble-host` 0.5.1: `AuthenticatedWrite`
+exists as a property bit and `INSUFFICIENT_AUTHENTICATION` as an ATT error code, and
+nothing joins them. `PERM_ENCRYPTED`/`PERM_AUTHENTICATED` cannot be honoured, so rule
+8.3 ("fail the build if a requested permission can't be expressed") fails the spec's
+own example schema. See 3.3.
+
+**Bare values are native-endian, not little-endian.**
+`impl<T: Primitive> FixedGattValue for T` is `mem::size_of` plus a raw pointer read
+(`types/gatt_traits.rs:79`). On Xtensa and ARM that is little-endian and SIG-compatible
+in practice, but it is not a guarantee, and it is not what the spec claims. `bool` is
+one byte 0/1; `heapless::String<N>` and `Vec<u8, N>` are supported; so are `u64`,
+`i64` and `f64`, which the spec's bare list omits.
+
+**Everything else the spec needs exists.** `conn.att_mtu()` gives the negotiated MTU
+for chunk sizing. Writes arrive as `GattConnectionEvent::Gatt { event:
+GattEvent::Write(w) }`; `w.handle()` identifies the characteristic, `event.accept()`
+commits it, and for a write *command* the reply is a no-op — which is the shape
+`calypso-esp32` already runs. Notification backpressure is the packet pool:
+`DefaultPacketPool` is MTU 251 × 16 packets, so a 244-byte chunk fits a 247-byte MTU,
+but a window of 8 outstanding chunks in each direction is sharing 16 packets.
+
+**`universal_ble` matches the spec's suspicions.** `requestMtu` exists but is
+OS-managed on iOS/macOS and ignored after the first request on Android 14+. The
+default `QueueType.global` serialises every command, including write-without-response
+(`QueueType.perDevice`/`none` are available). Encrypted characteristics need a
+`pairingCommand` on Apple and Web.
+
+## 2. Errata: where the spec is wrong or silent
+
+| # | Spec says | Reality / what to do instead |
+|---|---|---|
+| E1 | 8.1: emit `#[gatt_server]`/`#[gatt_service]`; typed wrappers "can be skipped" if trouble restricts the API | Trouble does not restrict it, and the macros' static storage forbids building a table twice in one process. Generate against the low-level `AttributeTable` API instead (what `calypso-core/src/ble.rs` already does, and what its host tests rely on): storage is generator-owned, tables are constructible per test, and the table/CCCD sizes become consts the generator computes from the schema rather than constants a human keeps in step |
+| E2 | 8.3: fail the build when a permission can't be expressed | Correct rule, and it makes the example schema illegal today. Pick a policy in 3.3 |
+| E3 | 6.2: "little-endian, exact width" via trouble's `AsGatt` | Generate explicit `to_le_bytes` codecs (the wrappers exist anyway) so the byte contract is ours and is not native-endian by accident |
+| E4 | 6.4 rule 8: the generator computes micropb bounds | Emit the `max_encoded_size` const assert and let the compiler do it (section 1) |
+| E5 | 9: hash the descriptor set | Do not. Descriptor-set bytes depend on protoc version, import order and unknown fields; re-encoding through prost drops values. Hash the canonical serialisation of the validated model, with a format tag |
+| E6 | 7.1: `seq` on data chunks and on ACKs | Two meanings in one field. Give ACKs their own `ack_seq`. Also: `pipe_msg_max` and `u8` seq imply `window < 128`, pipes must be `WRITE_NO_RSP` + `NOTIFY` only (INDICATE and write-with-response change the retry story), a pipe characteristic is never READ, and the receiver must tolerate a chunk that is pure ACK |
+| E7 | 6.4 rule 6: warn above 20 bytes; example sets `max_len: 32` on `Info` | The example trips its own rule. Decide the intent ("sized for a 23-byte MTU only if you promise one") and state it in the schema docs |
+| E8 | 5.3 example | The `pipe: "main"` pair with `READ` on `Info` and `PERM_ENCRYPTED` everywhere is a sketch, not a buildable schema today (E2, E7). Keep it as the doc example but mark it aspirational, or fix it |
+| E9 | — | Silent on the migration: under the pipe, one transfer carries one message, so `TraceChunk.total_chunks` (the app's only end-of-stream signal) and `trace_reassembly.dart`'s tolerant assembler are subsumed by pipe framing. Say so, because that is the win: it also removes the head-of-line `await` that `ROADMAP.md` blames for trace latency |
+| E10 | — | Silent on `is_subscribed`. `notify` returns `Ok` with nobody subscribed, which this project has already paid for. Generated code should expose the check the firmware currently hand-rolls |
+| E11 | — | Silent on the empty message: a transfer may carry an `Empty` (encoded length 0) or a message that encodes to 0 bytes. The chunker must not confuse "START carrying nothing" with an aborted transfer |
+| E12 | — | Silent on reconnects: CCCD state, a transfer in flight when the link drops, and the retry of a half-sent transfer. `gatt-pipe` needs an explicit reset |
+| E13 | 5.2 config (TOML in build.rs) *and* `micropb` per-field bounds in `build.rs` | Two places that must agree about sizes. One owner: `gatt-gen` runs `micropb-gen` and owns the config |
+| E14 | 6.4 rule 8: "that bound must not exceed `pipe_msg_max`" | `micropb`'s bound is a worst case over the *type*, which for a re-chunked message is far larger than anything the protocol sends (Calypso's `SyncMessage` allows a 48-sample trace chunk; the device sends 3, so it declares `max_len` 193 against a type bound of ~2.4 KB). Enforced for pipes, where the reassembly buffer really must hold the worst case; for single-shot characteristics the check is "the largest message the device builds fits", which is a runtime test (`calypso-core/tests/sync.rs`) |
+
+## 3. Decisions needed before code
+
+1. **Where the generated Rust lands.** `tools/gatt-gen` is a standalone crate
+   (lib + bin) and the descriptor-set/validator half is built. The emitter needs a
+   home that compiles on the host with `trouble-host`, so it can be tested without
+   hardware. Proposal: generate into `calypso-core` (which already owns the GATT
+   table, is `no_std` and host-tested) rather than into `calypso-esp32`, and keep
+   `gatt-pipe` beside it in the same crate. The alternative — a `calypso-gatt` crate
+   of its own — is tidier if the plan is for this to leave the repo later.
+2. **Macros vs low-level table generation** (E1). Settled by the first review round:
+   macros are acceptable, one table per process is acceptable, and the generated code
+   therefore contains no property-enforcing wrappers. The cost is the compile-fail
+   tests in the acceptance list: those move to the *value* types (a `Command` passed
+   where an `Event` is expected is still a compile error) and to the analyzer tests on
+   the Dart side.
+3. **Permissions** (E2). Settled by the first review round: not needed for v1. The
+   `perm` field stays in the vocabulary and the validator warns when it is set, so a
+   schema can carry the intent without the build pretending to enforce it.
+4. **Scope of the first vertical slice.** Rust-only against the spec's example schema
+   first, then Dart, then migrate `proto/calypso.proto` onto the modeling — or do
+   Calypso's protocol in the same pass? I'd keep the migration separate so the crate
+   can be developed against fixtures without freezing the app's protocol.
+5. **Dart delivery.** The app checks in its generated protobufs
+   (`calypso-app/lib/protocol/`, regenerated by `tool/gen_proto.sh`). Match that:
+   generated GATT client + runtime checked in under `calypso-app/lib/gatt/`, with the
+   generator run by hand, and the runtime layered on the existing `BleLink` seam so
+   the whole path still runs in `flutter test` with `FakeBleLink`.
+6. **Dart input: descriptor set or model JSON?** Both work (section 1). The model JSON
+   is the better default: the validator and the descriptor-reading trick get
+   implemented once, the Dart emitter becomes a pure function of a validated model
+   with no protobuf reflection, and drift between the two language back ends becomes
+   impossible by construction. Revisit if we ever want the Dart generator to be
+   reusable outside this repo.
+7. **Pipe framing details** (E6): `ack_seq` field, `window < 128`, WRITE_NO_RSP +
+   NOTIFY only. Confirm the CRC stays (it is cheap and it catches framing bugs the
+   link layer cannot see, but it is not catching radio corruption — notifications on
+   a connected link are retransmitted by the LL).
+8. **Test vectors.** Since the chunker exists twice (Rust and Dart), drive both from
+   one checked-in vector file, so the state machines are tested against the same
+   bytes rather than against each other's bugs.
+
+## 4. Sequence I propose
+
+0. **Crate skeleton + model.** `gatt-gen` runs protoc (vendored, as
+   `calypso-core/build.rs` already does), reads the descriptor set with
+   `prost-reflect`, and builds a validated `GattModel`. Tests: the spec's example
+   schema parses, the nested `CharOpts` decodes, and the two traps in section 1 have
+   a test each.
+1. **Validator.** The 6.4 rules, each with a failing `.proto` fixture and its
+   expected error, in the shape of `calypso-core/tests/`. This is the piece both
+   generators depend on, so it lands before any emission.
+2. **Rust emitter + runtime, bare and single-shot.** Low-level table, typed wrappers
+   (`read`/`set`/`notify` only where declared), the typed event enum, the schema
+   hash. Host tests build the table twice in one process — the property the macros
+   cannot give — and drive it through `AttributeTable` the way
+   `calypso-core/tests/gatt_table.rs` does. `trybuild` cases for the compile errors
+   in the goal section.
+3. **`gatt-pipe`.** Executor-agnostic state machine, host tests for 1-byte, one-chunk,
+   many-chunk and `pipe_msg_max` transfers, injected CRC corruption, dropped chunk,
+   duplicate, stalled ACK, oversize `total_len`, MTU 23 and 247, plus the
+   reconnect/reset case (E12).
+4. **Dart runtime + emitter.** Runtime over `BleLink`, generated client, the same
+   vectors as step 3, and analyzer tests that the absent methods are absent.
+5. **Embassy layer and hardware.** Wire the pipe to the RX writes and TX
+   notifications, request the MTU, size chunks from `conn.att_mtu()`, and check the
+   SIG battery characteristic reads in nRF Connect and the phone's OS.
+6. **Migration and docs.** Move Calypso's sync onto the generated service, delete what
+   it replaces (`TraceChunk.total_chunks`, `trace_reassembly.dart`, the hand-built
+   table), and update `docs/APP_SYNC.md`, `docs/GOTCHAS.md` and `ROADMAP.md`.
+
+## 5. Spike (how section 1 was verified)
+
+Scratchpad only, nothing in the repo: `gatt_options.proto` and `device.proto` as
+written in SPEC.md §5, then
+
+```sh
+protoc -Iproto --include_imports --descriptor_set_out=gatt.fdset \
+  proto/gatt_options.proto proto/device.proto          # vendored protoc 36.2
+
+# Rust: prost-reflect 0.16.5
+pool.services() -> service.options().extensions() / get_extension(...)
+
+# Dart: protoc-gen-dart 25.1.0 + protobuf 6.1.0
+registry = ExtensionRegistry(); Gatt_options.registerAllExtensions(registry);
+FileDescriptorSet.fromBuffer(bytes, registry) -> service.options.getExtension(...)
+```
+
+Both printed the same `CharOpts` values. The `micropb` check was a second scratch
+crate running `micropb_gen` over `device.proto` with
+`use_container_heapless()` and `max_bytes`/`max_len` configured.

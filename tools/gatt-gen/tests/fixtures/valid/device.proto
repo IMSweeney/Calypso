@@ -1,0 +1,75 @@
+// The spec's example schema (SPEC.md 5.3), with perm dropped: nothing in the
+// device stack can enforce it, so setting it only produces a warning.
+syntax = "proto3";
+
+package fixture;
+
+import "gatt_options.proto";
+import "google/protobuf/empty.proto";
+
+message DeviceInfo {
+  string fw_version = 1;
+  fixed32 serial = 2;
+}
+message Command {
+  uint32 id = 1;
+  oneof body {
+    SetLed set_led = 2;
+    Reboot reboot = 3;
+  }
+}
+message SetLed {
+  bool on = 1;
+  uint32 rgb = 2;
+}
+message Reboot {}
+message Event {
+  uint32 id = 1;
+  bytes data = 2;
+}
+
+service Battery {
+  option (gatt.service) = {
+    uuid: "0000180f-0000-1000-8000-00805f9b34fb"
+    primary: true
+  };
+
+  rpc Level(google.protobuf.Empty) returns (gatt.U8) {
+    option (gatt.characteristic) = {
+      uuid: "00002a19-0000-1000-8000-00805f9b34fb"
+      props: [READ, NOTIFY]
+      max: 100
+    };
+  }
+}
+
+service Device {
+  option (gatt.service) = {
+    uuid: "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+    primary: true
+  };
+
+  rpc Info(google.protobuf.Empty) returns (DeviceInfo) {
+    option (gatt.characteristic) = {
+      uuid: "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+      props: [READ]
+      max_len: 32
+    };
+  }
+
+  rpc Rx(Command) returns (google.protobuf.Empty) {
+    option (gatt.characteristic) = {
+      uuid: "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+      props: [WRITE_NO_RSP]
+      pipe: "main"
+    };
+  }
+
+  rpc Tx(google.protobuf.Empty) returns (Event) {
+    option (gatt.characteristic) = {
+      uuid: "6e400004-b5a3-f393-e0a9-e50e24dcca9e"
+      props: [NOTIFY]
+      pipe: "main"
+    };
+  }
+}

@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package fixture;
+
+import "gatt_options.proto";
+import "google/protobuf/empty.proto";
+
+
+
+service S {
+  option (gatt.service) = { uuid: "0000180f-0000-1000-8000-00805f9b34fb" primary: true };
+  rpc C(google.protobuf.Empty) returns (gatt.Bytes) {
+    option (gatt.characteristic) = { uuid: "00002a19-0000-1000-8000-00805f9b34fb" props: [READ] };
+  }
+}
