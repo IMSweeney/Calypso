@@ -5,9 +5,8 @@
 //
 // Separate from `calypso.proto`, which holds the messages: that file is the wire
 // format both sides encode, while this one is the device's table. The device
-// generates its attribute table from this file; the app generates its message
-// classes from the other, and needs nothing from here but the UUIDs the schema
-// declares (which `gatt-gen` will emit for its client when that exists).
+// generates its attribute table from this file and the app its typed client, so
+// the UUIDs, the directions and the pipe's shape are declared once.
 
 syntax = "proto3";
 
@@ -19,13 +18,18 @@ import "google/protobuf/empty.proto";
 
 // --- The table -------------------------------------------------------------
 //
-// The generated Rust lands in `calypso_core::gatt`.
+// The generated Rust lands in `calypso_core::gatt`, the generated Dart in
+// `calypso-app/lib/gatt/gatt_client.dart`.
 //
-// Both characteristics are single-shot (`max_len`): one write is one
-// `SyncRequest` and one notification is one `SyncMessage`. The chunked pipe in
-// tools/gatt-gen/SPEC.md is how large payloads will travel later; until then the
-// ceiling is what one notification can carry, which is why traces are re-chunked
-// by `calypso_core::sync`.
+// Both characteristics belong to one **pipe** (`pipe: "sync"`): neither carries a
+// whole message in one value. A message is cut into chunks, each framed and
+// carried in one write or one notification, and reassembled at the other end —
+// `tools/gatt-gen/SPEC.md` §7 describes the protocol, and `tools/gatt-pipe` is the
+// runtime both ends drive it with. That is what a trace travels as: one `TraceChunk`
+// per transfer, a few notifications each, instead of the device re-cutting a trace
+// into three-point notifications. The size of a chunk and of a message are the
+// generator's (`tool/gen_gatt.sh`), not this file's: a pipe has no `max_len`,
+// because it sizes transfers rather than values.
 
 service Sync {
   option (gatt.service) = {
@@ -33,29 +37,29 @@ service Sync {
     primary: true
   };
 
-  // Everything the app sends: a `SyncRequest`, write (app -> device).
+  // Everything the app sends: a `SyncRequest`, as chunks the pipe reassembles.
   //
-  // Sized for a `TraceRequest` and its envelope
-  // (`calypso_core::gatt::max_len::SYNC_REQUESTS`).
+  // `WRITE_NO_RSP` only: the pipe acknowledges with frames of its own, so a write
+  // that waits for an ATT response would put the app's next chunk behind a round
+  // trip for no signal it does not already have.
   rpc Requests(SyncRequest) returns (google.protobuf.Empty) {
     option (gatt.characteristic) = {
       uuid: "0000ca22-b0cd-11ec-871f-d45ddf138840"
-      props: [WRITE, WRITE_NO_RSP]
-      max_len: 32
+      props: [WRITE_NO_RSP]
+      pipe: "sync"
     };
   }
 
-  // Everything the device sends: a `SyncMessage`, notify. Summaries and
+  // Everything the device sends: a `SyncMessage`, as chunks. Summaries and
   // calibration stream to a subscriber; trace chunks answer a request.
   //
-  // Sized for the largest message the device builds
-  // (`calypso_core::sync::SYNC_CHUNK_MAX`), because a payload that does not fit
-  // the characteristic it is notified on fails to notify *silently*.
+  // One characteristic, so the frame that carries an acknowledgement travels
+  // beside the chunks it is about rather than on a third characteristic of its own.
   rpc Messages(google.protobuf.Empty) returns (SyncMessage) {
     option (gatt.characteristic) = {
       uuid: "0000ca21-b0cd-11ec-871f-d45ddf138840"
       props: [NOTIFY]
-      max_len: 193
+      pipe: "sync"
     };
   }
 }

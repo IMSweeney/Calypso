@@ -13,7 +13,7 @@ use trouble_host::types::gatt_traits::FromGattError;
 /// A hash of the schema this was generated from: firmware and app built from
 /// the same schema agree, and anything else is caught before a typed value is
 /// believed. Protobuf would otherwise decode a mismatch silently.
-pub const SCHEMA_HASH: u64 = 0x0ffaecfffdd1eaba;
+pub const SCHEMA_HASH: u64 = 0xbf459163d32876f6;
 
 /// Backing buffer for a pipe characteristic's chunk.
 pub const PIPE_CHUNK_MAX: usize = 244;
@@ -55,188 +55,21 @@ pub mod uuid {
     pub const SYNC_MESSAGES_TEXT: &str = "0000ca21-b0cd-11ec-871f-d45ddf138840";
 }
 
-/// The `max_len` each sized characteristic declares. A buffer that holds one
-/// of these values is sized from here, so the schema stays the one place the
-/// number is written down.
-pub mod max_len {
-    /// `calypso.Sync.Requests`.
-    pub const SYNC_REQUESTS: usize = 32;
-
-    /// `calypso.Sync.Messages`.
-    pub const SYNC_MESSAGES: usize = 193;
-}
-
-/// `calypso.SyncRequest` as one GATT attribute value: the message encoded whole, which is
-/// what a single-shot characteristic carries (`max_len` 32).
-///
-/// `encode` returns `None` only for a message that does not fit, which the
-/// assertion at the end of this file rules out; `decode` returns `None` for
-/// bytes that are not this message at all.
-#[derive(Default)]
-pub struct SyncRequestsValue {
-    bytes: Vec<u8, 32>,
-}
-
-impl SyncRequestsValue {
-    /// Encode `message` into a value.
-    pub fn encode(message: &crate::pb::msg::SyncRequest) -> Option<Self> {
-        let mut bytes = Vec::new();
-        bytes.resize(32, 0).ok()?;
-        let mut writer: &mut [u8] = bytes.as_mut_slice();
-        {
-            let mut encoder = micropb::PbEncoder::new(&mut writer);
-            message.encode(&mut encoder).ok()?;
-        }
-        let written = 32 - writer.len();
-        bytes.truncate(written);
-        Some(SyncRequestsValue { bytes })
-    }
-
-    /// Encode `message` into an existing value, reusing its buffer: for a
-    /// sender that notifies repeatedly and does not want a value per message.
-    /// Returns false if the message does not fit.
-    pub fn encode_into(&mut self, message: &crate::pb::msg::SyncRequest) -> bool {
-        self.bytes.clear();
-        if self.bytes.resize(32, 0).is_err() {
-            return false;
-        }
-        let mut writer: &mut [u8] = self.bytes.as_mut_slice();
-        {
-            let mut encoder = micropb::PbEncoder::new(&mut writer);
-            if message.encode(&mut encoder).is_err() {
-                self.bytes.clear();
-                return false;
-            }
-        }
-        let written = 32 - writer.len();
-        self.bytes.truncate(written);
-        true
-    }
-
-    /// Decode the value.
-    pub fn decode(&self) -> Option<crate::pb::msg::SyncRequest> {
-        let mut message = crate::pb::msg::SyncRequest::default();
-        message.decode_from_bytes(self.bytes.as_slice()).ok()?;
-        Some(message)
-    }
-
-    /// The value as it goes on the wire.
-    pub fn as_bytes(&self) -> &[u8] {
-        self.bytes.as_slice()
-    }
-}
-
-impl AsGatt for SyncRequestsValue {
-    const MIN_SIZE: usize = 0;
-    const MAX_SIZE: usize = 32;
-
-    fn as_gatt(&self) -> &[u8] {
-        self.bytes.as_slice()
-    }
-}
-
-impl FromGatt for SyncRequestsValue {
-    fn from_gatt(data: &[u8]) -> Result<Self, FromGattError> {
-        let mut bytes = Vec::new();
-        bytes
-            .extend_from_slice(data)
-            .map_err(|_| FromGattError::InvalidLength)?;
-        Ok(SyncRequestsValue { bytes })
-    }
-}
-
-/// `calypso.SyncMessage` as one GATT attribute value: the message encoded whole, which is
-/// what a single-shot characteristic carries (`max_len` 193).
-///
-/// `encode` returns `None` only for a message that does not fit, which the
-/// assertion at the end of this file rules out; `decode` returns `None` for
-/// bytes that are not this message at all.
-#[derive(Default)]
-pub struct SyncMessagesValue {
-    bytes: Vec<u8, 193>,
-}
-
-impl SyncMessagesValue {
-    /// Encode `message` into a value.
-    pub fn encode(message: &crate::pb::msg::SyncMessage) -> Option<Self> {
-        let mut bytes = Vec::new();
-        bytes.resize(193, 0).ok()?;
-        let mut writer: &mut [u8] = bytes.as_mut_slice();
-        {
-            let mut encoder = micropb::PbEncoder::new(&mut writer);
-            message.encode(&mut encoder).ok()?;
-        }
-        let written = 193 - writer.len();
-        bytes.truncate(written);
-        Some(SyncMessagesValue { bytes })
-    }
-
-    /// Encode `message` into an existing value, reusing its buffer: for a
-    /// sender that notifies repeatedly and does not want a value per message.
-    /// Returns false if the message does not fit.
-    pub fn encode_into(&mut self, message: &crate::pb::msg::SyncMessage) -> bool {
-        self.bytes.clear();
-        if self.bytes.resize(193, 0).is_err() {
-            return false;
-        }
-        let mut writer: &mut [u8] = self.bytes.as_mut_slice();
-        {
-            let mut encoder = micropb::PbEncoder::new(&mut writer);
-            if message.encode(&mut encoder).is_err() {
-                self.bytes.clear();
-                return false;
-            }
-        }
-        let written = 193 - writer.len();
-        self.bytes.truncate(written);
-        true
-    }
-
-    /// Decode the value.
-    pub fn decode(&self) -> Option<crate::pb::msg::SyncMessage> {
-        let mut message = crate::pb::msg::SyncMessage::default();
-        message.decode_from_bytes(self.bytes.as_slice()).ok()?;
-        Some(message)
-    }
-
-    /// The value as it goes on the wire.
-    pub fn as_bytes(&self) -> &[u8] {
-        self.bytes.as_slice()
-    }
-}
-
-impl AsGatt for SyncMessagesValue {
-    const MIN_SIZE: usize = 0;
-    const MAX_SIZE: usize = 193;
-
-    fn as_gatt(&self) -> &[u8] {
-        self.bytes.as_slice()
-    }
-}
-
-impl FromGatt for SyncMessagesValue {
-    fn from_gatt(data: &[u8]) -> Result<Self, FromGattError> {
-        let mut bytes = Vec::new();
-        bytes
-            .extend_from_slice(data)
-            .map_err(|_| FromGattError::InvalidLength)?;
-        Ok(SyncMessagesValue { bytes })
-    }
-}
-
 /// `calypso.Sync`.
 #[gatt_service(uuid = "0000ca20-b0cd-11ec-871f-d45ddf138840")]
 pub struct SyncService {
     /// `Requests` (0000ca22-b0cd-11ec-871f-d45ddf138840), calypso.SyncRequest.
-    #[characteristic(
-        uuid = "0000ca22-b0cd-11ec-871f-d45ddf138840",
-        write,
-        write_without_response
-    )]
-    pub requests: SyncRequestsValue,
+    ///
+    /// Pipe "sync": this value carries chunks and the pipe runtime owns it,
+    /// so nothing here decodes it as a message.
+    #[characteristic(uuid = "0000ca22-b0cd-11ec-871f-d45ddf138840", write_without_response)]
+    pub requests: Vec<u8, PIPE_CHUNK_MAX>,
     /// `Messages` (0000ca21-b0cd-11ec-871f-d45ddf138840), calypso.SyncMessage.
+    ///
+    /// Pipe "sync": this value carries chunks and the pipe runtime owns it,
+    /// so nothing here decodes it as a message.
     #[characteristic(uuid = "0000ca21-b0cd-11ec-871f-d45ddf138840", notify)]
-    pub messages: SyncMessagesValue,
+    pub messages: Vec<u8, PIPE_CHUNK_MAX>,
 }
 
 /// Every service in the schema, and the table they are built into.
@@ -250,32 +83,70 @@ pub struct CalypsoGatt {
 }
 
 /// Everything a client can write, decoded according to the schema.
-#[derive(Debug)]
-pub enum Request {
-    /// `calypso.Sync.Requests`.
-    Requests(crate::pb::msg::SyncRequest),
-}
+pub enum Request {}
 
-impl Request {
-    /// The request a write carried, or `None` if it was not one of ours.
-    ///
-    /// Call this **after** the event is accepted: until the server has stored the
-    /// value, the table still holds the last one.
-    pub fn from_event<P: PacketPool>(
-        server: &CalypsoGatt<'_>,
-        event: &GattEvent<'_, '_, P>,
-    ) -> Option<Self> {
-        let GattEvent::Write(write) = event else {
-            return None;
-        };
-        let handle = write.handle();
-        if handle == server.sync.requests.handle {
-            return server
-                .get(&server.sync.requests)
-                .ok()
-                .and_then(|value| value.decode())
-                .map(Request::Requests);
-        }
-        None
+/// Pipe `sync`: `crate::pb::msg::SyncRequest` in, `crate::pb::msg::SyncMessage` out.
+///
+/// The runtime owns both characteristics (`Requests` and `Messages`) and hands the
+/// bytes here only to be made into messages: neither value type decodes
+/// anything, because a chunk is not a message.
+pub mod pipe_sync {
+    use super::*;
+
+    /// Bytes of payload one chunk may carry, before the frame.
+    pub const CHUNK_MAX: usize = 244;
+    /// Largest message a transfer may carry, both ways.
+    pub const MESSAGE_MAX: usize = 4096;
+    /// Chunks in flight at most, before the sender waits.
+    pub const WINDOW: u8 = 127;
+    /// No-progress timeout for one transfer, in milliseconds.
+    pub const XFER_TIMEOUT_MS: u32 = 5000;
+
+    /// Encode a `crate::pb::msg::SyncRequest` into a chunk buffer, for the sender.
+    /// Returns the length, or `None` if it does not fit.
+    pub fn encode_request(message: &crate::pb::msg::SyncRequest, out: &mut [u8]) -> Option<usize> {
+        let mut writer: &mut [u8] = out;
+        let before = writer.len();
+        let mut encoder = micropb::PbEncoder::new(&mut writer);
+        message.encode(&mut encoder).ok()?;
+        Some(before - writer.len())
+    }
+
+    /// Decode a reassembled `crate::pb::msg::SyncRequest`. `None` if the bytes are not one.
+    pub fn decode_request(bytes: &[u8]) -> Option<crate::pb::msg::SyncRequest> {
+        let mut message = crate::pb::msg::SyncRequest::default();
+        message.decode_from_bytes(bytes).ok()?;
+        Some(message)
+    }
+
+    /// Encode a `crate::pb::msg::SyncMessage` into a chunk buffer, for the sender.
+    /// Returns the length, or `None` if it does not fit.
+    pub fn encode_response(message: &crate::pb::msg::SyncMessage, out: &mut [u8]) -> Option<usize> {
+        let mut writer: &mut [u8] = out;
+        let before = writer.len();
+        let mut encoder = micropb::PbEncoder::new(&mut writer);
+        message.encode(&mut encoder).ok()?;
+        Some(before - writer.len())
+    }
+
+    /// Decode a reassembled `crate::pb::msg::SyncMessage`. `None` if the bytes are not one.
+    pub fn decode_response(bytes: &[u8]) -> Option<crate::pb::msg::SyncMessage> {
+        let mut message = crate::pb::msg::SyncMessage::default();
+        message.decode_from_bytes(bytes).ok()?;
+        Some(message)
     }
 }
+
+// A pipe's messages are reassembled into a fixed buffer, and this is where
+// the bound `micropb` derives from the field options meets that buffer's
+// size: a message too large to arrive is a build failure rather than a
+// transfer that stalls part-way.
+const _: () = assert!(
+    micropb::size::max_encoded_size::<crate::pb::msg::SyncRequest>() <= 4096,
+    "calypso.SyncRequest encodes to more than pipe_msg_max (4096)"
+);
+
+const _: () = assert!(
+    micropb::size::max_encoded_size::<crate::pb::msg::SyncMessage>() <= 4096,
+    "calypso.SyncMessage encodes to more than pipe_msg_max (4096)"
+);

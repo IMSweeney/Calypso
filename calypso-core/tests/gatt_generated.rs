@@ -20,10 +20,10 @@ use gatt_gen::{Input, Target};
 const RUST_SCRIPT: &str = "calypso-core/tool/gen_gatt.sh";
 const DART_SCRIPT: &str = "calypso-app/tool/gen_gatt.sh";
 
-/// How many warnings this schema earns, which is a property of the sizes declared
-/// in `proto/calypso_gatt.proto`: both characteristics are bigger than the 20
-/// bytes every stack guarantees.
-const EXPECTED_WARNINGS: usize = 2;
+/// How many warnings this schema earns. None: the two characteristics are one
+/// pipe, and a pipe neither declares a size above the 20 bytes every stack
+/// guarantees nor asks for a write response it would not use.
+const EXPECTED_WARNINGS: usize = 0;
 
 fn schema() -> gatt_gen::Gatt {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -46,11 +46,10 @@ fn the_committed_table_is_what_the_tool_generates() {
         &Config {
             message_module: "crate::pb::msg".to_string(),
             server_name: "CalypsoGatt".to_string(),
+            // The pipe's numbers, as `tool/gen_gatt.sh` passes them.
             pipe_chunk_max: 244,
-            // No pipe in this schema yet, so neither of these reaches the file;
-            // they have to match what `tool/gen_gatt.sh` passes all the same.
-            pipe_msg_max: 0,
-            window: 8,
+            pipe_msg_max: 4096,
+            window: 127,
             xfer_timeout_ms: 5000,
             regenerate_with: Some(RUST_SCRIPT.to_string()),
         },
@@ -73,11 +72,10 @@ fn the_committed_client_is_what_the_tool_generates() {
             &gatt_gen::generator::Config::DartUniversalBle(dart_universal_ble::Config {
                 messages_import: "../protocol/calypso.pb.dart".to_string(),
                 messages_prefix: "pb".to_string(),
-                // No pipe in this schema, so these do not reach the file; they
-                // have to match what `tool/gen_gatt.sh` passes all the same.
+                // The pipe's numbers, as the app's `tool/gen_gatt.sh` passes them.
                 pipe_chunk_max: 244,
-                pipe_msg_max: 0,
-                window: 8,
+                pipe_msg_max: 4096,
+                window: 127,
                 xfer_timeout_ms: 5000,
                 regenerate_with: Some(DART_SCRIPT.to_string()),
             }),

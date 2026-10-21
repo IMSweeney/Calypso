@@ -13,11 +13,18 @@
 set -e
 cd "$(dirname "$0")/../.."
 
+# The pipe's numbers, which have to be the ones the device was generated with
+# (calypso-core/tool/gen_gatt.sh): both ends frame chunks and count a transfer's
+# window the same way.
 cargo run --quiet --manifest-path tools/gatt-gen/Cargo.toml -- \
   dart-universal-ble \
   --out calypso-app/lib/gatt \
   --dart-messages ../protocol/calypso.pb.dart \
   --dart-prefix pb \
+  --chunk-max 244 \
+  --pipe-msg-max 4096 \
+  --window 127 \
+  --xfer-timeout 5000 \
   --regenerate-with calypso-app/tool/gen_gatt.sh \
   proto/calypso_gatt.proto
 

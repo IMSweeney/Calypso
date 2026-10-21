@@ -45,26 +45,53 @@ class SyncClient {
   /// `calypso.Sync`.
   static const String serviceUuid = '0000ca20-b0cd-11ec-871f-d45ddf138840';
 
-  /// `calypso.Sync.Requests` -- write+write-without-response, calypso.SyncRequest.
+  /// `calypso.Sync.Requests` -- write-without-response, calypso.SyncRequest.
   static const String requestsUuid = '0000ca22-b0cd-11ec-871f-d45ddf138840';
 
   /// `calypso.Sync.Messages` -- notify, calypso.SyncMessage.
   static const String messagesUuid = '0000ca21-b0cd-11ec-871f-d45ddf138840';
+}
 
-  /// Write a `calypso.SyncRequest`.
-  Future<void> writeRequests(pb.SyncRequest value) => _link.write(
-    serviceUuid,
-    requestsUuid,
-    value.writeToBuffer(),
-    withResponse: true,
-  );
+/// Pipe `sync`: `pb.SyncRequest` in, `pb.SyncMessage` out.
+///
+/// A transfer carries one message, split into chunks of at most
+/// [chunkMax] bytes and reassembled by the other end. The runtime owns
+/// both characteristics; nothing here is decoded as a message except by
+/// [decodeResponse] and [decodeRequest].
+class SyncPipe {
+  static const String serviceUuid = '0000ca20-b0cd-11ec-871f-d45ddf138840';
 
-  /// Subscribe to `Messages`. Nothing arrives until this completes.
-  Future<void> subscribeMessages() =>
-      _link.subscribe(serviceUuid, messagesUuid);
+  /// `Requests`: what this end writes.
+  static const String downUuid = '0000ca22-b0cd-11ec-871f-d45ddf138840';
 
-  /// One `calypso.SyncMessage` per notification.
-  Stream<pb.SyncMessage> get messagesUpdates => _link
-      .values(messagesUuid)
-      .map((bytes) => pb.SyncMessage.fromBuffer(bytes));
+  /// `Messages`: what this end subscribes to.
+  static const String upUuid = '0000ca21-b0cd-11ec-871f-d45ddf138840';
+
+  /// Bytes of payload one chunk may carry, before the frame.
+  static const int chunkMax = 244;
+
+  /// Largest message a transfer may carry, both ways.
+  static const int messageMax = 4096;
+
+  /// Chunks in flight at most, before the sender waits.
+  static const int window = 127;
+
+  /// No-progress timeout for one transfer, in milliseconds.
+  static const int xferTimeoutMs = 5000;
+
+  /// Encode a `pb.SyncRequest` for a transfer.
+  static Uint8List encodeRequest(pb.SyncRequest message) =>
+      message.writeToBuffer();
+
+  /// Decode a reassembled `pb.SyncRequest`.
+  static pb.SyncRequest decodeRequest(Uint8List bytes) =>
+      pb.SyncRequest.fromBuffer(bytes);
+
+  /// Encode a `pb.SyncMessage` for a transfer.
+  static Uint8List encodeResponse(pb.SyncMessage message) =>
+      message.writeToBuffer();
+
+  /// Decode a reassembled `pb.SyncMessage`.
+  static pb.SyncMessage decodeResponse(Uint8List bytes) =>
+      pb.SyncMessage.fromBuffer(bytes);
 }

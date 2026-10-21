@@ -13,11 +13,26 @@
 set -e
 cd "$(dirname "$0")/../.."
 
+# The pipe's numbers, which both ends have to agree on. `--window` is the one
+# that decides how the device sends: no message this device sends can exceed it,
+# so the send path never waits for an acknowledgement to make progress (see
+# ROADMAP.md, "Sync over the pipe").
+#
+#   --chunk-max 244      the pipe characteristic's backing buffer: one
+#                        notification's worth at a 247-byte MTU.
+#   --pipe-msg-max 4096  a whole `TraceChunk` (48 samples, 2459 bytes worst
+#                        case), which is what makes a trace one transfer per
+#                        stored chunk instead of three points a notification.
+#   --xfer-timeout 5000  no progress for this long abandons a transfer.
 cargo run --quiet --manifest-path tools/gatt-gen/Cargo.toml -- \
   rust-trouble \
   --out calypso-core/src \
   --messages crate::pb::msg \
   --server CalypsoGatt \
+  --chunk-max 244 \
+  --pipe-msg-max 4096 \
+  --window 127 \
+  --xfer-timeout 5000 \
   --regenerate-with calypso-core/tool/gen_gatt.sh \
   proto/calypso_gatt.proto
 
