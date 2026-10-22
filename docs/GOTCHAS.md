@@ -563,6 +563,15 @@ now — `ATT MTU 23: notifications up to 244 bytes`.
 - `--window 8`: the sender stops after 8 chunks in flight and the receiver acknowledges
 every `window / 2`, so the acknowledgement *paces* the transfer instead of trailing
 behind it — which is the whole point of the mechanism, and what 127 defeated.
+
+  **And a message can be wider than the window.** A trace chunk is up to 11 frames, so a
+transfer is sent in waves — and the acknowledgement that makes room is what has to
+trigger the next wave. The device did neither: `keep_sending` returned early on a busy
+pipe, so the rest of the wave sat in its buffer for ever while the app waited (8 frames
+of 11, then thirty seconds of silence and a rep with no trace), and the trace cursor
+advanced before it knew whether the send could even start, so a chunk asked for while
+busy was *skipped*. Whoever flushes a message has to be callable while it is in flight,
+and nothing may move a cursor until the send it is for has begun.
 - **The characteristic is the ceiling and the ATT MTU only lowers it** (`pipe::frame_mtu`).
   A peer that has not said is not a peer that can only take 20 bytes: this device
   notified 193-byte payloads to this same client for as long as traces have existed, and
