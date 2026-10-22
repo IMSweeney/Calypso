@@ -40,7 +40,7 @@ use bno055::Bno055;
 use bno055::{BNO055_CALIB_SIZE, BNO055Calibration, BNO055OperationMode};
 use calypso_core::calibration::Calibration;
 use calypso_core::flashlog::{self, FlashLog};
-use calypso_core::gatt::{CalypsoGatt, PIPE_STORAGE_MAX};
+use calypso_core::gatt::{CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH};
 use calypso_core::pb::msg;
 use calypso_core::pipe::{self, Session, Stalled};
 use calypso_core::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, compute_rep};
@@ -342,15 +342,24 @@ async fn main(spawner: Spawner) -> ! {
     // services keeps seeing them however many times this firmware is reflashed: the
     // cache is keyed to this address, not to the flash contents.
     //
-    // **Bump it whenever the GATT layout changes.** It was last bumped when the UUID
-    // byte order was settled, having cost several flashes to work out. The
-    // principled alternative is a GATT Service Changed characteristic (0x2A05) with
-    // an indication, which tells clients to drop the cache themselves; this device
-    // has no need for one yet.
+    // Two bytes of the schema's hash ride in the address for that reason: the table is
+    // generated from the schema, so a build whose table changed is a device no client
+    // has cached, and the rule needs no one to remember it. It was a literal to
+    // remember until it was missed twice -- `ca10`/`ca11` and `ca23` went, then the
+    // pipe came -- and a client holding either cached table is what a connection then
+    // fails on (docs/GOTCHAS.md).
     //
-    // The top two bits are set, as a static random address requires.
-    let stack = trouble_host::new(ble_controller, &mut resources)
-        .set_random_address(Address::random([0xca, 0xa7, 0x19, 0x50, 0xe4, 0xfd]));
+    // The principled alternative is a GATT Service Changed characteristic (0x2A05)
+    // with an indication, which tells a bonded client to drop the cache itself; this
+    // device has no need for one yet.
+    //
+    // The top two bits of the most significant byte are set, as a static random
+    // address requires -- hence 0xfd, with the schema's hash in the two bytes below it.
+    let stamp = SCHEMA_HASH.to_le_bytes();
+    let stack =
+        trouble_host::new(ble_controller, &mut resources).set_random_address(Address::random([
+            0xca, 0xa7, 0x19, stamp[0], stamp[1], 0xfd,
+        ]));
     let Host {
         mut peripheral,
         mut runner,
