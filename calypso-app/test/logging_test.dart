@@ -156,6 +156,10 @@ void main() {
   test('the transport reports the session, and every message in it', () async {
     final records = captureLogs();
     final link = FakeBleLink();
+    // Served before connecting: the levels are a read, and the transport makes one as
+    // part of bringing the link up.
+    final device = FakeDevice(link)
+      ..servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2));
     final transport = BleTransport(
       link,
       traceTimeout: const Duration(milliseconds: 50),
@@ -167,9 +171,6 @@ void main() {
     link.seeDevice('device-1', 'Calypso');
     await connecting;
 
-    final device = FakeDevice(link);
-    final calibration = calibrationMessage(sys: 1, accel: 1, gyro: 2);
-    device.send(calibration);
     // An empty message is a message: one frame, START and END at once, no body.
     device.send(Uint8List(0));
     await pumpEventQueue();
@@ -197,8 +198,9 @@ void main() {
     final messages = [for (final record in records) record.message];
     expect(
       messages,
-      contains(startsWith('rx ${SyncClient.messagesUuid} calibration ')),
-      reason: 'inbound, on the characteristic it arrived on, decoded',
+      contains(startsWith('rx ${SyncClient.calibrationUuid} calibration ')),
+      reason:
+          'a read is a message too, decoded on the characteristic it came from',
     );
     expect(
       messages,

@@ -34,10 +34,21 @@ const int _minimumMtu = 23;
 /// `traceTimeout`, and that starts when the request lands.
 const Duration _defaultXferTimeout = Duration(seconds: 2);
 
-/// Reaching the device through the generated client: [SyncClient] and its
-/// `GattClientLink` come from `proto/calypso_gatt.proto` (see
-/// `lib/gatt/gatt_client.dart`), so the UUIDs, the directions and the message
-/// types are the schema's rather than this file's.
+/// How often the app reads the IMU's calibration levels by default, while connected.
+///
+/// The same second the device polls the chip at: looking more often cannot see anything
+/// the device has not already written down.
+const Duration _defaultCalibrationPoll = Duration(seconds: 1);
+
+/// Reaching the device over the schema's interface: the UUIDs, the directions and the
+/// message types come from `proto/calypso_gatt.proto` (see
+/// `lib/gatt/gatt_client.dart`), so this file names none of them.
+///
+/// The generated `SyncClient` is that schema's typed client, and it is what reads the
+/// **calibration status** — the characteristic that carries a value. The pipe's two
+/// halves are deliberately not reached through it: a notification there is a chunk of
+/// a transfer, not a message, so those bytes go to the runtime in `lib/gatt/pipe.dart`
+/// instead.
 ///
 /// What stays here is what a schema cannot say: scanning, connecting, the trace
 /// reassembly and its timeouts, and what the archive is told.
@@ -46,6 +57,7 @@ class BleTransport implements RepTransport {
     this._link, {
     this.traceTimeout = const Duration(seconds: 30),
     this.chunkIdleTimeout = const Duration(milliseconds: 700),
+    this.calibrationPoll = _defaultCalibrationPoll,
     Duration xferTimeout = _defaultXferTimeout,
   }) : _xferTimeout = xferTimeout;
 
@@ -55,6 +67,21 @@ class BleTransport implements RepTransport {
 
   /// How long the device has to acknowledge a request, per attempt.
   final Duration _xferTimeout;
+
+  /// How often the app asks the device for the IMU's calibration levels.
+  ///
+  /// The device keeps that characteristic current from its own 1 Hz poll of the chip,
+  /// so this is the app's clock and not a rate the device imposes: a read costs one ATT
+  /// round trip, and how many of those a UI is willing to pay for is the UI's business
+  /// (which is why the levels are a read rather than a notification).
+  final Duration calibrationPoll;
+
+  /// The schema's typed client, for the characteristics that carry a value.
+  ///
+  /// Held per connection: its link is this connection's device id.
+  SyncClient? _client;
+
+  Timer? _calibrationTimer;
 
   final BleStatusNotifier status = BleStatusNotifier();
   final CalibrationNotifier calibration = CalibrationNotifier();
@@ -137,7 +164,8 @@ class BleTransport implements RepTransport {
       var services = await _link.discoverServices(deviceId);
       debugPrint(
         'calypso: device offers ${_describe(services)}; '
-        'want ${SyncClient.serviceUuid}[${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}]',
+        'want ${SyncClient.serviceUuid}[${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}, '
+        '${SyncClient.calibrationUuid}]',
       );
       if (!_offersSync(services) || _strangersIn(services).isNotEmpty) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -155,8 +183,9 @@ class BleTransport implements RepTransport {
           );
         }
         throw StateError(
-          'device offers ${_describe(services)}, not both characteristics of '
-          '${SyncClient.serviceUuid} (${SyncClient.messagesUuid}, ${SyncClient.requestsUuid})',
+          'device offers ${_describe(services)}, not all three characteristics of '
+          '${SyncClient.serviceUuid} (${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}, '
+          '${SyncClient.calibrationUuid})',
         );
       }
       final strangers = _strangersIn(services);
@@ -225,8 +254,38 @@ class BleTransport implements RepTransport {
       return;
     }
 
+    // The schema's client for this connection, and the one thing it is for here: the
+    // calibration levels. Read once now, so the hint is right from the first frame,
+    // and asked for again on the app's own interval.
+    _client = SyncClient(_GattLink(_link, deviceId));
+    await refreshCalibration();
+    _calibrationTimer = Timer.periodic(
+      calibrationPoll,
+      (_) => refreshCalibration(),
+    );
+
     bleLog.info('connected to $deviceId');
     status.set(BleStatus.connected, deviceId: deviceId);
+  }
+
+  /// Ask the device for the IMU's calibration levels, and publish them.
+  ///
+  /// A read rather than a subscription: a level is a state, and how often the app looks
+  /// is [`calibrationPoll`]. A read that fails is a warning and nothing more — the
+  /// levels are a hint, and a link that answers a read with an error is not a link to
+  /// tear down over it.
+  Future<void> refreshCalibration() async {
+    final client = _client;
+    if (client == null) return;
+    try {
+      final status = await client.readCalibration();
+      bleLog.fine(
+        'rx ${SyncClient.calibrationUuid} ${describeCalibrationStatus(status)}',
+      );
+      calibration.set(status);
+    } catch (e) {
+      bleLog.warning('could not read the calibration status: $e');
+    }
   }
 
   static bool _offersSync(List<DiscoveredService> services) => services.any(
@@ -237,6 +296,9 @@ class BleTransport implements RepTransport {
         ) &&
         service.characteristics.any(
           (c) => _sameUuid(c, SyncClient.requestsUuid),
+        ) &&
+        service.characteristics.any(
+          (c) => _sameUuid(c, SyncClient.calibrationUuid),
         ),
   );
 
@@ -251,7 +313,8 @@ class BleTransport implements RepTransport {
       if (_sameUuid(service.uuid, SyncClient.serviceUuid))
         for (final characteristic in service.characteristics)
           if (!_sameUuid(characteristic, SyncClient.messagesUuid) &&
-              !_sameUuid(characteristic, SyncClient.requestsUuid))
+              !_sameUuid(characteristic, SyncClient.requestsUuid) &&
+              !_sameUuid(characteristic, SyncClient.calibrationUuid))
             characteristic,
   ];
 
@@ -280,8 +343,20 @@ class BleTransport implements RepTransport {
     status.set(BleStatus.disconnected);
   }
 
+  /// Stop asking the device for the levels, and drop the client that asks.
+  ///
+  /// Both belong to the link that is going away, whether it was closed or lost: a
+  /// poll left running would read a characteristic of a connection that no longer
+  /// exists (`_client` holds its device id), once a second, for ever.
+  void _stopCalibrationPoll() {
+    _calibrationTimer?.cancel();
+    _calibrationTimer = null;
+    _client = null;
+  }
+
   Future<void> _teardownConnection() async {
     calibration.clear();
+    _stopCalibrationPoll();
     _messagesSub?.cancel();
     _messagesSub = null;
     // Whatever was in flight went with the link: half a message is not a message.
@@ -301,6 +376,7 @@ class BleTransport implements RepTransport {
     bleLog.info('connection lost${error == null ? '' : ': $error'}');
     _deviceId = null;
     calibration.clear();
+    _stopCalibrationPoll();
     status.set(BleStatus.disconnected, error: error);
     _failPending('connection lost');
   }
@@ -578,8 +654,6 @@ class BleTransport implements RepTransport {
         _onChunk(message.trace);
       case pb.SyncMessage_Body.status:
         break;
-      case pb.SyncMessage_Body.calibration:
-        calibration.set(message.calibration);
       case pb.SyncMessage_Body.notSet:
         break;
     }
@@ -627,4 +701,42 @@ class BleTransport implements RepTransport {
     final pending = _pending.remove(uuid);
     if (pending != null && !pending.isCompleted) pending.complete(points);
   }
+}
+
+/// The generated client's view of the link: one device, and the schema's own names.
+///
+/// `SyncClient` is generated against `GattClientLink`, which knows nothing of device
+/// ids — a client built from a schema has no business naming a connection — so this is
+/// where the two meet.
+class _GattLink implements GattClientLink {
+  _GattLink(this._link, this._deviceId);
+
+  final BleLink _link;
+  final String _deviceId;
+
+  @override
+  Future<void> subscribe(String serviceUuid, String characteristicUuid) =>
+      _link.subscribe(_deviceId, serviceUuid, characteristicUuid);
+
+  @override
+  Stream<Uint8List> values(String characteristicUuid) =>
+      _link.valueStream(_deviceId, characteristicUuid);
+
+  @override
+  Future<Uint8List> read(String serviceUuid, String characteristicUuid) =>
+      _link.read(_deviceId, serviceUuid, characteristicUuid);
+
+  @override
+  Future<void> write(
+    String serviceUuid,
+    String characteristicUuid,
+    Uint8List value, {
+    bool withResponse = true,
+  }) => _link.write(
+    _deviceId,
+    serviceUuid,
+    characteristicUuid,
+    value,
+    withResponse: withResponse,
+  );
 }

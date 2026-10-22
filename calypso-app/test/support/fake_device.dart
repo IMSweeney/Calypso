@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:calypso/gatt/gatt_client.dart';
 import 'package:calypso/gatt/pipe.dart';
+import 'package:calypso/protocol/calypso.pb.dart' as pb;
 
 import 'fake_ble_link.dart';
 
@@ -76,6 +77,14 @@ class FakeDevice {
       notified.add(bytes);
       link.notify(SyncClient.messagesUuid, bytes);
     }
+  }
+
+  /// Put `status` in the table's calibration characteristic.
+  ///
+  /// That is the whole of the device's side of it: the app reads the value whenever
+  /// its own clock says to, and the device's 1 Hz poll of the chip is what changes it.
+  void servesCalibration(pb.CalibrationStatus status) {
+    link.readValues[SyncClient.calibrationUuid] = status.writeToBuffer();
   }
 
   /// A notification that acknowledges nothing: a frame whose CRC does not check

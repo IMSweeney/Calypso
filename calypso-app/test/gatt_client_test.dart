@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:calypso/gatt/gatt_client.dart';
 import 'package:calypso/gatt/pipe.dart' as pipe;
 import 'package:calypso/protocol/calypso.pb.dart' as pb;
@@ -5,17 +7,16 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// The generated client, against the schema it came from.
 ///
-/// Both characteristics belong to one pipe, so there is nothing here to do over a
-/// fake link any more: what the schema declares is the UUIDs, the pipe's numbers
-/// and the two directions' codecs, and what *drives* them is
-/// `lib/transport/ble_transport.dart` (its own tests) over `lib/gatt/pipe.dart`
-/// (the shared vectors). What is left to check is that the constants and the
-/// codecs are the schema's.
+/// The pipe's two characteristics are the runtime's (`lib/gatt/pipe.dart`), so for
+/// those the schema's half is the UUIDs, the numbers and the two directions' codecs.
+/// The third characteristic carries a value, which is what the generated client's own
+/// member is for — and the one thing here that needs a link, faked below.
 void main() {
   test('the UUIDs are the ones the schema declares', () {
     expect(SyncClient.serviceUuid, '0000ca20-b0cd-11ec-871f-d45ddf138840');
     expect(SyncClient.messagesUuid, '0000ca21-b0cd-11ec-871f-d45ddf138840');
     expect(SyncClient.requestsUuid, '0000ca22-b0cd-11ec-871f-d45ddf138840');
+    expect(SyncClient.calibrationUuid, '0000ca24-b0cd-11ec-871f-d45ddf138840');
     expect(SyncPipe.serviceUuid, SyncClient.serviceUuid);
     expect(SyncPipe.upUuid, SyncClient.messagesUuid);
     expect(SyncPipe.downUuid, SyncClient.requestsUuid);
@@ -52,13 +53,65 @@ void main() {
 
   test('a message encodes and decodes as the schema says', () {
     final message = pb.SyncMessage(
-      calibration: pb.CalibrationStatus(accel: 3, gyro: 3, ready: true),
+      summary: pb.RepSummary(repUuid: List<int>.filled(16, 9), traceLen: 7),
     );
     final bytes = SyncPipe.encodeResponse(message);
     expect(
       SyncPipe.decodeResponse(bytes).whichBody(),
-      pb.SyncMessage_Body.calibration,
+      pb.SyncMessage_Body.summary,
     );
-    expect(SyncPipe.decodeResponse(bytes).calibration.ready, isTrue);
+    expect(SyncPipe.decodeResponse(bytes).summary.traceLen, 7);
   });
+
+  test(
+    'the calibration read is the schema\'s, characteristic and all',
+    () async {
+      final link = _FakeClientLink(
+        value: pb.CalibrationStatus(
+          accel: 3,
+          gyro: 2,
+          ready: false,
+        ).writeToBuffer(),
+      );
+
+      final status = await SyncClient(link).readCalibration();
+
+      expect(link.reads, [
+        (SyncClient.serviceUuid, SyncClient.calibrationUuid),
+      ]);
+      expect(status.accel, 3);
+      expect(status.gyro, 2);
+      expect(status.ready, isFalse);
+    },
+  );
+}
+
+/// A link that answers reads, and refuses to be talked to otherwise.
+class _FakeClientLink implements GattClientLink {
+  _FakeClientLink({required this.value});
+
+  final Uint8List value;
+  final List<(String, String)> reads = [];
+
+  @override
+  Future<Uint8List> read(String serviceUuid, String characteristicUuid) async {
+    reads.add((serviceUuid, characteristicUuid));
+    return value;
+  }
+
+  @override
+  Future<void> subscribe(String serviceUuid, String characteristicUuid) =>
+      throw UnsupportedError('this client only reads');
+
+  @override
+  Stream<Uint8List> values(String characteristicUuid) =>
+      throw UnsupportedError('this client only reads');
+
+  @override
+  Future<void> write(
+    String serviceUuid,
+    String characteristicUuid,
+    Uint8List value, {
+    bool withResponse = true,
+  }) => throw UnsupportedError('this client only reads');
 }

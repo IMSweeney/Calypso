@@ -148,8 +148,19 @@ void main() {
   });
 }
 
+/// Let the transport's calibration read happen, on the widget test's clock.
+///
+/// The levels are a read on the app's own interval (a second by default), so a test
+/// that changes them has to wait for the next one.
+Future<void> _pollCalibration(WidgetTester tester) async {
+  await tester.pump(const Duration(seconds: 1));
+  await tester.pumpAndSettle();
+}
+
 void _calibrationHint() {
-  Future<(FakeBleLink, FakeDevice)> pumpConnected(WidgetTester tester) async {
+  Future<(FakeBleLink, FakeDevice, BleTransport)> pumpConnected(
+    WidgetTester tester,
+  ) async {
     final link = FakeBleLink();
     final device = FakeDevice(link);
     final ble = BleTransport(
@@ -171,18 +182,18 @@ void _calibrationHint() {
       await tester.pump(const Duration(milliseconds: 10));
     }
     expect(find.text('Connected'), findsOneWidget);
-    return (link, device);
+    return (link, device, ble);
   }
 
   testWidgets('an uncalibrated device explains itself, then stops', (
     tester,
   ) async {
-    final (_, device) = await pumpConnected(tester);
+    final (_, device, ble) = await pumpConnected(tester);
 
     expect(find.textContaining('IMU not calibrated'), findsNothing);
 
-    device.send(calibrationMessage(sys: 1, accel: 1, gyro: 2));
-    await tester.pumpAndSettle();
+    device.servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2));
+    await _pollCalibration(tester);
 
     expect(find.textContaining('IMU not calibrated'), findsOneWidget);
     expect(find.textContaining('rep recording is paused'), findsOneWidget);
@@ -190,18 +201,20 @@ void _calibrationHint() {
     expect(find.textContaining('accel 1/3'), findsOneWidget);
     expect(find.textContaining('mag 0/3'), findsOneWidget);
 
-    device.send(calibrationMessage());
-    await tester.pumpAndSettle();
+    device.servesCalibration(calibrationStatus());
+    await _pollCalibration(tester);
     expect(find.textContaining('IMU not calibrated'), findsNothing);
+
+    await ble.close();
   });
 
   testWidgets('a dropped connection takes a stale hint with it', (
     tester,
   ) async {
-    final (link, device) = await pumpConnected(tester);
+    final (link, device, _) = await pumpConnected(tester);
 
-    device.send(calibrationMessage(sys: 1, accel: 1, gyro: 1));
-    await tester.pumpAndSettle();
+    device.servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 1));
+    await _pollCalibration(tester);
     expect(find.textContaining('IMU not calibrated'), findsOneWidget);
 
     link.dropConnection('out of range');
@@ -274,6 +287,10 @@ void _liveSummaries() {
         reason: 'one row, one record',
       );
       expect(archive.reps, hasLength(1));
+
+      // While connected, the levels are read on a timer: close the link so it does
+      // not outlive the tree.
+      await ble.close();
     },
   );
 }

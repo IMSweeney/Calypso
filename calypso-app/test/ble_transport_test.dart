@@ -91,12 +91,14 @@ Future<BleTransport> connectedTransport(
   FakeBleLink link, {
   Duration? traceTimeout,
   Duration xferTimeout = const Duration(milliseconds: 50),
+  Duration calibrationPoll = const Duration(seconds: 1),
 }) async {
   final transport = BleTransport(
     link,
     traceTimeout: traceTimeout ?? const Duration(milliseconds: 200),
     chunkIdleTimeout: const Duration(milliseconds: 50),
     xferTimeout: xferTimeout,
+    calibrationPoll: calibrationPoll,
   );
   final connecting = transport.connect();
   await pumpEventQueue();
@@ -176,6 +178,7 @@ void main() {
           DiscoveredService('0000ca20-b0cd-11ec-871f-d45ddf138840', [
             '0000ca21-b0cd-11ec-871f-d45ddf138840',
             '0000ca22-b0cd-11ec-871f-d45ddf138840',
+            '0000ca24-b0cd-11ec-871f-d45ddf138840',
             '0000ca23-b0cd-11ec-871f-d45ddf138840',
           ]),
         ];
@@ -480,41 +483,62 @@ void main() {
     },
   );
 
-  test(
-    'calibration arrives from the device and leaves with the connection',
-    () async {
-      final link = FakeBleLink();
-      final device = FakeDevice(link);
-      final transport = await connectedTransport(link);
+  test('the calibration status is read at connect, and leaves with it', () async {
+    final link = FakeBleLink();
+    // What the device's table holds, served before the transport reads it.
+    FakeDevice(
+      link,
+    ).servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2));
 
-      expect(transport.calibration.latest, isNull);
+    final transport = await connectedTransport(link);
 
-      device.send(calibrationMessage(sys: 1, accel: 1, gyro: 2));
-      await pumpEventQueue();
+    final latest = transport.calibration.latest!;
+    expect(latest.accel, 1);
+    expect(latest.gyro, 2);
+    expect(latest.ready, isFalse);
+    expect(latest.action, contains('still on the rack'));
+    expect(
+      link.reads[SyncClient.calibrationUuid],
+      1,
+      reason:
+          'read once as part of connecting, so the hint is right from the start',
+    );
 
-      final latest = transport.calibration.latest!;
-      expect(latest.accel, 1);
-      expect(latest.gyro, 2);
-      expect(latest.ready, isFalse);
-      expect(latest.action, contains('still on the rack'));
+    link.dropConnection('out of range');
+    await pumpEventQueue();
+    expect(transport.calibration.latest, isNull);
+    expect(transport.calibration.isReady, isFalse);
+  });
 
-      var notifications = 0;
-      transport.calibration.addListener(() => notifications++);
-      device.send(calibrationMessage(sys: 1, accel: 1, gyro: 2));
-      await pumpEventQueue();
-      expect(notifications, 0);
+  test('and asked for again on the app\'s own clock', () async {
+    final link = FakeBleLink();
+    final device = FakeDevice(link)
+      ..servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2));
 
-      device.send(calibrationMessage());
-      await pumpEventQueue();
-      expect(notifications, 1);
-      expect(transport.calibration.isReady, isTrue);
+    final transport = await connectedTransport(
+      link,
+      calibrationPoll: const Duration(milliseconds: 20),
+    );
+    var notifications = 0;
+    transport.calibration.addListener(() => notifications++);
 
-      link.dropConnection('out of range');
-      await pumpEventQueue();
-      expect(transport.calibration.latest, isNull);
-      expect(transport.calibration.isReady, isFalse);
-    },
-  );
+    // A second read of the same levels: the app asks, the device answers, and
+    // nothing changed.
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(
+      link.reads[SyncClient.calibrationUuid]!,
+      greaterThan(1),
+      reason: 'the poll is the app\'s, and it runs while connected',
+    );
+    expect(notifications, 0, reason: 'the same levels are not news');
+
+    device.servesCalibration(calibrationStatus(sys: 3, accel: 3, gyro: 3));
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(notifications, 1);
+    expect(transport.calibration.isReady, isTrue);
+
+    await transport.close();
+  });
 
   test('malformed notifications are ignored, not fatal', () async {
     final link = FakeBleLink();

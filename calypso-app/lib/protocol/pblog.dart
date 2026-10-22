@@ -51,14 +51,19 @@ String describeSyncMessage(SyncMessage message) {
       return 'trace rep=$rep chunk=${chunk.index + 1}/${chunk.totalChunks}';
     case SyncMessage_Body.status:
       return 'status reps=${message.status.repCount}';
-    case SyncMessage_Body.calibration:
-      final status = message.calibration;
-      return 'calibration sys=${status.sys} accel=${status.accel} '
-          'gyro=${status.gyro} mag=${status.mag} ready=${status.ready}';
     case SyncMessage_Body.notSet:
       return 'empty';
   }
 }
+
+/// What a calibration status says, for a log line.
+///
+/// The same words [`describeSyncMessage`] used when the levels rode a message body:
+/// they are a read now, and a log that says what arrived should not care which
+/// characteristic carried it.
+String describeCalibrationStatus(CalibrationStatus status) =>
+    'calibration sys=${status.sys} accel=${status.accel} '
+    'gyro=${status.gyro} mag=${status.mag} ready=${status.ready}';
 
 List<RepSummary> summariesOf(List<RepRecord> records) =>
     records.where((r) => r.hasSummary()).map((r) => r.summary).toList();

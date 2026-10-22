@@ -30,6 +30,17 @@ abstract class BleLink {
 
   Future<void> disconnect(String deviceId);
 
+  /// Read a characteristic once.
+  ///
+  /// A read is an ATT round trip, so how often it happens is the caller's clock. The
+  /// value is whatever the device last put there, which for a state it polls itself is
+  /// as fresh as that poll.
+  Future<Uint8List> read(
+    String deviceId,
+    String serviceUuid,
+    String characteristicUuid,
+  );
+
   void onConnectionChange(
     void Function(String deviceId, bool connected, String? error) callback,
   );
@@ -123,6 +134,13 @@ class UniversalBleLink implements BleLink {
   @override
   Future<void> disconnect(String deviceId) =>
       plugin.UniversalBle.disconnect(deviceId);
+
+  @override
+  Future<Uint8List> read(
+    String deviceId,
+    String serviceUuid,
+    String characteristicUuid,
+  ) => plugin.UniversalBle.read(deviceId, serviceUuid, characteristicUuid);
 
   @override
   void onConnectionChange(

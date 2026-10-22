@@ -26,8 +26,17 @@ class FakeBleLink implements BleLink {
     DiscoveredService('0000ca20-b0cd-11ec-871f-d45ddf138840', [
       '0000ca21-b0cd-11ec-871f-d45ddf138840',
       '0000ca22-b0cd-11ec-871f-d45ddf138840',
+      '0000ca24-b0cd-11ec-871f-d45ddf138840',
     ]),
   ];
+
+  /// What a read of each characteristic returns: the device's table, as its own poll
+  /// wrote it. A characteristic that is not here reads as a failure, which is the
+  /// device the test did not set up.
+  final Map<String, Uint8List> readValues = {};
+
+  /// How many times each characteristic has been read, for a test about cadence.
+  final Map<String, int> reads = {};
 
   final List<(String, Uint8List)> writes = [];
 
@@ -84,6 +93,20 @@ class FakeBleLink implements BleLink {
     }
     discovered.add(deviceId);
     return services;
+  }
+
+  @override
+  Future<Uint8List> read(
+    String deviceId,
+    String serviceUuid,
+    String characteristicUuid,
+  ) async {
+    reads[characteristicUuid] = (reads[characteristicUuid] ?? 0) + 1;
+    final value = readValues[characteristicUuid];
+    if (value == null) {
+      throw StateError('nothing to read from $characteristicUuid');
+    }
+    return value;
   }
 
   @override
