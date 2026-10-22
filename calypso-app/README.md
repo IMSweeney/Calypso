@@ -28,7 +28,7 @@ The **iOS Simulator has no CoreBluetooth at all**, so BLE only works on a real d
 ## Test
 
 ```sh
-flutter test                 # 86 tests, no device, no simulator
+flutter test                 # 103 tests, no device, no simulator
 flutter analyze              # expected clean
 ```
 
@@ -61,18 +61,25 @@ BLE is the only writer so far, at two levels, both under the `ble` logger:
 - `BleTransport` logs the session (`scanning`, `connecting`, `subscribed`,
   `connected`, `connection lost`) and each message it handled (`rx`, `tx`).
 
-One line shape for all of them (`describeMessage`, `lib/logging/loggers.dart`):
+Bytes at the seam, and words above it: `describeMessage`
+(`lib/logging/loggers.dart`) prints the frames, and the transport prints what it made
+of them.
 
 ```
 2026-10-18T20:41:03.482119 INFO    ble subscribed to 0000ca21-b0cd-11ec-871f-d45ddf138840
-2026-10-18T20:41:03.631902 FINE    ble raw 0000ca21-b0cd-11ec-871f-d45ddf138840 6B 22 04 10 03 18 03
-2026-10-18T20:41:03.631955 FINE    ble rx 0000ca21-b0cd-11ec-871f-d45ddf138840 6B 22 04 10 03 18 03
+2026-10-18T20:41:03.631902 FINE    ble raw 0000ca21-b0cd-11ec-871f-d45ddf138840 13B 01 01 0c 0a 0a 00 …
+2026-10-18T20:41:03.631955 FINE    ble rx 0000ca21-b0cd-11ec-871f-d45ddf138840 summary rep=…
+2026-10-18T20:41:04.010004 FINE    ble rx 0000ca24-b0cd-11ec-871f-d45ddf138840 calibration sys=3 accel=3 gyro=3 mag=0 ready=true
 ```
 
 The `raw`/`rx` pair is the point of the split: `raw` without a matching `rx` means
 the plugin dropped the value, and no `raw` at all means the device never sent it.
 The first line of the file is written at startup, so an empty log means logging is
 broken rather than nothing having happened.
+
+The calibration line has no `raw` above it on purpose: it is a **read** rather than a
+notification, so it answers the app's own request or throws — there is nothing to
+arrive out of the blue (`docs/APP_SYNC.md`).
 
 ## Codegen
 

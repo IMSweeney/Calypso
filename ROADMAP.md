@@ -193,12 +193,15 @@ device's typed request decode with it.
       unexpectedly`.
 
       **The observation needs taking again**: that message was repeating at round-trip
-      rate rather than once a second (the acknowledgement of it was the trigger for the
-      next copy — `f868486`, `docs/GOTCHAS.md`), so what the drops followed was a flood
-      and "idle" was not idle. Two experiments separate our flash traffic from the
-      radio: does the *device's* log show a `rep … stored` or `IMU calibration saved`
-      beside a drop, and does it still drop running **without** `--features fake-reps`
-      (i.e. with no periodic flash writes)?
+      rate rather than once a second — the acknowledgement of it was the trigger for the
+      next copy (`docs/GOTCHAS.md`, "An acknowledgement is also a request for the next
+      message") — so what the drops followed was a flood, and "idle" was not idle. The
+      levels are a **read** now, so the device pushes nothing while the app is idle: what
+      is left of that traffic is the app's own poll, a read a second, and the cadence is
+      the app's to change. Two experiments separate our flash traffic from the radio:
+      does the *device's* log show a `rep … stored` or `IMU calibration saved` beside a
+      drop, and does it still drop running **without** `--features fake-reps` (i.e. with
+      no periodic flash writes)?
 - [ ] **Trace latency is tens of seconds**, and it is head-of-line blocking: the
       firmware's GATT loop `await`s the ATT response to a trace request, and that waits
       behind the previous rep's ~150 trace notifications in the controller's queue. The

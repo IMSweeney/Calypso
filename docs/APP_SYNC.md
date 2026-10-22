@@ -14,11 +14,22 @@ Service `0000ca20-b0cd-11ec-871f-d45ddf138840` — advertised, so a scan can fil
 |---|---|---|
 | `0000ca21-…` | notify | everything the device says: chunks of a `SyncMessage`, and the acknowledgements of what the app sent |
 | `0000ca22-…` | write-without-response | everything the app asks for: chunks of a `SyncRequest`, and the acknowledgements of what the device sent |
+| `0000ca24-…` | read | the IMU's calibration state, as a `CalibrationStatus` |
 
 **One characteristic each way, and that is the design.** The body of the message
-says what it is — a `summary`, a `trace` chunk, a `calibration` status — so nothing
-here distinguishes a response from a push, and a new kind of message is a new arm of
-the oneof rather than a new characteristic, a new UUID and a new subscription.
+says what it is — a `summary` or a `trace` chunk — so nothing here distinguishes a
+response from a push, and a new kind of message is a new arm of the oneof rather
+than a new characteristic, a new UUID and a new subscription.
+
+The third is the exception that says what the rule is about: calibration is a
+**state**, not a message about something happening, so it is a characteristic the app
+reads when its own UI wants the levels instead of a body pushed at the device's choice
+of moment. On the pipe it could only be pushed — and a push had to be sent whenever it
+might have changed, which on a link that carries one message at a time meant it
+competed with the summaries (and once meant it was sent for ever: see
+[`GOTCHAS.md`](GOTCHAS.md), "An acknowledgement is also a request for the next
+message"). The app reads it once while connecting and then once a second, and nothing
+the device does depends on that cadence.
 
 They were three characteristics once: summaries, trace chunks and a bare
 `TraceRequest` each had their own. Collapsing them removed the asymmetry between the
@@ -52,11 +63,10 @@ buys, and what it costs:
   apart), and the app does the same for a request.
 - **One message at a time.** A transfer is finished by its acknowledgement, so
   neither end can start the next message until the one before it is done. The device
-  orders what it owes the app — the trace it asked for, then the calibration status
-  *when the levels have moved*, then the summaries — and the app sends one request at a
-  time. (That qualifier is load-bearing: the app acknowledges every message, an
-  acknowledgement is a write, and a write is where the device asks itself what to send
-  next, so a status sent unconditionally is a status sent for ever — see `GOTCHAS.md`.)
+  orders what it owes the app — the trace it asked for, then the summaries — and the app
+  sends one request at a time. (Nothing may be sent unconditionally here: the app
+  acknowledges every message, an acknowledgement is a write, and a write is where the
+  device asks itself what to send next — see `GOTCHAS.md`.)
 - **Chunks are sized from the link**, not assumed: the device reads its ATT MTU off
   the connection, and the app asks for one after connecting (`requestMtu`). Both
   clamp to the characteristic's own 244 bytes, so a phone that negotiates more than
@@ -67,8 +77,9 @@ appearance), both **read only**. The name is a compile-time constant in the
 firmware — the app could rename the device once, which meant a writable
 characteristic and a name blob in NVS, and it does not any more.
 
-Calibration rides the messages characteristic as `SyncMessage.calibration` rather
-than having a characteristic of its own — see [`CALIBRATION.md`](CALIBRATION.md).
+Calibration has a characteristic of its own (`0000ca24-…`), read by the app: the
+device's table holds the levels its 1 Hz poll of the chip last wrote, and a read
+returns them. See [`CALIBRATION.md`](CALIBRATION.md) for what the levels mean.
 
 The advertisement carries the flags, the **service UUID** and the local name (30
 of the 31 available bytes for `Calypso`).

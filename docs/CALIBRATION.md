@@ -1,6 +1,6 @@
 # Calibration
 
-The device has no display and no buttons, so calibration is mediated entirely by the app: the device comes up regardless, tells the app how calibrated each IMU sensor is and what to do about it, and simply does not record reps until calibrated
+The device has no display and no buttons, so calibration is mediated entirely by the app: the device comes up regardless, reports how calibrated each IMU sensor is (a `CalibrationStatus` characteristic the app reads — `docs/APP_SYNC.md`), and simply does not record reps until it is calibrated.
 
 ## What the IMU reports
 

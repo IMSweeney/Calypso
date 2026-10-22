@@ -513,13 +513,17 @@ status, ack, status, ack. The pipe carries one message at a time, so the same va
 held the pipe against the summaries queued behind it — a self-sustaining loop rather
 than wasted notifications.
 
-**Fix.** `Session::send_calibration` remembers the levels this connection has been told
-and refuses to repeat them. `reset` forgets for a new connection (an app that has just
-connected has been told nothing), and an abandoned transfer is forgotten too, because a
-status the app never acknowledged is one it does not have. Nothing else wanted the rule:
-a summary and a trace chunk each advance a cursor, so each is news by construction. The
-unit case is `a_calibration_status_that_says_the_same_thing_is_not_sent_again`; on a
-bench it is one message repeating with no progress behind it.
+**Fix.** Calibration is not a message at all any more: it is a characteristic the app
+**reads** (`0000ca24-…`, `proto/calypso_gatt.proto`), which is the design this trap
+argues for. Anything a client can ask for on its own clock does not need to be pushed,
+and what is not pushed cannot be pushed again by an acknowledgement of it.
+
+The first attempt kept it on the pipe and had `Session` remember the levels it had told
+that connection (`f868486`) — which worked, and put the reason in the sender rather than
+in the message: *the pipe has no idempotent message*. A summary and a trace chunk each
+advance a cursor, so each is news by construction, and calibration was the only thing on
+the pipe that could say the same thing twice. Anything else added there needs the same
+thought.
 
 ## Types
 
