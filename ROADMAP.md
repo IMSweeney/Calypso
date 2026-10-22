@@ -188,12 +188,17 @@ device's typed request decode with it.
 ### BLE link stability
 
 - [ ] **The link drops while idle, for no reason we can see.** Four drops in one
-      session, each preceded by nothing but the ordinary 1 Hz calibration message —
-      still flowing ~1.2 s before CoreBluetooth reported `The connection has timed out
-      unexpectedly`. Two experiments will separate our flash traffic from the radio:
-      does the *device's* log show a `rep … stored` or `IMU calibration saved` beside a
-      drop, and does it still drop running **without** `--features fake-reps` (i.e.
-      with no periodic flash writes)?
+      session, each preceded by nothing but the calibration message — still flowing
+      ~1.2 s before CoreBluetooth reported `The connection has timed out
+      unexpectedly`.
+
+      **The observation needs taking again**: that message was repeating at round-trip
+      rate rather than once a second (the acknowledgement of it was the trigger for the
+      next copy — `f868486`, `docs/GOTCHAS.md`), so what the drops followed was a flood
+      and "idle" was not idle. Two experiments separate our flash traffic from the
+      radio: does the *device's* log show a `rep … stored` or `IMU calibration saved`
+      beside a drop, and does it still drop running **without** `--features fake-reps`
+      (i.e. with no periodic flash writes)?
 - [ ] **Trace latency is tens of seconds**, and it is head-of-line blocking: the
       firmware's GATT loop `await`s the ATT response to a trace request, and that waits
       behind the previous rep's ~150 trace notifications in the controller's queue. The

@@ -52,8 +52,11 @@ buys, and what it costs:
   apart), and the app does the same for a request.
 - **One message at a time.** A transfer is finished by its acknowledgement, so
   neither end can start the next message until the one before it is done. The device
-  orders what it owes the app — the trace it asked for, then the calibration
-  status, then the summaries — and the app sends one request at a time.
+  orders what it owes the app — the trace it asked for, then the calibration status
+  *when the levels have moved*, then the summaries — and the app sends one request at a
+  time. (That qualifier is load-bearing: the app acknowledges every message, an
+  acknowledgement is a write, and a write is where the device asks itself what to send
+  next, so a status sent unconditionally is a status sent for ever — see `GOTCHAS.md`.)
 - **Chunks are sized from the link**, not assumed: the device reads its ATT MTU off
   the connection, and the app asks for one after connecting (`requestMtu`). Both
   clamp to the characteristic's own 244 bytes, so a phone that negotiates more than

@@ -499,6 +499,28 @@ budget restarts, and a whole-stream one would have given up on a healthy device.
 `chunkIdleTimeout` (700 ms) is what closes it — that is what ends a stream from firmware
 that never set `total_chunks`.
 
+### An acknowledgement is also a request for the next message
+
+**Symptom.** One message repeats as fast as the link allows — about thirty a second on a
+30 ms connection interval — while the bulk transfer behind it never moves. Nothing in
+the device's log says so: every one of those transfers is acknowledged, so nothing
+stalls, nothing retries, and the pipe looks healthy.
+
+**Cause.** `keep_sending` runs on every write, and every message the device sends comes
+back as an acknowledgement, which *is* a write. It asked for the calibration status
+first and unconditionally, so its own acknowledgement was the trigger for the next copy:
+status, ack, status, ack. The pipe carries one message at a time, so the same value also
+held the pipe against the summaries queued behind it — a self-sustaining loop rather
+than wasted notifications.
+
+**Fix.** `Session::send_calibration` remembers the levels this connection has been told
+and refuses to repeat them. `reset` forgets for a new connection (an app that has just
+connected has been told nothing), and an abandoned transfer is forgotten too, because a
+status the app never acknowledged is one it does not have. Nothing else wanted the rule:
+a summary and a trace chunk each advance a cursor, so each is news by construction. The
+unit case is `a_calibration_status_that_says_the_same_thing_is_not_sent_again`; on a
+bench it is one message repeating with no progress behind it.
+
 ## Types
 
 ### The device keeps two types off the wire, on purpose
