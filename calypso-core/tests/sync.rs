@@ -1,6 +1,7 @@
 //! The sync path: what the device says, and the rules it applies to what the app asks for.
 //!
 //! Messages go out through the codec the pipe carries them with (`gatt::pipe_sync`), so "this fits a transfer" is checked here by the same code the device runs rather than by a number repeated in the test.
+//! The calibration status is the one characteristic that carries a value rather than a message, and its ceiling is checked here for the same reason.
 //! How a message travels — chunks, acknowledgements, retries — belongs to `tests/pipe.rs`.
 
 use calypso_core::gatt::pipe_sync;
@@ -70,6 +71,18 @@ fn worst_case_summary_fits_a_transfer() {
     };
     let (_, n) = wire(&summary_message(summary));
     assert!(n <= MESSAGE_MAX, "worst-case summary is {n} bytes");
+}
+
+/// The widest status the device can build has to fit the characteristic the schema declares for it (`max_len` 20).
+/// This is the one size check that cannot be a compile-time assertion: `gatt-gen` sees `micropb`'s bound for the message type, not the payload the device actually fills in, so `SyncCalibrationValue::encode` answering `None` is what the firmware would hit and this is where it is caught on the host instead.
+#[test]
+fn worst_case_calibration_fits_its_characteristic() {
+    use calypso_core::calibration::Calibration;
+    use calypso_core::gatt::{max_len, SyncCalibrationValue};
+
+    let widest = pb::calibration_message(&Calibration::new(u8::MAX, u8::MAX, u8::MAX, u8::MAX));
+    let value = SyncCalibrationValue::encode(&widest).expect("the widest status fits max_len");
+    assert!(value.as_bytes().len() <= max_len::SYNC_CALIBRATION);
 }
 
 #[test]

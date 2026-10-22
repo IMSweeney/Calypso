@@ -11,10 +11,12 @@ repository   = "https://github.com/IMSweeney/gatt-gen"
 rust-version = "1.88"
 version      = "0.1.0"
 
-# The example is a member so that `cargo test` here builds it: an example that is
-# never built is an example that is wrong.
+# The examples are default members so that plain `cargo test` here builds them and
+# runs their tests: an example that is never built is an example that is wrong, and
+# they are the only targets that compile what this crate generates.
 [workspace]
 members = ["examples/server", "examples/pipe"]
+default-members = [".", "examples/server", "examples/pipe"]
 
 [dependencies]
 # Reads the descriptor set protoc produces, including the custom options

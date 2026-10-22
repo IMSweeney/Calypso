@@ -110,3 +110,36 @@ fn main() {
         decoded.payload.len()
     );
 }
+
+/// What a pipe's storage is sized for, which is the one thing a chunk buffer can get wrong on its own.
+///
+/// One test, because the storage behind each characteristic is a function-local `static`: a table can be built once per process.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // A const generic argument has to be in scope by name, not by path.
+    use gatt::PIPE_STORAGE_MAX;
+
+    /// A frame that fills the buffer *exactly* is the case a variable-length attribute value used to lose, which is why the storage is one byte wider than the largest frame.
+    #[test]
+    fn a_full_frame_survives_the_characteristic() {
+        let server = gatt::Server::new_default("example-bulk").expect("the name fits");
+        let frame = [0x2Au8; gatt::pipe_bulk::CHUNK_MAX];
+        let value: heapless::Vec<u8, PIPE_STORAGE_MAX> =
+            heapless::Vec::from_slice(&frame).expect("a full frame fits the buffer");
+
+        server
+            .table()
+            .set(&server.bulk.down, &value)
+            .expect("the table takes it");
+        let stored: heapless::Vec<u8, PIPE_STORAGE_MAX> = server
+            .table()
+            .get(&server.bulk.down)
+            .expect("and hands it back");
+        assert_eq!(
+            stored.as_slice(),
+            &frame[..],
+            "a full frame survives the table"
+        );
+    }
+}

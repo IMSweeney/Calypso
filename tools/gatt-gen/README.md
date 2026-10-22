@@ -104,4 +104,8 @@ std::fs::write(file.file_name, file.source)?;
 ## Tests
 
 `cargo test` covers the schema half: one failing fixture per rule, the example
-schema parsed into the model it declares, and what `rust-trouble` emits.
+schema parsed into the model it declares, and what `rust-trouble` emits. It also
+runs the two examples, which are default members because they are the only targets
+that compile what this crate generates — and what they check is what a client sees:
+the UUIDs in wire order, a CCCD on the notifiable characteristic and nowhere else, a
+value through the table and back, and a frame that fills a pipe's buffer exactly.

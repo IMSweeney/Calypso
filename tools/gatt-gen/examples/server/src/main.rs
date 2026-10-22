@@ -24,7 +24,7 @@ mod pb {
 /// cannot carry an inner attribute: a file that allowed its own lints could not be included at all, which would tie the output to one way of mounting it.
 #[allow(clippy::all, nonstandard_style, unused, irrefutable_let_patterns)]
 mod gatt {
-    include!(concat!(env!("OUT_DIR"), "/gatt_generated.rs"));
+    include!(concat!(env!("OUT_DIR"), "/gatt.rs"));
 }
 
 use pb::msg;
@@ -63,4 +63,83 @@ fn main() {
         "a Config through the value type and back: {} bytes on the wire",
         value.as_bytes().len()
     );
+}
+
+/// What the schema promises a client, checked against the table it produced.
+///
+/// One test with its checks as functions, because the storage behind each characteristic is a function-local `static`: a table can be built once per process.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trouble_host::prelude::*;
+
+    #[test]
+    fn the_table_is_what_a_client_reads_and_writes() {
+        let server = gatt::Server::new_default("example-sensor").expect("the name fits");
+
+        a_uuid_is_the_schema_text_in_wire_order();
+        every_characteristic_has_its_own_handle(&server);
+        only_a_notifiable_characteristic_has_a_cccd(&server);
+        a_value_survives_the_characteristic(&server);
+    }
+
+    /// The text is what a client prints; the bytes under it are the same UUID in wire order, which is the one thing a generated table can get wrong on its own.
+    fn a_uuid_is_the_schema_text_in_wire_order() {
+        assert_eq!(
+            canonical(&gatt::uuid::SENSOR_SERVICE_UUID),
+            gatt::uuid::SENSOR_SERVICE_TEXT
+        );
+        assert_eq!(
+            canonical(&gatt::uuid::SENSOR_LEVEL_UUID),
+            gatt::uuid::SENSOR_LEVEL_TEXT
+        );
+        assert_eq!(
+            canonical(&gatt::uuid::SENSOR_SETTINGS_UUID),
+            gatt::uuid::SENSOR_SETTINGS_TEXT
+        );
+    }
+
+    fn every_characteristic_has_its_own_handle(server: &gatt::Server) {
+        assert_ne!(server.sensor.level.handle, server.sensor.settings.handle);
+    }
+
+    /// A CCCD is what a client writes to subscribe, so exactly the notifiable characteristic has one.
+    fn only_a_notifiable_characteristic_has_a_cccd(server: &gatt::Server) {
+        assert!(server.sensor.level.cccd_handle.is_some());
+        assert!(server.sensor.settings.cccd_handle.is_none());
+    }
+
+    fn a_value_survives_the_characteristic(server: &gatt::Server) {
+        let config = msg::Config { period_ms: 1000 };
+        let value =
+            gatt::SensorSettingsValue::encode(&config).expect("it fits the declared max_len");
+
+        server
+            .table()
+            .set(&server.sensor.settings, &value)
+            .expect("the table takes it");
+        let stored: gatt::SensorSettingsValue = server
+            .table()
+            .get(&server.sensor.settings)
+            .expect("and hands it back");
+        assert_eq!(stored.decode().expect("it decodes"), config);
+    }
+
+    /// A UUID as a client prints it: the wire bytes reversed.
+    fn canonical(uuid: &Uuid) -> String {
+        let hex: Vec<String> = uuid
+            .as_raw()
+            .iter()
+            .rev()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        format!(
+            "{}-{}-{}-{}-{}",
+            hex[0..4].join(""),
+            hex[4..6].join(""),
+            hex[6..8].join(""),
+            hex[8..10].join(""),
+            hex[10..16].join("")
+        )
+    }
 }

@@ -297,7 +297,9 @@ The UUIDs are declared once, in text form, in `proto/calypso_gatt.proto`;
 `tools/gatt-gen`'s `uuid::to_wire_order` is the single place the reversal happens,
 and the generated `calypso_core::gatt::uuid` carries the wire bytes (for the GATT
 tree and for the advertisement, which wants the same array), the `Uuid` and the
-text. `tests/advertising.rs` and `tests/gatt.rs` pin each side against the text.
+text. `calypso-core/tests/advertising.rs` pins the advertised bytes against it, and
+`gatt-gen`'s `examples/server` test pins the generated `Uuid` and wire bytes against
+the same text.
 
 Getting this wrong the other way round is how the device once exposed every
 service as `408813df-…` while the app looked for `0000ca20-…`.
@@ -324,8 +326,9 @@ more than those four lines.
 
 **Now.** The table is generated (`proto/calypso_gatt.proto` → `calypso_core::gatt`),
 which uses `GapConfig` and `#[gatt_service]`, so this is the price rather than a
-choice: `tests/gatt.rs` is **one test** that builds the table once and runs its
-checks as functions, and nothing else in that process may build one.
+choice. The tests that build a table are `gatt-gen`'s two examples, and each is
+**one test** that builds its table once and runs its checks as functions, because
+nothing else in that process may build one.
 
 ### A client must discover services before subscribing
 
@@ -481,8 +484,10 @@ without touching the length, so `table.get` reads `&value[..0]`.
 it can receive (`PIPE_STORAGE_MAX`), so no frame can be exactly the buffer's size. The
 spare byte is not slack — it is what keeps that branch out of reach.
 
-**How it was found.** `calypso-core/tests/gatt.rs` writes a full frame through the table
-and reads it back. It failed at 244 bytes into a 244-byte buffer and passes at 245.
+**How it was found.** A full frame written through the table and read back: it failed
+at 244 bytes into a 244-byte buffer, and passes at 245. That check is now
+`a_full_frame_survives_the_characteristic` in `gatt-gen`'s `examples/pipe`, which is
+where the storage is sized.
 
 ### The app's trace timeout is about silence, not the size of the rep
 
