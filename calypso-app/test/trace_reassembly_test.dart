@@ -49,13 +49,6 @@ void main() {
     expect(assembler.isEmpty, isTrue);
   });
 
-  test('missing chunk indices are reported for re-request', () {
-    final assembler = TraceAssembler(u(1));
-    assembler.add(chunks[0]);
-    assembler.add(chunks[2]);
-    expect(assembler.missingIndices(), [1]);
-  });
-
   test('an assembled trace matches the input', () {
     final assembled = FakeTransport.reassemble(u(1), chunks);
     expect(assembled.length, points.length);

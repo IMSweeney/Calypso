@@ -164,7 +164,7 @@ void main() {
       );
       expect(
         error,
-        contains('0000ca21-b0cd-11ec-871f-d45ddf138840'),
+        contains(SyncClient.messagesUuid),
         reason: 'and so is what we were looking for',
       );
     },
@@ -360,11 +360,9 @@ void main() {
     await expectLater(
       transport.trace(u(1)),
       throwsA(
-        isA<TraceUnavailableException>().having(
-          (e) => e.reason,
-          'reason',
-          contains('did not answer'),
-        ),
+        isA<TraceUnavailableException>()
+            .having((e) => e.uuid, 'uuid', u(1))
+            .having((e) => e.reason, 'reason', contains('did not answer')),
       ),
     );
 
@@ -373,27 +371,6 @@ void main() {
     expect(link.writesTo(SyncClient.requestsUuid), hasLength(3));
     await transport.close();
   });
-
-  test(
-    'a device that never answers produces TraceUnavailable, not a hang',
-    () async {
-      final link = FakeBleLink();
-      final transport = await connectedTransport(
-        link,
-        traceTimeout: const Duration(milliseconds: 30),
-      );
-
-      await expectLater(
-        transport.trace(u(7)),
-        throwsA(
-          isA<TraceUnavailableException>()
-              .having((e) => e.uuid, 'uuid', u(7))
-              .having((e) => e.reason, 'reason', contains('did not answer')),
-        ),
-      );
-      await transport.close();
-    },
-  );
 
   test('a partial stream that stops times out with what it got', () async {
     final link = FakeBleLink();

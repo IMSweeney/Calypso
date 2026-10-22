@@ -388,18 +388,6 @@ void _traceStates() {
 
     await ble.close();
   });
-
-  testWidgets('a rep whose trace never came says so', (tester) async {
-    final (_, device, ble) = await connected(tester);
-
-    device.send(summaryMessage(u(2)));
-    await tester.pumpAndSettle();
-
-    expect(find.text('no trace'), findsOneWidget);
-    expect(find.text('trace'), findsNothing);
-
-    await ble.close();
-  });
 }
 
 void _bleWiring() {

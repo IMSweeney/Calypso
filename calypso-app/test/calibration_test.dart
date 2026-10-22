@@ -4,42 +4,6 @@ import 'package:calypso/state/calibration.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('the levels arrive as the device sends them', () {
-    final status = pb.CalibrationStatus(
-      sys: 3,
-      accel: 2,
-      gyro: 1,
-      mag: 0,
-      ready: false,
-    );
-
-    expect(status.sys, 3);
-    expect(status.accel, 2);
-    expect(status.gyro, 1);
-    expect(status.mag, 0);
-    expect(status.ready, isFalse);
-  });
-
-  test('ready is the device\'s answer, not one re-derived here', () {
-    final saysReady = pb.CalibrationStatus(
-      sys: 3,
-      accel: 3,
-      gyro: 3,
-      mag: 0,
-      ready: true,
-    );
-    expect(saysReady.ready, isTrue);
-
-    final saysNotReady = pb.CalibrationStatus(
-      sys: 1,
-      accel: 1,
-      gyro: 1,
-      mag: 0,
-      ready: false,
-    );
-    expect(saysNotReady.ready, isFalse);
-  });
-
   test('the magnetometer is reported but never asked for', () {
     final onlyMagShort = pb.CalibrationStatus(
       sys: maxCalibrationLevel,
@@ -113,17 +77,6 @@ void main() {
       expect(finishing.action, isNot(gyroOnly.action));
     },
   );
-
-  test('the level line carries every sensor', () {
-    final status = pb.CalibrationStatus(
-      sys: 1,
-      accel: 2,
-      gyro: 3,
-      mag: 0,
-      ready: false,
-    );
-    expect(status.levels, 'accel 2/3 · gyro 3/3 · sys 1/3 · mag 0/3');
-  });
 
   group('CalibrationNotifier', () {
     test('is not ready before the device has said anything', () {

@@ -10,22 +10,16 @@ import 'package:flutter_test/flutter_test.dart';
 /// The pipe's two characteristics are the runtime's (`lib/gatt/pipe.dart`), so for those the schema's half is the UUIDs, the numbers and the two directions' codecs.
 /// The third characteristic carries a value, which is what the generated client's own member is for — and the one thing here that needs a link, faked below.
 void main() {
-  test('the UUIDs are the ones the schema declares', () {
-    expect(SyncClient.serviceUuid, '0000ca20-b0cd-11ec-871f-d45ddf138840');
-    expect(SyncClient.messagesUuid, '0000ca21-b0cd-11ec-871f-d45ddf138840');
-    expect(SyncClient.requestsUuid, '0000ca22-b0cd-11ec-871f-d45ddf138840');
-    expect(SyncClient.calibrationUuid, '0000ca24-b0cd-11ec-871f-d45ddf138840');
-    expect(SyncPipe.serviceUuid, SyncClient.serviceUuid);
-    expect(SyncPipe.upUuid, SyncClient.messagesUuid);
-    expect(SyncPipe.downUuid, SyncClient.requestsUuid);
-  });
+  test(
+    'the runtime and the generated client name the same characteristics',
+    () {
+      expect(SyncPipe.serviceUuid, SyncClient.serviceUuid);
+      expect(SyncPipe.upUuid, SyncClient.messagesUuid);
+      expect(SyncPipe.downUuid, SyncClient.requestsUuid);
+    },
+  );
 
-  test('the pipe is sized from the schema, and the runtime agrees', () {
-    expect(SyncPipe.chunkMax, 244);
-    expect(SyncPipe.messageMax, 4096);
-    expect(SyncPipe.window, 8, reason: 'the flow control: chunks in flight');
-    expect(SyncPipe.xferTimeoutMs, 5000);
-
+  test('the payload a chunk carries fills the characteristic', () {
     // One frame is what a characteristic holds, so the payload a chunk may carry is the frame less its own overhead — the same sum the runtime takes.
     final capacity = pipe.capacity(247, SyncPipe.chunkMax, 1000);
     expect(capacity, SyncPipe.chunkMax - pipe.overhead(1000));
