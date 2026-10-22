@@ -1,5 +1,8 @@
 #![no_std]
 #![no_main]
+// `a1` is the stack pointer and `core::arch::asm!` needs this to reach it (the
+// `esp` toolchain is nightly; `esp-hal` enables the same feature).
+#![feature(asm_experimental_arch)]
 #![deny(
     clippy::mem_forget,
     reason = "mem::forget is generally not safe to do with esp_hal types, especially those \
@@ -173,6 +176,10 @@ async fn main(spawner: Spawner) -> ! {
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
+
+    // Before `esp_rtos::start` below, and before anything else that allocates
+    // stack: the deepest use is what the log lines report.
+    paint_stack();
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 98768);
     // A second region, because the firmware's own buffers are ~82 KB before the
@@ -413,11 +420,9 @@ async fn main(spawner: Spawner) -> ! {
     };
     info!("Sync buffers ready, heap free {} B", esp_alloc::HEAP.free());
     info!("Starting BLE stack");
-    // How much of the stack `main`'s own frame is holding before the tasks start.
-    // This is the number that says whether the setup above is thrifty with the
-    // linker stack or eating it (`_stack_end`; ~42 KB in the current build, and it
-    // moves whenever a static does — measure, do not assume).
-    info!("Stack in use before the tasks: {} B", stack_used());
+    // What the setup above is holding before the tasks start: the total moves
+    // whenever a static does, so measure rather than assume.
+    info!("Stack before the tasks: {}", Stack);
     join3(
         // HCI runner: must run forever alongside any other BLE tasks.
         async {
@@ -468,7 +473,7 @@ async fn main(spawner: Spawner) -> ! {
                     },
                     Err(_) => continue,
                 };
-                info!("BLE connection established (stack {} B)", stack_used());
+                info!("BLE connection established (stack {})", Stack);
 
                 // Sync state: how many summaries this subscriber has been sent,
                 // the batch they are read from, and the clock the pipe's timeouts
@@ -835,27 +840,27 @@ async fn main(spawner: Spawner) -> ! {
                         };
                         if calibration.is_ready() {
                             info!(
-                                "sampler: {} Hz, ring {}/{} samples, {} pushed, {} reps, imu {} (recording), stack {} B, heap free {} B",
+                                "sampler: {} Hz, ring {}/{} samples, {} pushed, {} reps, imu {} (recording), stack {}, heap free {} B",
                                 SAMPLE_RATE_HZ,
                                 len,
                                 SAMPLE_RING_LEN,
                                 pushed,
                                 reps,
                                 CalibrationLog(calibration),
-                                stack_used(),
+                                Stack,
                                 esp_alloc::HEAP.free()
                             );
                         } else {
                             // Warn, not info: nothing is being recorded, and the
                             // levels say which sensor to work on.
                             warn!(
-                                "sampler: {} Hz, ring {}/{} samples, {} pushed, imu {} — rep recording paused until the IMU is calibrated (stack {} B)",
+                                "sampler: {} Hz, ring {}/{} samples, {} pushed, imu {} — rep recording paused until the IMU is calibrated (stack {})",
                                 SAMPLE_RATE_HZ,
                                 len,
                                 SAMPLE_RING_LEN,
                                 pushed,
                                 CalibrationLog(calibration),
-                                stack_used()
+                                Stack
                             );
                         }
                     }
@@ -1783,22 +1788,98 @@ fn now_ms(start: Instant) -> u32 {
     start.elapsed().as_millis() as u32
 }
 
-/// Bytes of stack used so far, from the bottom of the main stack.
-///
-/// Taken from the address of a local, so it is the depth we are really at. On a
-/// device with no debugger this is how the stack getting full tells you — nothing
-/// else does until the guard word is written and the CPU faults. The total is
-/// whatever the linker script left below `_stack_start`.
+// The linker stack: `Reset` sets the stack pointer to `_stack_start` and the stack
+// grows down from there, so bytes in use are measured from the top and free bytes
+// from `_stack_end` — which is wherever `.data` and `.bss` ended, making the stack
+// what the RWDATA region has left over (see docs/GOTCHAS.md).
+unsafe extern "C" {
+    static _stack_start: u8;
+    static _stack_end: u8;
+}
+
+/// What [`paint_stack`] fills the unused stack with.
+const STACK_PAINT: u8 = 0xA5;
+
+/// How much of the stack's bottom is neither painted nor scanned: the
+/// `stack-protector` guard sits 60 bytes above `_stack_end`, and a byte next to it
+/// says nothing about how deep the stack has been.
+const STACK_PAINT_FLOOR: usize = 256;
+
+/// The stack pointer, i.e. the lowest address this frame's own storage occupies.
+/// Inlined, so `a1` is the caller's: its `entry` has already allocated the frame.
+#[inline(always)]
+fn stack_pointer() -> usize {
+    let sp: usize;
+    unsafe { core::arch::asm!("mov {sp}, a1", sp = out(reg) sp) };
+    sp
+}
+
+fn stack_top() -> usize {
+    core::ptr::addr_of!(_stack_start) as usize
+}
+
+fn stack_bottom() -> usize {
+    core::ptr::addr_of!(_stack_end) as usize
+}
+
+/// Bytes of the linker stack in use at this instant, measured from its top.
 fn stack_used() -> usize {
-    let probe = 0u8;
-    let here = core::ptr::addr_of!(probe) as usize;
-    // Defined by the linker script (`esp-hal`'s `ld/sections/stack.x`): the
-    // lowest address the stack can grow to.
-    unsafe extern "C" {
-        static _stack_end: u8;
+    stack_top().saturating_sub(stack_pointer())
+}
+
+/// Bytes of the linker stack this boot has been through at its deepest, read back
+/// from [`STACK_PAINT`]: the stack region is a buffer nobody zeroes, and the lowest
+/// pattern byte still standing is how far down `main`'s frame and the poll chains
+/// under it have reached.
+///
+/// The figure is at least the depth at the moment of painting, and it cannot see
+/// the floor below `STACK_PAINT_FLOOR` — a stack that reached in there would have
+/// written the guard and faulted first.
+fn stack_deepest() -> usize {
+    let (low, high) = paint_range();
+    let mut bottom = low;
+    while bottom < high && unsafe { core::ptr::read_volatile(bottom as *const u8) } == STACK_PAINT {
+        bottom += 1;
     }
-    let bottom = core::ptr::addr_of!(_stack_end) as usize;
-    here.saturating_sub(bottom)
+    stack_top().saturating_sub(bottom)
+}
+
+/// Fill everything below the stack pointer with [`STACK_PAINT`].
+///
+/// Below the stack pointer is free by definition, and this frame's own storage is
+/// above it. Called before `esp_rtos::start`: a task switch happens inside an
+/// interrupt, and the interrupted context's frame would outlive the paint that
+/// wrote over it.
+fn paint_stack() {
+    let (low, high) = paint_range();
+    if high <= low {
+        warn!(
+            "stack unpainted: less than {} B below the stack pointer",
+            STACK_PAINT_FLOOR
+        );
+        return;
+    }
+    unsafe { core::ptr::write_bytes(low as *mut u8, STACK_PAINT, high - low) };
+}
+
+fn paint_range() -> (usize, usize) {
+    (stack_bottom() + STACK_PAINT_FLOOR, stack_pointer())
+}
+
+/// The stack figures a log line carries: in use now, the total, and the deepest
+/// since [`paint_stack`].
+struct Stack;
+
+impl defmt::Format for Stack {
+    fn format(&self, f: defmt::Formatter) {
+        defmt::write!(
+            f,
+            "{} B used of {} B, {} B at the deepest",
+            stack_used(),
+            stack_top() - stack_bottom(),
+            stack_deepest()
+        )
+    }
 }
 
 /// Calibration levels for logs, so a serial console alone says what to work on:
