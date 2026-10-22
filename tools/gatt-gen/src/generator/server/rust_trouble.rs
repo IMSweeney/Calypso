@@ -66,11 +66,8 @@ pub fn generate(gatt: &Gatt, config: &Config) -> Result<Output, Error> {
     let mut out = String::new();
     let version = env!("CARGO_PKG_VERSION");
 
-    // Nothing in this file is an inner attribute: no `//!` docs and no
-    // `#![allow]`. An inner attribute is not permitted in an `include!`
-    // expansion, so a consumer that generates into `$OUT_DIR` could not mount a
-    // file that carried them. A consumer mounts this in a module of its own and
-    // allows the lints there, which works however the file gets there.
+    // Nothing here is an inner attribute: no `//!` docs and no `#![allow]`.
+    // An inner attribute is not permitted in an `include!` expansion, so a consumer that generates into `$OUT_DIR` could not mount a file carrying them — and one that mounts this in a module of its own allows the lints there.
     let regenerate = match &config.regenerate_with {
         Some(command) => format!("// Regenerate with `{command}` after changing the schema."),
         None => "// Regenerate after changing the schema.".to_string(),
@@ -105,12 +102,7 @@ pub fn generate(gatt: &Gatt, config: &Config) -> Result<Output, Error> {
          pub const SCHEMA_HASH: u64 = {:#018x};\n\n\
          /// Backing buffer for a pipe characteristic's chunk.\n\
          pub const PIPE_CHUNK_MAX: usize = {};\n\
-         /// What a chunk's *frame* is stored in, which is one byte more than the\n\
-         /// largest frame. `trouble-host`'s attribute table keeps a\n\
-         /// variable-length value's length from the value it was built with and\n\
-         /// does not update it for a write that fills the buffer *exactly*, so a\n\
-         /// buffer a frame can fill reads back empty. One spare byte means no\n\
-         /// frame can be that size (see docs/GOTCHAS.md).\n\
+         /// What a chunk's *frame* is stored in: one byte more than the largest frame, so no frame can fill the buffer exactly.\n\
          pub const PIPE_STORAGE_MAX: usize = PIPE_CHUNK_MAX + 1;\n",
         gatt.schema_hash(),
         config.pipe_chunk_max
@@ -155,13 +147,7 @@ fn emit_uuids(out: &mut String, gatt: &Gatt) -> Result<(), Error> {
     };
 
     out.push_str(
-        "/// The UUIDs the schema declares.\n\
-         ///\n\
-         /// **Wire order**, which is the reverse of the text quoted in the `.proto`:\n\
-         /// `40 88 13 df 5d d4 1f 87 ec 11 cd b0 20 ca 00 00` is\n\
-         /// `0000ca20-b0cd-11ec-871f-d45ddf138840` to a client, in the GATT tree and\n\
-         /// in advertising data alike. A service's bytes are therefore the array an\n\
-         /// advertisement carries (`SERVICE_BYTES`), and its `Uuid` is built from them.\n\
+        "/// The UUIDs the schema declares, in **wire order** — the reverse of the text quoted in the `.proto`, and what both the GATT tree and an advertisement carry.\n\
          pub mod uuid {\n\
          \x20   use trouble_host::types::uuid::Uuid;\n\n",
     );
@@ -316,13 +302,8 @@ fn emit_value_type(out: &mut String, characteristic: &Characteristic, config: &C
 
     let _ = writeln!(
         out,
-        "/// `{message}` as one GATT attribute value: the message encoded whole, which is\n\
-         /// what a single-shot characteristic carries (`max_len` {capacity}).\n\
-         ///\n\
-         /// `encode` returns `None` only for a message that does not fit `max_len`,\n\
-         /// which a single-shot value has no assertion against (the tests check the\n\
-         /// largest message the device writes instead); `decode` returns `None` for\n\
-         /// bytes that are not this message at all.\n\
+        "/// `{message}` as one GATT attribute value: the message encoded whole, which is what a single-shot characteristic carries (`max_len` {capacity}).\n\
+         /// `encode` returns `None` only for a message that does not fit `max_len`; `decode` returns `None` for bytes that are not this message at all.\n\
          #[derive(Default)]\n\
          pub struct {ty} {{\n\
          \x20   bytes: Vec<u8, {capacity}>,\n\

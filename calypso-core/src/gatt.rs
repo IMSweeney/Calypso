@@ -17,21 +17,10 @@ pub const SCHEMA_HASH: u64 = 0x2a8eeee0411bfe49;
 
 /// Backing buffer for a pipe characteristic's chunk.
 pub const PIPE_CHUNK_MAX: usize = 244;
-/// What a chunk's *frame* is stored in, which is one byte more than the
-/// largest frame. `trouble-host`'s attribute table keeps a
-/// variable-length value's length from the value it was built with and
-/// does not update it for a write that fills the buffer *exactly*, so a
-/// buffer a frame can fill reads back empty. One spare byte means no
-/// frame can be that size (see docs/GOTCHAS.md).
+/// What a chunk's *frame* is stored in: one byte more than the largest frame, so no frame can fill the buffer exactly.
 pub const PIPE_STORAGE_MAX: usize = PIPE_CHUNK_MAX + 1;
 
-/// The UUIDs the schema declares.
-///
-/// **Wire order**, which is the reverse of the text quoted in the `.proto`:
-/// `40 88 13 df 5d d4 1f 87 ec 11 cd b0 20 ca 00 00` is
-/// `0000ca20-b0cd-11ec-871f-d45ddf138840` to a client, in the GATT tree and
-/// in advertising data alike. A service's bytes are therefore the array an
-/// advertisement carries (`SERVICE_BYTES`), and its `Uuid` is built from them.
+/// The UUIDs the schema declares, in **wire order** — the reverse of the text quoted in the `.proto`, and what both the GATT tree and an advertisement carry.
 pub mod uuid {
     use trouble_host::types::uuid::Uuid;
 
@@ -78,13 +67,8 @@ pub mod max_len {
     pub const SYNC_CALIBRATION: usize = 20;
 }
 
-/// `calypso.CalibrationStatus` as one GATT attribute value: the message encoded whole, which is
-/// what a single-shot characteristic carries (`max_len` 20).
-///
-/// `encode` returns `None` only for a message that does not fit `max_len`,
-/// which a single-shot value has no assertion against (the tests check the
-/// largest message the device writes instead); `decode` returns `None` for
-/// bytes that are not this message at all.
+/// `calypso.CalibrationStatus` as one GATT attribute value: the message encoded whole, which is what a single-shot characteristic carries (`max_len` 20).
+/// `encode` returns `None` only for a message that does not fit `max_len`; `decode` returns `None` for bytes that are not this message at all.
 #[derive(Default)]
 pub struct SyncCalibrationValue {
     bytes: Vec<u8, 20>,

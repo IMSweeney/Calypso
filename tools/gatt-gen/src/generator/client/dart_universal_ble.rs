@@ -241,11 +241,8 @@ fn bare_helper(bare: Bare) -> Option<(usize, &'static str)> {
 /// One client class per service.
 fn emit_client(out: &mut String, service: &Service, config: &Config) {
     let class = format!("{}Client", pascal_case(service.short_name()));
-    // Only a characteristic outside a pipe has members, and only members need the
-    // link: a pipe's two halves are the runtime's (`lib/gatt/pipe.dart`), which
-    // talks to the link itself. A service of nothing but pipes is therefore a set
-    // of constants, with no field to hold — and a `_link` nobody reads is a
-    // warning in every app that runs the analyzer over generated code.
+    // Only a characteristic outside a pipe has members, and only members need the link: a pipe's two halves are the runtime's (`lib/gatt/pipe.dart`), which talks to the link itself.
+    // A service of nothing but pipes is therefore a set of constants, with no field to hold — and a `_link` nobody reads is an analyzer warning in every app that generates this.
     let members: Vec<&Characteristic> = service
         .characteristics
         .iter()
@@ -432,10 +429,7 @@ fn emit_pipes(out: &mut String, gatt: &Gatt, config: &Config) {
             out,
             "\n/// Pipe `{}`: `{}` in, `{}` out.\n\
              ///\n\
-             /// A transfer carries one message, split into chunks of at most\n\
-             /// [chunkMax] bytes and reassembled by the other end. The runtime owns\n\
-             /// both characteristics; nothing here is decoded as a message except by\n\
-             /// [decodeResponse] and [decodeRequest].\n\
+             /// A transfer carries one message, split into chunks of at most [chunkMax] bytes and reassembled by the other end; the runtime owns both characteristics.\n\
              class {class} {{\n\
              \x20 static const String serviceUuid = '{}';\n\
              \n\

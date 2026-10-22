@@ -66,10 +66,7 @@ class SyncClient {
 
 /// Pipe `sync`: `pb.SyncRequest` in, `pb.SyncMessage` out.
 ///
-/// A transfer carries one message, split into chunks of at most
-/// [chunkMax] bytes and reassembled by the other end. The runtime owns
-/// both characteristics; nothing here is decoded as a message except by
-/// [decodeResponse] and [decodeRequest].
+/// A transfer carries one message, split into chunks of at most [chunkMax] bytes and reassembled by the other end; the runtime owns both characteristics.
 class SyncPipe {
   static const String serviceUuid = '0000ca20-b0cd-11ec-871f-d45ddf138840';
 
