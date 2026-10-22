@@ -323,7 +323,7 @@ async fn main(spawner: Spawner) -> ! {
                         &Default::default(),
                         Advertisement::ConnectableScannableUndirected {
                             adv_data: &advertising.adv_data[..advertising.adv_len],
-                            scan_data: &advertising.scan_data[..advertising.scan_len],
+                            scan_data: &[],
                         },
                     )
                     .await

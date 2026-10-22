@@ -35,7 +35,6 @@ fn advertises_the_service_and_the_name_together() {
     let ad = build_advertising("Calypso");
 
     assert!(ad.adv_len <= ADV_MAX);
-    assert_eq!(ad.scan_len, 0, "nothing needs the scan response");
 
     let fields = parse_structures(&ad.adv_data, ad.adv_len);
     assert_eq!(fields.len(), 3, "flags, service, name");

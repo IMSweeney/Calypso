@@ -284,7 +284,7 @@ A client that scans **filtered by service** — which is how the app looks — o
 ever sees advertisements, not scan responses. A device that does not advertise its
 service is invisible to the app while a generic scanner lists it happily. The
 advertisement carries flags + service + local name (30 of the 31 bytes for
-`Calypso`); a longer name falls back to the scan response.
+`Calypso`), and a name too long for one advertisement leaves it empty rather than half-built — the firmware warns on an empty one, so a too-long name shows up in the boot log.
 
 ### The same UUID needs two byte orders
 
