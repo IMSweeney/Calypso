@@ -25,8 +25,7 @@ fn a_characteristic_gets_exactly_the_properties_the_schema_declared() {
         "{source}"
     );
     assert!(!source.contains("read, write"), "{source}");
-    // A pipe's halves are written and notified, and carry chunks rather than a
-    // decoded message.
+    // A pipe's halves are written and notified, and carry chunks rather than a decoded message.
     assert!(source.contains("write_without_response)]"), "{source}");
     assert!(
         source.contains("pub rx: Vec<u8, PIPE_STORAGE_MAX>"),
@@ -55,8 +54,7 @@ fn a_protobuf_characteristic_gets_a_value_type_the_table_can_store() {
         "{source}"
     );
 
-    // A pipe's message is checked against the buffer that reassembles it, and
-    // the check is a compile-time assertion rather than generator arithmetic.
+    // A pipe's message is checked against the buffer that reassembles it, and the check is a compile-time assertion rather than generator arithmetic.
     let (gatt, _) = load("valid/device.proto").unwrap();
     let with_pipes = rust_trouble::generate(
         &gatt,
@@ -122,8 +120,7 @@ fn the_file_is_named_by_the_target_and_says_how_to_regenerate_itself() {
         "{}",
         output.source
     );
-    // Mountable either way: a consumer that `include!`s this cannot carry inner
-    // attributes, so the file has none of its own.
+    // Mountable either way: a consumer that `include!`s this cannot carry inner attributes, so the file has none of its own.
     assert!(!output.source.contains("//!"), "{}", output.source);
     assert!(!output.source.contains("#!["), "{}", output.source);
     assert!(
@@ -151,8 +148,7 @@ fn a_pipe_gets_the_glue_its_runtime_reads() {
     .unwrap()
     .source;
 
-    // One module per pipe, named after it, holding the numbers the runtime was
-    // configured with.
+    // One module per pipe, named after it, holding the numbers the runtime was configured with.
     assert!(source.contains("pub mod pipe_main {"), "{source}");
     assert!(
         source.contains("pub const CHUNK_MAX: usize = 244;"),

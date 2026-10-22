@@ -1,16 +1,13 @@
 //! The rules a schema has to satisfy to become a GATT table.
 //!
-//! Every rule here fails the build (see `SPEC.md` §6.4). The exceptions are
-//! warnings, and each of those is something the schema can ask for that this
-//! stack cannot do (per-link permissions) or that is legal but suspicious.
+//! Every rule here fails the build (see `SPEC.md` §6.4). The exceptions are warnings, and each of those is something the schema can ask for that this stack cannot do (per-link permissions) or that is legal but suspicious.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::Problems;
 use crate::model::{Bare, Characteristic, Gatt, Perm, Prop, ValueType};
 
-/// Minimum ATT payload every stack guarantees: an MTU of 23 minus the 3-byte
-/// ATT header.
+/// Minimum ATT payload every stack guarantees: an MTU of 23 minus the 3-byte ATT header.
 const GUARANTEED_NOTIFY_BYTES: u32 = 20;
 
 /// Check the whole schema, reporting every violation.
@@ -131,9 +128,7 @@ fn check_properties(characteristic: &Characteristic, problems: &mut Problems) {
         ));
     }
 
-    // One characteristic holds one value in the attribute table, so a
-    // characteristic with traffic both ways only works if both directions agree
-    // on the type.
+    // One characteristic holds one value in the attribute table, so a characteristic with traffic both ways only works if both directions agree on the type.
     if from_device && to_device && characteristic.request != characteristic.response {
         problems.error(format!(
             "{path}: {} both ways, but the request is {} and the response is {}; one \
@@ -183,8 +178,7 @@ fn check_value(characteristic: &Characteristic, problems: &mut Problems) {
         }
     }
 
-    // Rule 7: a custom codec encodes a byte array; anything else gives the
-    // generator nothing to hand it.
+    // Rule 7: a custom codec encodes a byte array; anything else gives the generator nothing to hand it.
     if characteristic.custom_codec.is_some()
         && crate::descriptor::is_bare(value) != Some(Bare::Bytes)
     {
@@ -195,8 +189,7 @@ fn check_value(characteristic: &Characteristic, problems: &mut Problems) {
     }
 }
 
-/// Rules 3 and 6: a protobuf characteristic is either single-shot with a
-/// declared size, or part of a pipe -- and those are different mechanisms.
+/// Rules 3 and 6: a protobuf characteristic is either single-shot with a declared size, or part of a pipe -- and those are different mechanisms.
 fn check_sizes(characteristic: &Characteristic, problems: &mut Problems) {
     let path = characteristic.path();
     if !matches!(characteristic.value_type(), ValueType::Message(_)) {
@@ -283,8 +276,7 @@ fn check_pipes(gatt: &Gatt, problems: &mut Problems) {
                 up.path()
             ));
         }
-        // A pipe's ACK chunks are the acknowledgement; an ATT write response is
-        // an extra round trip that also queues behind the ATT response.
+        // A pipe's ACK chunks are the acknowledgement; an ATT write response is an extra round trip that also queues behind the ATT response.
         if down.props.contains(&Prop::Write) {
             problems.warn(format!(
                 "{}: pipe {name:?} is also written with WRITE (with response); the response \

@@ -1,6 +1,9 @@
 use calypso_core::ble::{build_advertising, ADV_MAX};
 use calypso_core::gatt::uuid::SYNC_SERVICE_TEXT;
-use calypso_core::DEVICE_NAME_MAX;
+
+/// `trouble-host` refuses a GAP device name longer than this (`gap.rs`, private `DEVICE_NAME_MAX_LENGTH`), so it is the longest name a device can be given.
+/// It is also the longest this needs to cover.
+const GAP_NAME_MAX: usize = 22;
 
 fn parse_structures(data: &[u8], len: usize) -> Vec<(u8, Vec<u8>)> {
     let mut out = Vec::new();
@@ -52,8 +55,7 @@ fn advertises_the_service_and_the_name_together() {
         *service_type, 0x07,
         "complete list of 128-bit service UUIDs"
     );
-    // The text, not the array: the array comes from the schema, and what a
-    // client prints is what the app matches against.
+    // The text, not the array: the array comes from the schema, and what a client prints is what the app matches against.
     assert_eq!(canonical(service), SYNC_SERVICE_TEXT);
 
     let (name_type, name) = &fields[2];
@@ -74,7 +76,7 @@ fn the_advertised_service_is_the_one_a_client_filters_on() {
 
 #[test]
 fn a_name_too_long_for_the_advertisement_moves_to_the_scan_response() {
-    let long = "a".repeat(DEVICE_NAME_MAX);
+    let long = "a".repeat(GAP_NAME_MAX);
     let ad = build_advertising(&long);
 
     let fields = parse_structures(&ad.adv_data, ad.adv_len);
@@ -93,7 +95,7 @@ fn a_name_too_long_for_the_advertisement_moves_to_the_scan_response() {
 
 #[test]
 fn every_payload_fits_a_legacy_packet() {
-    for len in 1..=DEVICE_NAME_MAX {
+    for len in 1..=GAP_NAME_MAX {
         let name = "n".repeat(len);
         let ad = build_advertising(&name);
         assert!(

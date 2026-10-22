@@ -1,14 +1,8 @@
 //! The device's end of the pipe, against the app's.
 //!
-//! `gatt_pipe`'s own tests drive two bare state machines over a hostile link;
-//! these drive [`Session`], which is what the firmware actually runs — the
-//! encoding, the trace cursor, the reply frames and the retry policy — against the
-//! app's half (`Receiver` here, `calypso-app/lib/gatt/pipe.dart` there), over a
-//! link that is a `Vec` rather than a radio.
+//! `gatt_pipe`'s own tests drive two bare state machines over a hostile link; these drive [`Session`], which is what the firmware actually runs — the encoding, the trace cursor, the reply frames and the retry policy — against the app's half (`Receiver` here, `calypso-app/lib/gatt/pipe.dart` there), over a link that is a `Vec` rather than a radio.
 //!
-//! No radio and no embassy, so every case a bench session would cost to find is
-//! reproducible here: a chunk lost, an acknowledgement swallowed, a transfer that
-//! stalls until it is given up on.
+//! No radio and no embassy, so every case a bench session would cost to find is reproducible here: a chunk lost, an acknowledgement swallowed, a transfer that stalls until it is given up on.
 
 use calypso_core::gatt::pipe_sync;
 use calypso_core::pb::{self, msg, TRACE_CHUNK_SAMPLES};
@@ -21,12 +15,11 @@ use calypso_core::uuid::{fixture_uuid, RepUuid};
 use gatt_pipe::{flags, Acked, Header, Received, Receiver, Send, Sender, MAX_ATTEMPTS};
 use micropb::MessageEncode;
 
-/// The MTU a phone negotiates when it asks for the most it can carry, which is
-/// where the pipe's own buffer is the narrower of the two ceilings.
+/// The MTU a phone negotiates when it asks for the most it can carry, which is where the pipe's own buffer is the narrower of the two ceilings.
 const MTU: usize = 247;
 
-/// A small one, negotiated: 41 bytes of ATT payload after the ATT header, five or six
-/// of them the frame. Not [`ATT_MTU_DEFAULT`], which is a link that never said.
+/// A small one, negotiated: 41 bytes of ATT payload after the ATT header, five or six of them the frame.
+/// Not [`ATT_MTU_DEFAULT`], which is a link that never said.
 const SMALL_MTU: usize = 65;
 
 /// The heap the session's buffers sit in, as the firmware leaks them.
@@ -72,8 +65,7 @@ fn summary(index: u32) -> msg::SyncMessage {
     sync::summary_message(rep_summary(index))
 }
 
-/// A whole trace chunk: the largest message the device sends, and the one whose frame
-/// count says what a link's MTU is worth.
+/// A whole trace chunk: the largest message the device sends, and the one whose frame count says what a link's MTU is worth.
 fn chunk() -> msg::SyncMessage {
     let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES).map(point).collect();
     msg::SyncMessage {
@@ -87,9 +79,8 @@ fn chunk() -> msg::SyncMessage {
     }
 }
 
-/// A chunk whose frames do not fit the window in one go — the shape that stalls a send
-/// path which only flushes a message when it *starts* one. Every field is as wide as
-/// the schema allows, so the message is ~3 KB and its frames are more than `window`.
+/// A chunk whose frames do not fit the window in one go — the shape that stalls a send path which only flushes a message when it *starts* one.
+/// Every field is as wide as the schema allows, so the message is ~3 KB and its frames are more than `window`.
 fn wide_chunk() -> msg::SyncMessage {
     let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES)
         .map(|i| TracePoint {
@@ -110,8 +101,7 @@ fn wide_chunk() -> msg::SyncMessage {
     }
 }
 
-/// Everything waiting on the wire, taken to the app. Returns the reps whose
-/// summaries arrived, which is what a caller advancing a cursor would count.
+/// Everything waiting on the wire, taken to the app. Returns the reps whose summaries arrived, which is what a caller advancing a cursor would count.
 fn receive(session: &mut Session<'_>, phone: &mut Phone, now: &mut u32) -> Vec<RepUuid> {
     let mut arrived = Vec::new();
     for frame in drain(session, MTU) {
@@ -152,8 +142,7 @@ fn reply_frame(seq: u8, flag: u8) -> Vec<u8> {
     out[..len].to_vec()
 }
 
-/// The app's half of one direction: it reassembles what the device notifies, and
-/// hands back the acknowledgements the device's sender waits for.
+/// The app's half of one direction: it reassembles what the device notifies, and hands back the acknowledgements the device's sender waits for.
 struct Phone {
     receiver: Receiver,
     buffer: Vec<u8>,
@@ -162,20 +151,17 @@ struct Phone {
 impl Phone {
     fn new() -> Self {
         Phone {
-            // The app's receiver is generated with the schema's window, so its
-            // acknowledgement cadence is `window / 2` — the same number the device sends by.
+            // The app's receiver is generated with the schema's window, so its acknowledgement cadence is `window / 2` — the same number the device sends by.
             receiver: Receiver::new(pipe_sync::WINDOW),
             buffer: vec![0u8; MESSAGE_MAX],
         }
     }
 
-    /// Take one frame, feeding any acknowledgement straight back to the device.
-    /// Returns the message if that frame completed one.
+    /// Take one frame, feeding any acknowledgement straight back to the device, and return the message if that frame completed one.
     fn take(&mut self, session: &mut Session<'_>, frame: &[u8], now_ms: u32) -> Option<Vec<u8>> {
         match self.receiver.on_chunk(frame, &mut self.buffer, MESSAGE_MAX) {
             Received::Delivered { len } => {
-                // The end of a message is acknowledged too, and the device's
-                // sender is waiting on exactly that to start anything else.
+                // The end of a message is acknowledged too, and the device's sender is waiting on exactly that to start anything else.
                 session.written(
                     &reply_frame(self.receiver.next_expected(), flags::ACK),
                     now_ms,
@@ -198,8 +184,7 @@ impl Phone {
     }
 }
 
-/// Send one message from the device and reassemble it at the app, as a link that
-/// loses nothing does.
+/// Send one message from the device and reassemble it at the app, as a link that loses nothing does.
 fn across(session: &mut Session<'_>, phone: &mut Phone, message: &msg::SyncMessage) -> Vec<u8> {
     assert!(session.send(Kind::Summary, message), "the pipe was free");
     let mut now = 0u32;
@@ -234,8 +219,7 @@ fn a_message_larger_than_a_chunk_travels_in_several() {
     let mut session = buffers.session();
     let mut phone = Phone::new();
 
-    // A whole chunk of points, which is what a trace carries: 48 of them is more
-    // than one notification can hold, which is the whole reason for the pipe.
+    // A whole chunk of points, which is what a trace carries: 48 of them is more than one notification can hold, which is the whole reason for the pipe.
     let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES).map(point).collect();
     let message = msg::SyncMessage {
         body: Some(msg::SyncMessage_::Body::Trace(pb::chunk_message(
@@ -276,9 +260,7 @@ fn a_small_mtu_is_more_chunks_of_the_same_message() {
     let mut session = buffers.session();
     let message = chunk();
 
-    // One *window* of chunks either way — the window is what a drain can take without
-    // an acknowledgement — so the comparison is of the bytes it carries, not of the
-    // frames a whole message needs (which the next test counts).
+    // One window of chunks either way — the window is what a drain can take without an acknowledgement — so the comparison is of the bytes it carries, not of the frames a whole message needs (which the next test counts).
     assert!(session.send(Kind::Trace, &message));
     let big = drain(&mut session, MTU);
     session.reset();
@@ -330,10 +312,7 @@ fn a_link_that_never_negotiated_is_framed_at_the_characteristic() {
     let mut session = buffers.session();
     let message = chunk();
 
-    // 23 is the ATT default, and it is what a central that never sends the exchange
-    // leaves behind — macOS does not. It is not a peer that can only take 20 bytes:
-    // a frame of 20 is a trace chunk in ~150 notifications, which is what starved the
-    // link (docs/GOTCHAS.md).
+    // 23 is the ATT default, which a central that never sends the exchange leaves behind — and macOS does not send it.
     assert!(session.send(Kind::Trace, &message));
     let unattended = drain(&mut session, ATT_MTU_DEFAULT);
     assert_eq!(
@@ -354,17 +333,14 @@ fn a_link_that_never_negotiated_is_framed_at_the_characteristic() {
     assert!(negotiated[0].len() < unattended[0].len());
 }
 
-/// The acknowledgement this device sends must be the number the *app's* sender expects:
-/// the next in-order sequence, not the one it just received. An off-by-one here is
-/// invisible to both ends' own tests — each is self-consistent — and looks like a
-/// request that is never acknowledged (`Acked.ignored` in the app's log).
+/// The acknowledgement this device sends must be the number the app's sender expects: the next in-order sequence, not the one it just received.
+/// An off-by-one here is invisible to both ends' own tests — each is self-consistent — and looks like a request that is never acknowledged.
 #[test]
 fn a_single_frame_request_is_acknowledged_where_the_app_expects() {
     let mut buffers = Buffers::new(4);
     let mut session = buffers.session();
 
-    // The app's side of a write: a `SyncRequest` as the schema encodes it, sent as one
-    // frame (START and END together, which is what a request is).
+    // The app's side of a write: a `SyncRequest` as the schema encodes it, sent as one frame (START and END together, which is what a request is).
     let mut request = [0u8; MESSAGE_MAX];
     let request_len = pipe_sync::encode_request(
         &msg::SyncRequest {
@@ -380,7 +356,9 @@ fn a_single_frame_request_is_acknowledged_where_the_app_expects() {
     let capacity =
         gatt_pipe::capacity(MTU, FRAME_MAX, request_len as u32).expect("the link carries a frame");
     let mut sender = Sender::new(pipe_sync::WINDOW);
-    sender.start(request_len, MESSAGE_MAX);
+    sender
+        .start(request_len, MESSAGE_MAX)
+        .expect("the sender starts a transfer that fits the pipe");
     let mut frame = [0u8; FRAME_MAX];
     let len = match sender.next(&request[..request_len], capacity, &mut frame) {
         Ok(Send::Chunk(len)) => len,
@@ -439,9 +417,8 @@ fn a_busy_pipe_does_not_consume_the_trace_cursor() {
     assert_eq!(indices, [0, 1], "in order, with nothing skipped");
 }
 
-/// A message wider than the window is sent in waves, each wave moved on by the
-/// acknowledgements it earns. This is the contract the firmware's `keep_sending` keeps:
-/// it flushes the message in flight rather than only ever starting one.
+/// A message wider than the window is sent in waves, each wave moved on by the acknowledgements it earns.
+/// This is the contract the firmware's `keep_sending` keeps: it flushes the message in flight rather than only ever starting one.
 #[test]
 fn a_message_wider_than_the_window_goes_in_waves() {
     let mut buffers = Buffers::new(TRACE_CHUNK_SAMPLES);
@@ -457,8 +434,7 @@ fn a_message_wider_than_the_window_goes_in_waves() {
         assert!(!wave.is_empty(), "a wave that carries nothing is a stall");
         waves += 1;
         frames += wave.len();
-        // What the device's log line is built on: the wave stopped because the window is
-        // full and there is more of the message behind it.
+        // What the device's log line is built on: the wave stopped because the window is full and there is more of the message behind it.
         if waves == 1 {
             assert!(
                 session.awaiting_ack(),
@@ -516,7 +492,7 @@ fn a_request_written_by_the_app_arrives_with_an_acknowledgement_to_send() {
         now += 10;
         let capacity = gatt_pipe::capacity(SMALL_MTU, FRAME_MAX, encoded.len() as u32)
             .expect("the link carries a frame");
-        let len = match sender.next(&encoded, capacity, &mut chunk) {
+        let len = match sender.next(encoded, capacity, &mut chunk) {
             Ok(Send::Chunk(len)) => len,
             Ok(Send::Done) => break,
             other => panic!("the sender said {other:?}"),
@@ -558,9 +534,8 @@ fn a_transfer_that_stops_moving_is_sent_again_and_then_given_up_on() {
             Stalled::No => {}
             Stalled::Retrying { .. } => {
                 retries += 1;
-                // A retry is the whole transfer again, from the first chunk. The
-                // sequence number carries on (the receiver takes its numbering from
-                // the START), so it is the payloads that say it is the same message.
+                // A retry is the whole transfer again, from the first chunk.
+                // The sequence number carries on (the receiver takes its numbering from the START), so it is the payloads that say it is the same message.
                 let again = drain(&mut session, MTU);
                 assert_eq!(again.len(), frames.len(), "the whole message again");
                 for (retry, first) in again.iter().zip(frames.iter()) {
@@ -593,8 +568,7 @@ fn a_trace_stream_survives_the_transfers_it_is_made_of() {
     let mut session = buffers.session();
     let mut phone = Phone::new();
 
-    // The device reads a trace out of the log into the session's storage: this is
-    // that buffer, filled as `store::read_trace` fills it.
+    // The device reads a trace out of the log into the session's storage: this is that buffer, filled as `store::read_trace` fills it.
     {
         let storage = session.trace_storage();
         for (i, slot) in storage.iter_mut().take(100).enumerate() {
@@ -691,9 +665,7 @@ fn a_lost_chunk_leaves_the_app_waiting_for_the_rest_of_a_trace() {
     let frames = drain(&mut session, MTU);
     assert!(!frames.is_empty());
 
-    // The app never sees the last of it: no acknowledgement, so the transfer is
-    // given up on — and a trace the app cannot assemble is not worth sending the
-    // rest of.
+    // The app never sees the last of it: no acknowledgement, so the transfer is given up on — and a trace the app cannot assemble is not worth sending the rest of.
     let mut now = 0u32;
     let mut abandoned = false;
     for _ in 0..64 {
@@ -713,15 +685,13 @@ fn a_bad_frame_is_dropped_without_a_word() {
     let mut buffers = Buffers::new(4);
     let mut session = buffers.session();
 
-    // A frame whose CRC does not check out is not half-believed: it is dropped,
-    // and the sender's timeout is the recovery.
+    // A frame whose CRC does not check out is not half-believed: it is dropped, and the sender's timeout is the recovery.
     let mut frame = reply_frame(0, flags::ACK);
     let last = frame.len() - 1;
     frame[last] ^= 0xFF;
     assert_eq!(session.written(&frame, 0), Default::default());
 
-    // And neither is a reply to a transfer this end is not in: it is somebody
-    // else's, or a stale one, and the sender ignores it.
+    // And neither is a reply to a transfer this end is not in: it is somebody else's, or a stale one, and the sender ignores it.
     assert_eq!(
         session.written(&reply_frame(9, flags::ACK), 0),
         Default::default()
@@ -748,11 +718,8 @@ fn a_disconnect_forgets_everything_in_flight() {
 
 #[test]
 fn the_cursor_and_the_pipe_together_stream_a_batch() {
-    // The device's summary path in miniature: a batch read out of the log, the
-    // cursor advancing on each summary the pipe took, and the app receiving them
-    // in order. The batch is four summaries and the pipe holds one transfer at a
-    // time, so this is also the case that says what the firmware's pump is for:
-    // the next one goes only once the app has acknowledged the last.
+    // The device's summary path in miniature: a batch read out of the log, the cursor advancing on each summary the pipe took, and the app receiving them in order.
+    // The batch is four summaries and the pipe holds one transfer at a time, so this is also the case that says what the firmware's pump is for: the next one goes only once the app has acknowledged the last.
     let mut buffers = Buffers::new(4);
     let mut session = buffers.session();
     let mut phone = Phone::new();

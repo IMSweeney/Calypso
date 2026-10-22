@@ -1,31 +1,15 @@
 //! The device's end of the sync pipe.
 //!
-//! `tools/gatt-pipe` is the framing and the two state machines; this is Calypso's
-//! use of them, and it is what turns a write into a `SyncRequest` and a
-//! `SyncMessage` into notifications. Neither characteristic carries a value any
-//! more (see `proto/calypso_gatt.proto`): each carries chunks, so the two ends
-//! agree on a frame rather than on a message fitting in one write.
+//! A write becomes a `SyncRequest`, a `SyncMessage` becomes a run of notifications, and `tools/gatt-pipe` is the framing.
+//! No embassy, no radio, and no clock of its own (the caller passes the time in), which is what lets the whole of it be host-tested (`tests/pipe.rs`).
 //!
-//! No embassy, no radio, and no clock of its own — the caller passes the time in —
-//! which is what lets the whole of it be host-tested (`tests/pipe.rs`).
+//! Three rules of the pipe the caller has to live with, rather than this module's judgement:
 //!
-//! Three rules of the pipe the caller has to live with, rather than this module's
-//! judgement:
+//! - **One transfer at a time.** [`Session::send`] does nothing until the peer has acknowledged the transfer before it, so a caller with more than one message sends them one at a time.
+//! - **An acknowledgement arrives as a write on the other characteristic**, which is why [`Session::written`] is the only place the sender learns anything.
+//! - **A stalled transfer is the caller's to notice**: [`Session::tick`] retries one and eventually gives up on it.
 //!
-//! - **One transfer at a time.** [`Session::send`] does nothing until the peer has
-//!   acknowledged the transfer before it, so a caller with more than one message
-//!   to send keeps a queue of its own and asks again later.
-//! - **An acknowledgement arrives as a write on the other characteristic.** That
-//!   is why [`Session::written`] is the only place the sender learns anything, and
-//!   why the device's send path has to be pumped by the connection's event loop
-//!   rather than driven in a loop of its own.
-//! - **A stalled transfer is the caller's to notice.** [`Session::tick`] is what
-//!   retries one and eventually gives up on it.
-//!
-//! The trace cursor lives here too, for two reasons: a trace is a *sequence* of
-//! transfers, so it is exactly the state that must survive between event loop
-//! iterations, and [`Session::trace_storage`] is where `store::read_trace` reads a
-//! rep into, so the points and the cursor that walks them stay together.
+//! The trace cursor lives here too: a trace is a sequence of transfers, so it is the state that must survive between event loop iterations, and [`Session::trace_storage`] is where `store::read_trace` reads a rep into.
 
 use crate::gatt::pipe_sync;
 use crate::pb::{self, msg, TRACE_CHUNK_SAMPLES};
@@ -34,30 +18,18 @@ use crate::uuid::RepUuid;
 use gatt_pipe::{flags, Header, Received, Receiver, Send, Sender, MAX_ATTEMPTS};
 
 /// Largest message one transfer may carry, both ways.
-///
-/// The buffer a message is reassembled in, so it is the schema's number
-/// (`pipe_msg_max`, see `tool/gen_gatt.sh`) rather than this module's, and the
-/// generated table asserts that `micropb`'s worst case for a `SyncMessage` fits it.
+/// The buffer a message is reassembled in, so it is the schema's number (`pipe_msg_max`, see `tool/gen_gatt.sh`), and the generated table asserts that `micropb`'s worst case for a `SyncMessage` fits it.
 pub const MESSAGE_MAX: usize = pipe_sync::MESSAGE_MAX;
 
-/// The ATT MTU when nobody exchanges one: the spec's default, and what a connection
-/// reports before (or instead of) an exchange.
+/// The ATT MTU when nobody exchanges one: the spec's default, and what a connection reports before (or instead of) an exchange.
 pub const ATT_MTU_DEFAULT: usize = 23;
 
-/// Chunks a sender may have in flight before it waits for an acknowledgement: the
-/// schema's number (`tool/gen_gatt.sh --window`), which both ends are generated with.
+/// Chunks a sender may have in flight before it waits for an acknowledgement: the schema's number (`tool/gen_gatt.sh --window`), which both ends are generated with.
 pub const WINDOW: u8 = pipe_sync::WINDOW;
 
 /// The ATT MTU a frame is sized from.
-///
-/// The peer's, when it negotiated one — and **the characteristic's ceiling when it
-/// did not**. `23` is the spec's default and what a central that never sends the
-/// exchange leaves behind; **macOS never sends one**, so framing to that number is 14
-/// bytes of payload per notification and ~150 notifications for one trace chunk
-/// (`docs/GOTCHAS.md`). A peer that has not said is not a peer that can only take 20
-/// bytes: this device notified 193-byte payloads to the same client for as long as
-/// traces have existed, and a frame that fits the characteristic is what both ends'
-/// buffers are already sized for. A peer that *did* negotiate gets what it asked for.
+/// The peer's, when it negotiated one, and the characteristic's ceiling when it did not: a peer that has not said is not a peer that can only take 20 bytes (macOS never sends the exchange at all).
+/// A peer that did negotiate still gets frames that fit what it asked for.
 pub fn frame_mtu(att_mtu: usize) -> usize {
     if att_mtu <= ATT_MTU_DEFAULT {
         CHUNK_MAX + gatt_pipe::ATT_HEADER
@@ -66,19 +38,15 @@ pub fn frame_mtu(att_mtu: usize) -> usize {
     }
 }
 
-/// The largest frame a link whose ATT MTU is `att_mtu` will carry, which is what a
-/// message is cut into: the characteristic's ceiling, unless the peer negotiated
-/// something smaller than that.
+/// The largest frame a link whose ATT MTU is `att_mtu` will carry, which is what a message is cut into: the characteristic's ceiling, unless the peer negotiated something smaller.
 pub fn frame_ceiling(att_mtu: usize) -> usize {
     CHUNK_MAX.min(frame_mtu(att_mtu) - gatt_pipe::ATT_HEADER)
 }
 
-/// Bytes of payload one chunk carries, before its frame: the characteristic's
-/// backing buffer, and therefore the most one write or notification holds.
+/// Bytes of payload one chunk carries, before its frame: the characteristic's backing buffer, and therefore the most one write or notification holds.
 pub const CHUNK_MAX: usize = pipe_sync::CHUNK_MAX;
 
-/// The largest frame this end writes, which is [`CHUNK_MAX`]: the payload is
-/// clamped so that the frame — header, length and CRC — fits the buffer.
+/// The largest frame this end writes, which is [`CHUNK_MAX`]: the payload is clamped so the frame — header, length and CRC — fits the buffer.
 pub const FRAME_MAX: usize = CHUNK_MAX;
 
 /// No progress for this long (milliseconds) abandons a transfer.
@@ -89,8 +57,7 @@ pub const XFER_TIMEOUT_MS: u32 = pipe_sync::XFER_TIMEOUT_MS;
 pub struct Written {
     /// A whole message arrived: [`Session::message`] holds it.
     pub message: bool,
-    /// The app is owed an acknowledgement, so the caller notifies
-    /// [`Session::reply`] back without delay.
+    /// The app is owed an acknowledgement, so the caller notifies [`Session::reply`] back without delay.
     pub reply: bool,
 }
 
@@ -105,8 +72,7 @@ pub enum Stalled {
     Abandoned { attempt: u8 },
 }
 
-/// What a message is, which is what the caller wants to log when one is lost, and
-/// what decides whether a trace stream survives it.
+/// What a message is: what the caller logs when one is lost, and what decides whether a trace stream survives it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     /// A rep summary the app has not seen.
@@ -129,8 +95,7 @@ impl Kind {
 pub struct Session<'a> {
     sender: Sender,
     receiver: Receiver,
-    /// The message being sent: the codec writes it here, the sender cuts chunks
-    /// out of it.
+    /// The message being sent: the codec writes it here, the sender cuts chunks out of it.
     outgoing: &'a mut [u8],
     outgoing_len: usize,
     /// What is being sent, for the log line when it is lost.
@@ -158,8 +123,7 @@ enum Reply {
 struct Trace {
     rep_uuid: RepUuid,
     t0_ms: u32,
-    /// Chunks in the whole trace, which every chunk carries so the app knows when
-    /// it has them all.
+    /// Chunks in the whole trace, which every chunk carries so the app knows when it has them all.
     total_chunks: u32,
     next: u32,
     /// Set when the app asked for one chunk by index rather than for the stream.
@@ -173,8 +137,7 @@ impl Trace {
             return None;
         }
         let index = self.next;
-        // A single-chunk request is satisfied by the one chunk, whatever else is
-        // in the trace.
+        // A single-chunk request is satisfied by the one chunk, whatever else is in the trace.
         self.next = if self.only.is_some() {
             self.total_chunks
         } else {
@@ -185,9 +148,8 @@ impl Trace {
 }
 
 impl<'a> Session<'a> {
-    /// `outgoing` and `incoming` hold one message each ([`MESSAGE_MAX`] bytes
-    /// apiece; the caller owns them, on the heap, because nothing that size belongs
-    /// on a task stack) and `points` is where a trace being streamed is read into.
+    /// `outgoing` and `incoming` hold one message each ([`MESSAGE_MAX`] bytes apiece; the caller owns them, on the heap, because nothing that size belongs on a task stack).
+    /// `points` is where a trace being streamed is read into.
     pub fn new(
         outgoing: &'a mut [u8],
         incoming: &'a mut [u8],
@@ -208,45 +170,34 @@ impl<'a> Session<'a> {
         }
     }
 
-    /// Whether a message can be started: no transfer in flight, and none waiting
-    /// for an acknowledgement.
+    /// Whether a message can be started: no transfer in flight, and none waiting for an acknowledgement.
     pub fn is_idle(&self) -> bool {
         self.sender.is_idle()
     }
 
-    /// The bytes of the message being sent, or zero when the pipe is free: for the log
-    /// line that says how wide a message is.
+    /// The bytes of the message being sent, or zero when the pipe is free: for the log line that says how wide a message is.
     pub fn message_len(&self) -> usize {
         self.outgoing_len
     }
 
-    /// Whether what is in flight stopped because the window is full — the rest of a
-    /// message wider than the window, waiting for an acknowledgement
-    /// ([`gatt_pipe::Sender::awaiting_ack`]).
+    /// Whether what is in flight stopped because the window is full — the rest of a message wider than the window, waiting for an acknowledgement.
     pub fn awaiting_ack(&self) -> bool {
         self.sender.awaiting_ack()
     }
 
-    /// Whether a trace is being streamed (`next_trace_message` has more).
+    /// Whether a trace is being streamed.
     pub fn streaming(&self) -> bool {
         self.trace.is_some()
     }
 
-    /// What is in flight, for the log line when a transfer is retried or given up
-    /// on. [`Kind::Summary`] when nothing is — the only caller that asks is writing
-    /// about a transfer that exists.
+    /// What is in flight, for the log line when a transfer is retried or given up on. [`Kind::Summary`] when nothing is.
     pub fn kind(&self) -> Kind {
         self.kind
     }
 
     /// Send a summary, a message built here rather than by the caller.
-    ///
-    /// The three `send_*` methods exist because a `SyncMessage` is 2 KB *by value*
-    /// — one of its variants is a whole trace chunk — and a firmware task's future
-    /// is the wrong place for that: a value built and encoded inside a plain method
-    /// call is a stack frame that is gone before the notification is awaited. The
-    /// general `send` below is for callers whose message is not one of Calypso's
-    /// three, and for tests.
+    /// The three `send_*` methods exist because a `SyncMessage` is 2 KB by value — one variant is a whole trace chunk — which is the wrong size for a task's future.
+    /// The general `send` below is for messages that are not one of Calypso's three, and for tests.
     pub fn send_summary(&mut self, summary: &msg::RepSummary) -> bool {
         self.send(
             Kind::Summary,
@@ -254,17 +205,10 @@ impl<'a> Session<'a> {
         )
     }
 
-    /// Send the next chunk of the trace being streamed, if there is one: the cursor
-    /// moves here, so this is only called when the pipe is free.
-    ///
-    /// `false` when the trace is finished (or was never started), which is also when
-    /// the stream is forgotten.
+    /// Send the next chunk of the trace being streamed, if there is one: the cursor moves here, so this is only called when the pipe is free.
+    /// `false` when the trace is finished, which is also when the stream is forgotten.
     pub fn send_next_trace_chunk(&mut self) -> bool {
-        // **The cursor does not move when the pipe is busy.** A message is cut into
-        // chunks and the window is only so wide, so the frames of one transfer can
-        // outlast the window: whoever asks next has to flush the rest of the message
-        // before there is anything new to start. Advancing here would skip the chunk
-        // the unfinished transfer was carrying (`docs/GOTCHAS.md`).
+        // The cursor does not move when the pipe is busy: a message can outlast the window, so whoever asks next has to flush the rest of it before anything new starts.
         if !self.sender.is_idle() {
             return false;
         }
@@ -299,10 +243,7 @@ impl<'a> Session<'a> {
     }
 
     /// Begin sending `message`, which is one transfer whatever its size.
-    ///
-    /// `false` if a transfer is still in flight (the caller tries again when the
-    /// acknowledgement arrives) or if the message does not encode into the pipe's
-    /// buffer, which the generated table's assertion is there to make impossible.
+    /// `false` if a transfer is still in flight (the caller tries again when the acknowledgement arrives), or if the message does not encode into the pipe's buffer — which the generated table's assertion makes impossible.
     pub fn send(&mut self, kind: Kind, message: &msg::SyncMessage) -> bool {
         if !self.sender.is_idle() {
             return false;
@@ -318,13 +259,8 @@ impl<'a> Session<'a> {
         true
     }
 
-    /// The next chunk of the message in flight, written into `out` (which must
-    /// hold [`FRAME_MAX`] bytes), or `None` when there is nothing to send — the
-    /// whole message is out, or the window is full.
-    ///
-    /// `mtu` is the ATT MTU the connection reports, and [`frame_mtu`] is what to do
-    /// with it: a peer that never negotiated is framed at the characteristic rather
-    /// than at the spec's default.
+    /// The next chunk of the message in flight, written into `out` (which must hold [`FRAME_MAX`] bytes), or `None` when there is nothing to send: the whole message is out, or the window is full.
+    /// `mtu` is the ATT MTU the connection reports; [`frame_mtu`] is what to do with it.
     pub fn next_chunk(&mut self, mtu: usize, out: &mut [u8]) -> Option<usize> {
         let capacity = gatt_pipe::capacity(frame_mtu(mtu), CHUNK_MAX, self.outgoing_len as u32)?;
         match self
@@ -336,15 +272,12 @@ impl<'a> Session<'a> {
         }
     }
 
-    /// Take a write from the app: a chunk of a request, or the acknowledgement of
-    /// a message this end sent.
+    /// Take a write from the app: a chunk of a request, or the acknowledgement of a message this end sent.
     pub fn written(&mut self, bytes: &[u8], now_ms: u32) -> Written {
         self.incoming_len = 0;
 
-        // A frame with an acknowledgement flag says where the app is in *our*
-        // transfer, so it is the sender's business. The flag says which it is
-        // without guessing, and it is unambiguous: an acknowledgement carries no
-        // payload, so it is never a chunk in disguise.
+        // A frame with an acknowledgement flag says where the app is in our transfer, so it is the sender's business.
+        // The flag is unambiguous: an acknowledgement carries no payload, so it is never a chunk in disguise.
         if let Ok((header, _)) = gatt_pipe::decode(bytes) {
             if header.is_reply() {
                 if header.is_ack() {
@@ -374,9 +307,7 @@ impl<'a> Session<'a> {
                     reply: true,
                 }
             }
-            // The end of a message is also the place an acknowledgement is owed,
-            // whatever the window's cadence says: the app's sender is waiting on it
-            // to start anything else.
+            // The end of a message is also where an acknowledgement is owed, whatever the window's cadence says: the app's sender is waiting on it to start anything else.
             Received::Delivered { len } => {
                 self.incoming_len = len;
                 self.reply = Some(Reply::Ack(self.receiver.next_expected()));
@@ -385,9 +316,7 @@ impl<'a> Session<'a> {
                     reply: true,
                 }
             }
-            // A frame that did not check out, dropped whole rather than
-            // half-believed: the app's timeout is the recovery, because a
-            // corrupted acknowledgement is no better than none.
+            // A frame that did not check out is dropped whole rather than half-believed: the app's timeout is the recovery, and a corrupted acknowledgement is no better than none.
             Received::Dropped(_) => Written::default(),
         }
     }
@@ -398,20 +327,13 @@ impl<'a> Session<'a> {
     }
 
     /// The request that message is, or `None` if the bytes are not one.
-    ///
-    /// Nothing here decides whether the device will *serve* it: that is
-    /// [`crate::sync::trace_request`], which knows what the device can do. This
-    /// only knows what the schema says a `SyncRequest` is.
+    /// Nothing here decides whether the device will serve it — that is [`crate::sync::trace_request`]. This only knows what the schema says a `SyncRequest` is.
     pub fn request(&self) -> Option<msg::SyncRequest> {
         pipe_sync::decode_request(self.message())
     }
 
-    /// The frame the app is owed, written into `out`, or `None` if it is owed
-    /// nothing.
-    ///
-    /// Notified on the *other* characteristic from the one the write arrived on:
-    /// an acknowledgement travels beside the data it is about, which is what makes
-    /// both directions usable and neither of them privileged.
+    /// The frame the app is owed, written into `out`, or `None` if it is owed nothing.
+    /// Notified on the *other* characteristic from the one the write arrived on: an acknowledgement travels beside the data it is about.
     pub fn reply(&mut self, out: &mut [u8]) -> Option<usize> {
         let (seq, flags) = match self.reply.take()? {
             Reply::Ack(seq) => (seq, flags::ACK),
@@ -430,29 +352,22 @@ impl<'a> Session<'a> {
     }
 
     /// Notice a transfer that has stopped moving: send it again, or give up.
-    ///
-    /// The three attempts are [`MAX_ATTEMPTS`], and they are counted per message
-    /// rather than per chunk: the pipe has no selective retransmit, so a retry is
-    /// the whole transfer.
+    /// The [`MAX_ATTEMPTS`] attempts are counted per message rather than per chunk: the pipe has no selective retransmit, so a retry is the whole transfer.
     pub fn tick(&mut self, now_ms: u32) -> Stalled {
         if !self.sender.stalled(now_ms, XFER_TIMEOUT_MS) {
             return Stalled::No;
         }
         let attempt = self.sender.attempts();
-        // Everything that was in flight is abandoned either way: the peer has
-        // said nothing, so there is no telling how much of it arrived.
+        // Everything that was in flight is abandoned either way: the peer has said nothing, so there is no telling how much of it arrived.
         self.sender.abort();
         if attempt >= MAX_ATTEMPTS {
-            // A trace whose chunk never arrived is a trace the app cannot
-            // assemble, so the rest of it is not worth sending.
+            // A trace whose chunk never arrived is a trace the app cannot assemble, so the rest of it is not worth sending.
             if self.kind == Kind::Trace {
                 self.trace = None;
             }
             return Stalled::Abandoned { attempt };
         }
-        // A new attempt, which is what the limit above counts: `start` is where
-        // the attempt number comes from, so a stall that only rewound the offset
-        // would retry for ever (see the reference driver in `tools/gatt-pipe`).
+        // A new attempt, which is what the limit above counts: `start` is where the attempt number comes from, so a stall that only rewound the offset would retry for ever.
         if self.sender.start(self.outgoing_len, MESSAGE_MAX).is_err() {
             return Stalled::Abandoned { attempt };
         }
@@ -462,8 +377,7 @@ impl<'a> Session<'a> {
         }
     }
 
-    /// Forget everything: a new connection, where whatever was in flight is gone.
-    /// Half a message is not a message, and the app's ends are reset with ours.
+    /// Forget everything: a new connection, where whatever was in flight is gone. Half a message is not a message, and the app's ends are reset with ours.
     pub fn reset(&mut self) {
         self.sender.reset();
         self.receiver.reset();
@@ -475,21 +389,16 @@ impl<'a> Session<'a> {
     }
 
     /// The storage a trace being streamed is read into, for `store::read_trace`.
-    ///
-    /// Handed out mutably rather than kept as a `TraceBuf`: the read fills it, and
-    /// the cursor that walks it afterwards is this end's.
+    /// Handed out mutably rather than kept as a `TraceBuf`: the read fills it, and the cursor that walks it afterwards is this end's.
     pub fn trace_storage(&mut self) -> &mut [TracePoint] {
         self.points_len = 0;
         self.trace = None;
         &mut self.points[..]
     }
 
-    /// Start streaming the trace in [`Session::trace_storage`], which is now
-    /// `points` long. `only` is the one chunk index to send, for a request that
-    /// asked for a single chunk rather than for the trace.
-    ///
-    /// A trace already streaming is replaced: the app asks for one at a time, and
-    /// the newer request is the one that will be waited for.
+    /// Start streaming the trace in [`Session::trace_storage`], which is now `points` long.
+    /// `only` is the one chunk index to send, for a request that asked for a single chunk rather than for the trace.
+    /// A trace already streaming is replaced: the app asks for one at a time, and the newer request is the one that will be waited for.
     pub fn start_trace(&mut self, rep_uuid: RepUuid, t0_ms: u32, points: usize, only: Option<u32>) {
         self.points_len = points.min(self.points.len());
         self.trace = Some(Trace {

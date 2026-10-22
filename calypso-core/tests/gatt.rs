@@ -1,17 +1,9 @@
 //! The generated GATT table, exercised the way a client would.
 //!
-//! One test, not several: `#[gatt_service]` backs each characteristic with a
-//! function-local `static StaticCell`, so a service can be built once per
-//! process. The checks below are separate functions called from that one test —
-//! which is the price of letting the macro own the storage (see
-//! `tools/gatt-gen/PLAN.md`, errata E1).
+//! One test, not several: the storage behind each characteristic is a function-local `static`, so a service can be built only once per process, and the checks are separate functions called from that one test.
 //!
-//! Two of the three characteristics are halves of one pipe, so what a client
-//! *writes* is a frame rather than a message: the table stores chunks, and the decode
-//! that turns them into a `SyncRequest` belongs to `crate::pipe` (see `tests/pipe.rs`).
-//! The third is a value the client reads, and the table stores it whole. What is left
-//! to check here is the table itself — the UUIDs, the properties, and the size its
-//! storage will and will not take.
+//! Two of the three characteristics are halves of one pipe, so what a client writes is a frame rather than a message: the table stores chunks, and decoding them into a `SyncRequest` belongs to `crate::pipe` (`tests/pipe.rs`).
+//! What is left to check here is the table itself — the UUIDs, the properties, and the size its storage will and will not take.
 
 use calypso_core::calibration::Calibration;
 use calypso_core::gatt::{
@@ -34,9 +26,7 @@ fn the_generated_table_is_the_interface_the_proto_declares() {
     the_sizes_come_from_the_schema();
 }
 
-/// The table the firmware builds: GAP (name and appearance) plus the sync
-/// service.
-///
+/// The table the firmware builds: GAP (name and appearance) plus the sync service.
 /// Built once, because the storage behind these characteristics is static.
 fn table() -> &'static CalypsoGatt<'static> {
     static GATT: StaticCell<CalypsoGatt<'static>> = StaticCell::new();
@@ -64,13 +54,9 @@ fn canonical(uuid: &Uuid) -> String {
 }
 
 /// The UUIDs the app scans for and writes to, and the properties it relies on.
-///
-/// The schema is where those are declared now; this pins the generated table
-/// against the constants the rest of the firmware (and the advertisement) uses.
+/// The schema is where those are declared; this pins the generated table against the constants the rest of the firmware (and the advertisement) uses.
 fn checks_uuids_and_properties(gatt: &CalypsoGatt<'_>) {
-    // The schema declares the UUIDs and this is the contract: the app matches
-    // these three strings, and only these. A change here is a change to the
-    // interface, so it is a literal in the test on purpose.
+    // The schema declares the UUIDs and this is the contract: the app matches these three strings, and only these. A change here is a change to the interface, so it is a literal in the test on purpose.
     assert_eq!(
         uuid::SYNC_SERVICE_TEXT,
         "0000ca20-b0cd-11ec-871f-d45ddf138840"
@@ -105,21 +91,16 @@ fn checks_uuids_and_properties(gatt: &CalypsoGatt<'_>) {
     assert_ne!(gatt.sync.messages.handle, gatt.sync.requests.handle);
     assert_ne!(gatt.sync.calibration.handle, gatt.sync.messages.handle);
 
-    // NOTIFY is what gives a characteristic a CCCD: a subscriber needs one, and
-    // neither the written half nor the readable one has one. `WRITE_NO_RSP` only,
-    // since the pipe's own acknowledgement is what reports a request arriving.
+    // NOTIFY is what gives a characteristic a CCCD: a subscriber needs one, and neither the written half nor the readable one has one.
+    // `WRITE_NO_RSP` only, since the pipe's own acknowledgement is what reports a request arriving.
     assert!(gatt.sync.messages.cccd_handle.is_some());
     assert!(gatt.sync.requests.cccd_handle.is_none());
     assert!(gatt.sync.calibration.cccd_handle.is_none());
 }
 
 /// The readable value holds the largest status the device can build.
-///
-/// The generated table asserts `micropb`'s *bound* for a pipe's messages, because
-/// one that could not arrive is a transfer that stalls. A single-shot value has no
-/// such assertion (`tools/gatt-gen/src/generator/server/rust_trouble.rs` explains
-/// why), so the message the device actually writes is checked against `max_len`
-/// here — the levels are `u8`s out of CALIB_STAT, so this is as wide as it gets.
+/// The generated table asserts `micropb`'s *bound* for a pipe's messages, because one that could not arrive is a transfer that stalls.
+/// A single-shot value has no such assertion (`rust_trouble.rs` explains why), so the message the device actually writes is checked against `max_len` here — the levels are `u8`s out of CALIB_STAT, so this is as wide as it gets.
 fn the_calibration_value_holds_the_widest_status_the_device_writes(gatt: &CalypsoGatt<'_>) {
     let widest = pb::calibration_message(&Calibration::new(u8::MAX, u8::MAX, u8::MAX, u8::MAX));
     let value = SyncCalibrationValue::encode(&widest).expect("the widest status fits max_len");
@@ -131,11 +112,11 @@ fn the_calibration_value_holds_the_widest_status_the_device_writes(gatt: &Calyps
     assert_eq!(stored.decode().expect("it decodes"), widest);
 }
 
+// A frame can never be the buffer's size, and neither side can change at run time, so this is a build-time assertion.
+const _: () = assert!(FRAME_MAX < PIPE_STORAGE_MAX);
+
 /// What the app writes is a chunk, and the table stores it as one.
-///
-/// **This is the test that found `PIPE_STORAGE_MAX`.** A buffer the frame can fill
-/// exactly is a buffer whose write reads back empty (see `docs/GOTCHAS.md`), so the
-/// storage is one byte wider than [`FRAME_MAX`] and this is where that is checked.
+/// **This is the test that found `PIPE_STORAGE_MAX`.** A buffer the frame can fill exactly is a buffer whose write reads back empty, so the storage is one byte wider than [`FRAME_MAX`] and this is where that is checked.
 fn a_frame_round_trips_through_the_table(gatt: &CalypsoGatt<'_>) {
     let frame = [0x2Au8; FRAME_MAX];
     let value: heapless::Vec<u8, PIPE_STORAGE_MAX> =
@@ -154,11 +135,9 @@ fn a_frame_round_trips_through_the_table(gatt: &CalypsoGatt<'_>) {
         <heapless::Vec<u8, PIPE_STORAGE_MAX> as AsGatt>::MAX_SIZE,
         PIPE_STORAGE_MAX
     );
-    assert!(
-        FRAME_MAX < PIPE_STORAGE_MAX,
-        "and a frame can never be the buffer's size"
-    );
 }
+
+const _: () = assert!(XFER_TIMEOUT_MS > 0);
 
 /// The numbers the schema declares, and the buffers that depend on them.
 fn the_sizes_come_from_the_schema() {
@@ -173,15 +152,11 @@ fn the_sizes_come_from_the_schema() {
         "a frame fits the buffer it is built in"
     );
     assert_ne!(SCHEMA_HASH, 0, "the schema's hash is what the app checks");
-    assert!(XFER_TIMEOUT_MS > 0);
 
-    // A whole trace chunk — the largest message the device sends — has to encode
-    // into the pipe's reassembly buffer. The generated table asserts the same
-    // thing about `micropb`'s *bound* for the type at compile time; this is the
-    // bytes the wire really carries.
-    // Not `TracePoint::ZERO`: protobuf omits zero-valued fields, and a chunk of an
-    // all-zero rep encodes to a third of what a real one does. This is a
-    // rep-shaped point, which is what the ceiling has to hold.
+    // A whole trace chunk — the largest message the device sends — has to encode into the pipe's reassembly buffer.
+    // The generated table asserts the same thing about `micropb`'s *bound* for the type at compile time; this is the bytes the wire really carries.
+    // Not `TracePoint::ZERO`: protobuf omits zero-valued fields, and a chunk of an all-zero rep encodes to a third of what a real one does.
+    // This is a rep-shaped point, which is what the ceiling has to hold.
     let point = TracePoint {
         t_ms: 12_345,
         pos: [0.25, -0.5, 0.125],

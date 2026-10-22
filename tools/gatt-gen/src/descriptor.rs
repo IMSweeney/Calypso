@@ -1,15 +1,9 @@
-//! Reading the schema: protoc to a descriptor set, then the descriptor set to a
-//! [`Gatt`] model.
+//! Reading the schema: protoc to a descriptor set, then the descriptor set to a [`Gatt`] model.
 //!
-//! The custom options (`gatt.service`, `gatt.characteristic`) are extension
-//! fields of `google.protobuf.ServiceOptions` / `MethodOptions`, so they are
-//! read out of the descriptor set rather than from the parsed proto. Two things
-//! that are easy to get wrong, both of which fail silently:
+//! The custom options (`gatt.service`, `gatt.characteristic`) are extension fields of `google.protobuf.ServiceOptions` / `MethodOptions`, so they are read out of the descriptor set rather than from the parsed proto. Two things that are easy to get wrong, both of which fail silently:
 //!
-//! - the descriptor set must be built with `--include_imports`, or
-//!   `gatt_options.proto` is not in the pool and the options decode as empty;
-//! - extensions are **not** in `DynamicMessage::fields()`; they have to be read
-//!   through `extensions()` or `get_extension()`.
+//! - the descriptor set must be built with `--include_imports`, or `gatt_options.proto` is not in the pool and the options decode as empty;
+//! - extensions are **not** in `DynamicMessage::fields()`; they have to be read through `extensions()` or `get_extension()`.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -58,17 +52,13 @@ fn protoc() -> PathBuf {
 
 /// Compile `input.protos` into a `FileDescriptorSet` at `out`.
 ///
-/// Written to a file rather than parsed in memory because the Dart generator
-/// consumes the same bytes: one descriptor set, two back ends.
+/// Written to a file rather than parsed in memory because the Dart generator consumes the same bytes: one descriptor set, two back ends.
 pub fn descriptor_set(input: &Input, out: &Path) -> Result<(), Error> {
     let mut command = Command::new(protoc());
     for include in &input.includes {
         command.arg(format!("-I{}", include.display()));
     }
-    // protoc resolves imports against `-I` paths only, and the file name it is
-    // given has to sit under one of them: the working directory covers the
-    // relative names a build script passes, and a file's own directory covers
-    // absolute ones.
+    // protoc resolves imports against `-I` paths only, and the file name it is given has to sit under one of them: the working directory covers the relative names a build script passes, and a file's own directory covers absolute ones.
     command.arg("-I.");
     for proto in &input.protos {
         if let Some(dir) = proto.parent().filter(|dir| !dir.as_os_str().is_empty()) {
@@ -76,8 +66,7 @@ pub fn descriptor_set(input: &Input, out: &Path) -> Result<(), Error> {
         }
     }
     // The vocabulary comes with the tool, so `import "gatt_options.proto"`
-    // resolves without every consumer vendoring a copy. Last, so a schema that
-    // deliberately ships its own copy is the one that gets checked.
+    // resolves without every consumer vendoring a copy. Last, so a schema that deliberately ships its own copy is the one that gets checked.
     command.arg(format!("-I{}", vocabulary::vocabulary_dir()?.display()));
     command
         // Without this the custom options cannot be read back (see the module docs).
@@ -117,8 +106,7 @@ pub fn load(input: &Input) -> Result<(Gatt, Vec<String>), Error> {
     loaded
 }
 
-/// A path no other call in this process shares: the descriptor set is written
-/// by protoc, so two concurrent loads must not pick the same file.
+/// A path no other call in this process shares: the descriptor set is written by protoc, so two concurrent loads must not pick the same file.
 fn temporary_descriptor_set() -> PathBuf {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -139,8 +127,7 @@ pub fn parse(pool: &DescriptorPool) -> Result<(Gatt, Vec<String>), Error> {
 
     let mut services = Vec::new();
     for service in pool.services() {
-        // A proto service without the option is not a GATT service: the schema
-        // can be added to an existing file one service at a time.
+        // A proto service without the option is not a GATT service: the schema can be added to an existing file one service at a time.
         let Some(opts) = extension(&service.options(), &service_ext) else {
             continue;
         };
@@ -253,8 +240,7 @@ fn parse_characteristic(
 
 /// The message an extension option holds, or `None` when the option is absent.
 ///
-/// Extensions are not part of `DynamicMessage::fields()`: an option that is set
-/// looks like a message field with no fields set if you look in the wrong place.
+/// Extensions are not part of `DynamicMessage::fields()`: an option that is set looks like a message field with no fields set if you look in the wrong place.
 fn extension(opts: &DynamicMessage, ext: &ExtensionDescriptor) -> Option<DynamicMessage> {
     opts.extensions()
         .find(|(field, _)| field.number() == ext.number())
@@ -306,8 +292,7 @@ fn list_field(message: &DynamicMessage, name: &str) -> Vec<std::borrow::Cow<'sta
     }
 }
 
-/// Bare markers never travel as protobuf, so a characteristic using one has to
-/// be recognized before any codec is chosen.
+/// Bare markers never travel as protobuf, so a characteristic using one has to be recognized before any codec is chosen.
 pub fn is_bare(value: &ValueType) -> Option<Bare> {
     match value {
         ValueType::Bare(bare) => Some(*bare),

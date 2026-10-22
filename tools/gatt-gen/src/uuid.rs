@@ -2,9 +2,7 @@
 
 /// Parse `0000xxxx-0000-1000-8000-00805f9b34fb` form into its 16 bytes.
 ///
-/// Only the canonical 128-bit form is accepted: a 16-bit alias (`180f`) means
-/// the same thing to a client but not the same thing to a human reading two
-/// proto files in a diff, and the schema is the interface.
+/// Only the canonical 128-bit form is accepted: a 16-bit alias (`180f`) means the same thing to a client but not the same thing to a human reading two proto files in a diff, and the schema is the interface.
 pub fn parse_canonical(text: &str) -> Option<[u8; 16]> {
     let stripped: String = text.chars().filter(|c| *c != '-').collect();
     if stripped.len() != 32 || !text.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
@@ -17,13 +15,9 @@ pub fn parse_canonical(text: &str) -> Option<[u8; 16]> {
     Some(bytes)
 }
 
-/// The 16 bytes in **wire order**: the reverse of the canonical text's byte
-/// order.
+/// The 16 bytes in **wire order**: the reverse of the canonical text's byte order.
 ///
-/// That is the order `trouble_host`'s `Uuid::new_long` stores, and the order
-/// advertising data carries a 128-bit UUID in, so a client reverses it back into
-/// the text the schema quotes. See `docs/GOTCHAS.md` for why this is written down
-/// rather than reasoned about.
+/// That is the order `trouble_host`'s `Uuid::new_long` stores, and the order advertising data carries a 128-bit UUID in, so a client reverses it back into the text the schema quotes. See `docs/GOTCHAS.md` for why this is written down rather than reasoned about.
 pub fn to_wire_order(canonical: &[u8; 16]) -> [u8; 16] {
     let mut out = [0u8; 16];
     for (i, byte) in canonical.iter().enumerate() {

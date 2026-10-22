@@ -177,8 +177,7 @@ void main() {
 
 /// Let the transport's calibration read happen, on the widget test's clock.
 ///
-/// The levels are a read on the app's own interval (a second by default), so a test
-/// that changes them has to wait for the next one.
+/// The levels are a read on the app's own interval (a second by default), so a test that changes them has to wait for the next one.
 Future<void> _pollCalibration(WidgetTester tester) async {
   await tester.pump(const Duration(seconds: 1));
   await tester.pumpAndSettle();
@@ -315,16 +314,13 @@ void _liveSummaries() {
       );
       expect(archive.reps, hasLength(1));
 
-      // While connected, the levels are read on a timer: close the link so it does
-      // not outlive the tree.
+      // While connected, the levels are read on a timer: close the link so it does not outlive the tree.
       await ble.close();
     },
   );
 }
 
-/// The list says where each rep's trace is: fetched, being fetched, or gone. A rep that
-/// is invisible until it is archived is a rep the user cannot tell from one the device
-/// never sent.
+/// The list says where each rep's trace is: fetched, being fetched, or gone. A rep that is invisible until it is archived is a rep the user cannot tell from one the device never sent.
 void _traceStates() {
   Future<(FakeBleLink, FakeDevice, BleTransport)> connected(
     WidgetTester tester,
@@ -354,8 +350,7 @@ void _traceStates() {
     final (_, device, ble) = await connected(tester);
 
     device.send(summaryMessage(u(0)));
-    // The request has gone out and nothing has answered it: no time has passed, so this
-    // is the fetch in flight and not a fetch that failed.
+    // The request has gone out and nothing has answered it: no time has passed, so this is the fetch in flight and not a fetch that failed.
     await tester.pump();
     await tester.pump();
 
@@ -367,8 +362,7 @@ void _traceStates() {
     await tester.pumpAndSettle();
     expect(find.text('no trace'), findsOneWidget);
 
-    // The calibration poll runs while connected: close the link so it does not outlive
-    // the tree (docs/GOTCHAS.md).
+    // The calibration poll runs while connected: close the link so it does not outlive the tree (docs/GOTCHAS.md).
     await ble.close();
   });
 

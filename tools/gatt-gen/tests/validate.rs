@@ -1,5 +1,4 @@
-//! A failing schema per rule (SPEC.md 6.4), each with the message it should
-//! produce.
+//! A failing schema per rule (SPEC.md 6.4), each with the message it should produce.
 
 mod common;
 

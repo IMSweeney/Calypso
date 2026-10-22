@@ -1,9 +1,6 @@
-//! The pipe, end to end: two state machines against each other over a link that
-//! loses, duplicates, corrupts and stalls.
+//! The pipe, end to end: two state machines against each other over a link that loses, duplicates, corrupts and stalls.
 //!
-//! These are the failures a BLE link actually produces, and none of them can be
-//! produced on a bench on demand — which is why the state machines hold no
-//! buffers and no clock, and can be driven from a test.
+//! These are the failures a BLE link actually produces, and none of them can be produced on a bench on demand — which is why the state machines hold no buffers and no clock, and can be driven from a test.
 
 use gatt_pipe::{
     self, Header, Received, Receiver, Send, Sender, DEFAULT_CHUNK_MAX, MAX_ATTEMPTS, MAX_WINDOW,
@@ -21,8 +18,7 @@ struct Faults {
     corrupt_nth: Option<usize>,
     /// Deliver the nth data chunk twice.
     duplicate_nth: Option<usize>,
-    /// Swallow every acknowledgement: the sender's timeout is then the only way
-    /// out, which is the case that must not hang.
+    /// Swallow every acknowledgement: the sender's timeout is then the only way out, which is the case that must not hang.
     swallow_acks: bool,
 }
 
@@ -49,8 +45,7 @@ fn pump(message: &[u8], mtu: usize, max_message: usize, faults: Faults) -> Outco
     let mut nth = 0usize;
     let mut now = 0u32;
 
-    // Bounded: the protocol must reach a conclusion, and a test that spins for
-    // ever would not say so.
+    // Bounded: the protocol must reach a conclusion, and a test that spins for ever would not say so.
     for _ in 0..10_000 {
         now += 10;
         let capacity = gatt_pipe::capacity(mtu, DEFAULT_CHUNK_MAX, message.len() as u32)
@@ -64,8 +59,7 @@ fn pump(message: &[u8], mtu: usize, max_message: usize, faults: Faults) -> Outco
                 nth += 1;
                 sent.push(wire[0]);
                 if faults.drop_nth == Some(nth) {
-                    // Gone: as if the notification never went out. It *did* go
-                    // out from the sender's point of view, so that is progress.
+                    // Gone: as if the notification never went out. It *did* go out from the sender's point of view, so that is progress.
                     sender.note_progress(now);
                     continue;
                 }
@@ -78,10 +72,7 @@ fn pump(message: &[u8], mtu: usize, max_message: usize, faults: Faults) -> Outco
             // Nothing more goes out until the peer moves or time passes.
             Send::WindowFull | Send::Done => {
                 if sender.stalled(now, TIMEOUT_MS) {
-                    // The caller's policy, not the state machine's: a timeout
-                    // means the whole transfer goes again, as a new attempt, and
-                    // `attempts` is what the limit is counted against. A refusal
-                    // (a NAK) is different — that one rewinds and continues.
+                    // The caller's policy, not the state machine's: a timeout means the whole transfer goes again, as a new attempt, and `attempts` is what the limit is counted against. A refusal (a NAK) is different — that one rewinds and continues.
                     if sender.attempts() >= MAX_ATTEMPTS {
                         return Outcome {
                             message: None,
@@ -213,8 +204,7 @@ fn a_dropped_chunk_costs_a_nak_and_nothing_else() {
         },
     );
     assert_eq!(outcome.message, Some(message), "the transfer completed");
-    // The receiver sees the gap, refuses, and the sender starts the transfer
-    // again — inside the same attempt, since nothing timed out.
+    // The receiver sees the gap, refuses, and the sender starts the transfer again — inside the same attempt, since nothing timed out.
     assert!(outcome.naks > 0, "the gap was refused");
     assert_eq!(outcome.attempts, 1, "no timeout, so no new attempt");
 }
@@ -255,8 +245,7 @@ fn a_duplicated_chunk_is_answered_and_not_appended_twice() {
 
 #[test]
 fn a_transfer_that_fits_the_window_needs_no_acknowledgement_at_all() {
-    // Three chunks into a window of eight: the acknowledgements are for flow
-    // control, not for correctness, so losing all of them costs nothing.
+    // Three chunks into a window of eight: the acknowledgements are for flow control, not for correctness, so losing all of them costs nothing.
     let message: Vec<u8> = (0..600).map(|i| (i % 23) as u8).collect();
     let outcome = pump(
         &message,
@@ -273,8 +262,7 @@ fn a_transfer_that_fits_the_window_needs_no_acknowledgement_at_all() {
 
 #[test]
 fn a_reply_that_never_comes_gives_up_rather_than_hangs() {
-    // Long enough to need the window to move: 4000 bytes is 17 chunks at a
-    // 243-byte payload, against a window of eight.
+    // Long enough to need the window to move: 4000 bytes is 17 chunks at a 243-byte payload, against a window of eight.
     let message: Vec<u8> = (0..4000).map(|i| (i % 241) as u8).collect();
     let outcome = pump(
         &message,
@@ -392,8 +380,7 @@ fn a_second_start_restarts_the_transfer() {
 fn a_disconnect_resets_both_ends() {
     let mut sender = Sender::new(4);
     let mut receiver = Receiver::new(4);
-    // The buffer is the promise: a receiving end always has one as big as the
-    // transfers it accepts.
+    // The buffer is the promise: a receiving end always has one as big as the transfers it accepts.
     let mut buffer = [0u8; 128];
     let mut chunk = [0u8; 64];
 
@@ -429,8 +416,7 @@ fn the_window_is_what_stops_a_sender_running_ahead() {
     let mut chunk = [0u8; 64];
     sender.start(message.len(), 256).unwrap();
 
-    // Two chunks out, and then nothing goes: this is the backpressure, and it is
-    // the only thing standing between a fast device and a slow phone.
+    // Two chunks out, and then nothing goes: this is the backpressure, and it is the only thing standing between a fast device and a slow phone.
     for _ in 0..2 {
         assert!(matches!(
             sender.next(&message, 32, &mut chunk).unwrap(),
@@ -459,8 +445,7 @@ fn the_window_is_what_stops_a_sender_running_ahead() {
 
 #[test]
 fn a_window_that_could_not_be_acknowledged_is_refused() {
-    // A cumulative acknowledgement against a wrapping u8 is only unambiguous
-    // below half the sequence space, and the constructor is where that is said.
+    // A cumulative acknowledgement against a wrapping u8 is only unambiguous below half the sequence space, and the constructor is where that is said.
     let too_big = MAX_WINDOW + 1;
     assert!(std::panic::catch_unwind(|| Sender::new(too_big)).is_err());
     assert!(std::panic::catch_unwind(|| Sender::new(0)).is_err());

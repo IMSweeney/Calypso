@@ -20,8 +20,7 @@ class FakeBleLink implements BleLink {
 
   final List<String> discovered = [];
 
-  /// What the device serves: the schema's tree, and nothing the schema does not
-  /// declare (`proto/calypso_gatt.proto`).
+  /// What the device serves: the schema's tree, and nothing the schema does not declare (`proto/calypso_gatt.proto`).
   List<DiscoveredService> services = const [
     DiscoveredService('0000ca20-b0cd-11ec-871f-d45ddf138840', [
       '0000ca21-b0cd-11ec-871f-d45ddf138840',
@@ -30,9 +29,7 @@ class FakeBleLink implements BleLink {
     ]),
   ];
 
-  /// What a read of each characteristic returns: the device's table, as its own poll
-  /// wrote it. A characteristic that is not here reads as a failure, which is the
-  /// device the test did not set up.
+  /// What a read of each characteristic returns: the device's table, as its own poll wrote it. A characteristic that is not here reads as a failure, which is the device the test did not set up.
   final Map<String, Uint8List> readValues = {};
 
   /// How many times each characteristic has been read, for a test about cadence.
@@ -147,8 +144,7 @@ class FakeBleLink implements BleLink {
           )
           .stream;
 
-  /// Every write, as (characteristic, bytes), and whether each asked for a
-  /// response.
+  /// Every write, as (characteristic, bytes), and whether each asked for a response.
   @override
   Future<void> write(
     String deviceId,

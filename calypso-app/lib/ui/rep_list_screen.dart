@@ -28,9 +28,7 @@ const String seedFixture = String.fromEnvironment(
   defaultValue: 'synthetic-squat',
 );
 
-/// How a rep's trace is getting on, which is the one thing the list cannot show from the
-/// summary alone: a rep is stored the moment its fetch is over, so "not in the archive
-/// yet" *is* "being fetched", and the archive knows whether the trace came with it.
+/// How a rep's trace is getting on, which is the one thing the list cannot show from the summary alone: a rep is stored the moment its fetch is over, so "not in the archive yet" *is* "being fetched", and the archive knows whether the trace came with it.
 enum TraceState {
   /// The app has the trace: the row can be plotted.
   fetched,
@@ -112,18 +110,14 @@ class _RepListScreenState extends State<RepListScreen> {
   void _onSummary(pb.RepSummary summary) {
     final archive = _archive;
     if (archive == null || !mounted) return;
-    // It goes on screen now, with its trace still to come: a fetch is not instant, and a
-    // rep that is invisible until it is archived is a rep the user cannot tell from one
-    // the device never sent.
+    // It goes on screen now, with its trace still to come: a fetch is not instant, and a rep that is invisible until it is archived is a rep the user cannot tell from one the device never sent.
     setState(() {});
     unawaited(_addToLog(archive, summary));
   }
 
   /// What the list shows: every rep the device has told the app about, newest first.
   ///
-  /// The archive holds the reps whose fetch is over; the transport holds the summaries
-  /// that are not archived yet — which is the same thing as being fetched. Which side a
-  /// rep is on, and whether its block carries a trace, is its state.
+  /// The archive holds the reps whose fetch is over; the transport holds the summaries that are not archived yet — which is the same thing as being fetched. Which side a rep is on, and whether its block carries a trace, is its state.
   List<RepRow> _rows(RepArchive? archive) {
     final stored = archive?.reps ?? const <StoredRep>[];
     final rows = <RepRow>[
@@ -149,8 +143,7 @@ class _RepListScreenState extends State<RepListScreen> {
 
   /// The state of a rep's trace, as the row's trailing widget.
   ///
-  /// An icon and its word, and no spinner: a spinner never stops animating, and a widget
-  /// test that waits for the tree to settle would wait for ever (docs/GOTCHAS.md).
+  /// An icon and its word, and no spinner: a spinner never stops animating, and a widget test that waits for the tree to settle would wait for ever (docs/GOTCHAS.md).
   Widget _traceState(TraceState state) {
     final scheme = Theme.of(context).colorScheme;
     final (icon, label, colour) = switch (state) {
@@ -333,8 +326,7 @@ class _RepListScreenState extends State<RepListScreen> {
                           '${s.decimated ? ' · decimated' : ''}',
                         ),
                         trailing: _traceState(row.state),
-                        // A rep still being fetched has nothing to plot yet, and the
-                        // screen it opens would say so in more words.
+                        // A rep still being fetched has nothing to plot yet, and the screen it opens would say so in more words.
                         onTap: row.state == TraceState.fetching
                             ? null
                             : () => Navigator.of(context).push(

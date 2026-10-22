@@ -1,17 +1,8 @@
-//! The chunked pipe: the framing both ends of a BLE link share, and the two state
-//! machines that use it.
+//! The chunked pipe: the framing both ends of a BLE link share, and the two state machines that use it.
 //!
-//! What a BLE characteristic cannot carry in one value travels as a transfer: a
-//! message cut into chunks, each with a header and a CRC, reassembled at the
-//! other end. `SPEC.md` in `tools/gatt-gen` describes the protocol and why it
-//! acknowledges itself.
+//! What a BLE characteristic cannot carry in one value travels as a transfer: a message cut into chunks, each with a header and a CRC, reassembled at the other end. `SPEC.md` in `tools/gatt-gen` describes the protocol and why it acknowledges itself.
 //!
-//! The generator writes the parts only the schema knows — which characteristic
-//! carries which direction, how big a chunk and a message may be, how to turn
-//! bytes into a message — and this crate is the rest: no buffers of its own, no
-//! clock, no BLE, no embassy. Bytes in, decisions out, which is what makes the
-//! failure modes that matter (a chunk lost, duplicated, corrupted, an
-//! acknowledgement that never comes) testable on a host.
+//! The generator writes the parts only the schema knows — which characteristic carries which direction, how big a chunk and a message may be, how to turn bytes into a message — and this crate is the rest: no buffers of its own, no clock, no BLE, no embassy. Bytes in, decisions out, which is what makes the failure modes that matter (a chunk lost, duplicated, corrupted, an acknowledgement that never comes) testable on a host.
 //!
 //! # Frame
 //!
@@ -19,43 +10,25 @@
 //! | seq u8 | flags u8 | [total_len varint, START only] | payload | crc16 LE |
 //! ```
 //!
-//! `flags`: `START=0x01`, `END=0x02`, `ACK=0x04`, `NAK=0x08`. A chunk may be START
-//! and END at once, which is how a message that fits in one chunk travels —
-//! including an *empty* message (`total_len` 0 and no payload: a protobuf `Empty`
+//! `flags`: `START=0x01`, `END=0x02`, `ACK=0x04`, `NAK=0x08`. A chunk may be START and END at once, which is how a message that fits in one chunk travels — including an *empty* message (`total_len` 0 and no payload: a protobuf `Empty`
 //! encodes to nothing, and that is a message, not an aborted transfer).
 //!
-//! `crc16` is CRC-16/CCITT-FALSE over every preceding byte of the chunk. A chunk
-//! that does not check out is dropped rather than interpreted.
+//! `crc16` is CRC-16/CCITT-FALSE over every preceding byte of the chunk. A chunk that does not check out is dropped rather than interpreted.
 //!
 //! # What the spec left open, and what this decides
 //!
-//! - **`seq` has two roles, chosen by the flag.** On a data chunk it is that
-//!   chunk's number, incremented per chunk and wrapping at 256. On an ACK or a NAK
-//!   it is *cumulative*: the next in-order number its sender expects. One field
-//!   rather than two because the role is unambiguous — an acknowledgement carries
-//!   no payload — and it keeps two bytes off every chunk.
-//! - **The window is capped at [`MAX_WINDOW`].** A cumulative acknowledgement
-//!   against a wrapping `u8` is only unambiguous while the unacknowledged window is
-//!   under half the sequence space.
-//! - **A START during a transfer restarts it** rather than NAKing for ever: that is
-//!   what a peer retrying after its own timeout looks like.
+//! - **`seq` has two roles, chosen by the flag.** On a data chunk it is that chunk's number, incremented per chunk and wrapping at 256. On an ACK or a NAK it is *cumulative*: the next in-order number its sender expects. One field rather than two because the role is unambiguous — an acknowledgement carries no payload — and it keeps two bytes off every chunk.
+//! - **The window is capped at [`MAX_WINDOW`].** A cumulative acknowledgement against a wrapping `u8` is only unambiguous while the unacknowledged window is under half the sequence space.
+//! - **A START during a transfer restarts it** rather than NAKing for ever: that is what a peer retrying after its own timeout looks like.
 //! - **A disconnect resets both ends** ([`Sender::reset`], [`Receiver::reset`]).
 //!   Whatever was in flight is gone, and half a message is not a message.
-//! - **Retrying resends the whole transfer.** There is no selective retransmit
-//!   here; the caller decides whether to retry at all, and this counts the tries.
+//! - **Retrying resends the whole transfer.** There is no selective retransmit here; the caller decides whether to retry at all, and this counts the tries.
 //!
 //! # Flow control
 //!
-//! Notifications are not acknowledged and the plugins serialise writes, so the pipe
-//! acknowledges itself: the sender keeps at most `window` chunks in flight, and the
-//! receiver acknowledges at least every `window / 2` chunks and always on END. Both
-//! directions use the same frame and the same rules, and an acknowledgement travels
-//! on the opposite characteristic from the data it is about.
+//! Notifications are not acknowledged and the plugins serialise writes, so the pipe acknowledges itself: the sender keeps at most `window` chunks in flight, and the receiver acknowledges at least every `window / 2` chunks and always on END. Both directions use the same frame and the same rules, and an acknowledgement travels on the opposite characteristic from the data it is about.
 //!
-//! `no_std`, and no dependency beyond `core`: half of it runs on a device with no
-//! allocator, and the other half in an app. The unit tests below are the exception,
-//! since the test harness itself needs `std` — hence `not(test)` rather than a bare
-//! `#![no_std]`, which is the same spelling `calypso-core` uses.
+//! `no_std`, and no dependency beyond `core`: half of it runs on a device with no allocator, and the other half in an app. The unit tests below are the exception, since the test harness itself needs `std` — hence `not(test)` rather than a bare `#![no_std]`, which is the same spelling `calypso-core` uses.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -68,8 +41,7 @@ pub mod flags {
     pub const ACK: u8 = 0x04;
     pub const NAK: u8 = 0x08;
 
-    /// The bits that mean something. Anything else is a frame this protocol does
-    /// not know, and is refused rather than guessed at.
+    /// The bits that mean something. Anything else is a frame this protocol does not know, and is refused rather than guessed at.
     pub const KNOWN: u8 = START | END | ACK | NAK;
 }
 
@@ -80,13 +52,10 @@ const CRC: usize = 2;
 /// The ATT header a notification or a write costs: opcode plus a 2-byte handle.
 pub const ATT_HEADER: usize = 3;
 
-/// The largest window a wrapping `u8` sequence number can acknowledge
-/// unambiguously.
+/// The largest window a wrapping `u8` sequence number can acknowledge unambiguously.
 pub const MAX_WINDOW: u8 = 127;
 
-/// The largest chunk any link is asked to carry: a pipe characteristic's backing
-/// buffer is a compile-time constant on the device, so the frame has a ceiling of
-/// its own whatever the MTU turns out to be.
+/// The largest chunk any link is asked to carry: a pipe characteristic's backing buffer is a compile-time constant on the device, so the frame has a ceiling of its own whatever the MTU turns out to be.
 pub const DEFAULT_CHUNK_MAX: usize = 244;
 
 /// How many transfers this side will send before giving up on one.
@@ -124,18 +93,12 @@ pub fn overhead(total_len: Option<u32>) -> usize {
     HEADER + CRC + total_len.map_or(0, varint_len)
 }
 
-/// How much payload fits in one chunk of a link whose ATT MTU is `mtu`, given
-/// `chunk_max`.
+/// How much payload fits in one chunk of a link whose ATT MTU is `mtu`, given `chunk_max`.
 ///
-/// The MTU is the negotiated one, read from the connection: assuming 247 is how a
-/// notification becomes a silent no-op on a link that negotiated less.
+/// The MTU is the negotiated one, read from the connection: assuming 247 is how a notification becomes a silent no-op on a link that negotiated less.
 ///
-/// Two ceilings, whichever is lower. The link's: the MTU, less the ATT header and
-/// the frame. And the buffer's: `chunk_max` is the characteristic's backing
-/// buffer, which holds the *frame*, so the header and the CRC come out of it too.
-/// A peer that negotiates more than `chunk_max + 3` would otherwise be handed a
-/// chunk too big for the buffer it is built in — and every phone negotiates more
-/// if it is asked to.
+/// Two ceilings, whichever is lower. The link's: the MTU, less the ATT header and the frame. And the buffer's: `chunk_max` is the characteristic's backing buffer, which holds the *frame*, so the header and the CRC come out of it too.
+/// A peer that negotiates more than `chunk_max + 3` would otherwise be handed a chunk too big for the buffer it is built in — and every phone negotiates more if it is asked to.
 pub fn capacity(mtu: usize, chunk_max: usize, total_len: u32) -> Option<usize> {
     let frame = overhead(Some(total_len));
     let usable = mtu.checked_sub(ATT_HEADER + frame)?;
@@ -213,8 +176,7 @@ pub fn decode(chunk: &[u8]) -> Result<(Header, &[u8]), DecodeError> {
     }
 
     let seq = body[0];
-    // A chunk in the middle of a transfer carries no flags at all, so zero is a
-    // value rather than an error: what is refused is a bit nobody defined.
+    // A chunk in the middle of a transfer carries no flags at all, so zero is a value rather than an error: what is refused is a bit nobody defined.
     let flags = body[1];
     if flags & !flags::KNOWN != 0 {
         return Err(DecodeError::BadFrame);
@@ -314,8 +276,7 @@ pub enum Send {
 /// What an acknowledgement did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Acked {
-    /// Nothing new: an acknowledgement of chunks already counted, or of a
-    /// transfer this end is not in.
+    /// Nothing new: an acknowledgement of chunks already counted, or of a transfer this end is not in.
     Ignored,
     /// Chunks were acknowledged; this many remain in flight.
     Advanced { in_flight: u8 },
@@ -366,13 +327,9 @@ impl Sender {
         }
     }
 
-    /// Whether the message in flight stopped only because the window is full: there is
-    /// more of it to send, and the acknowledgement that makes room is what lets it out.
+    /// Whether the message in flight stopped only because the window is full: there is more of it to send, and the acknowledgement that makes room is what lets it out.
     ///
-    /// This is the caller's cue to *flush the message again* rather than to start
-    /// anything new — a message wider than the window is sent in waves, and a send path
-    /// that only ever flushes a message when it starts one leaves the rest of the wave
-    /// in the buffer for ever (see `docs/GOTCHAS.md`).
+    /// This is the caller's cue to *flush the message again* rather than to start anything new — a message wider than the window is sent in waves, and a send path that only ever flushes a message when it starts one leaves the rest of the wave in the buffer for ever (see `docs/GOTCHAS.md`).
     pub fn awaiting_ack(&self) -> bool {
         self.active && !self.end_sent && self.in_flight >= self.window
     }
@@ -390,8 +347,7 @@ impl Sender {
         !self.active && self.in_flight == 0
     }
 
-    /// Begin a transfer of `message_len` bytes, giving up if the peer's
-    /// reassembly buffer could not hold it.
+    /// Begin a transfer of `message_len` bytes, giving up if the peer's reassembly buffer could not hold it.
     pub fn start(&mut self, message_len: usize, max_message: usize) -> Result<(), SendError> {
         if !self.is_idle() {
             return Err(SendError::Busy);
@@ -413,13 +369,9 @@ impl Sender {
 
     /// The next chunk to send, written into `out`.
     ///
-    /// `capacity` is what the link carries ([`capacity`], from the negotiated
-    /// MTU), and the flags say whether the chunk starts, ends or *is* the message.
+    /// `capacity` is what the link carries ([`capacity`], from the negotiated MTU), and the flags say whether the chunk starts, ends or *is* the message.
     ///
-    /// `Done` once the END chunk has gone out, which is what an empty message
-    /// needs as much as a long one: the whole message is on the wire, and only the
-    /// acknowledgement is outstanding. The transfer stays `active` until then —
-    /// that is what keeps the next message waiting.
+    /// `Done` once the END chunk has gone out, which is what an empty message needs as much as a long one: the whole message is on the wire, and only the acknowledgement is outstanding. The transfer stays `active` until then — that is what keeps the next message waiting.
     pub fn next(
         &mut self,
         message: &[u8],
@@ -479,12 +431,10 @@ impl Sender {
         if self.in_flight == 0 {
             return Acked::Ignored;
         }
-        // How many of our chunks the peer has taken: it names the next one it
-        // wants, and the next one we would send is `seq`.
+        // How many of our chunks the peer has taken: it names the next one it wants, and the next one we would send is `seq`.
         let unacked = self.seq.wrapping_sub(next_expected);
         if unacked >= self.in_flight {
-            // It is telling us something we already knew, or about a transfer this
-            // end has left.
+            // It is telling us something we already knew, or about a transfer this end has left.
             return Acked::Ignored;
         }
         self.in_flight = unacked;
@@ -564,13 +514,11 @@ pub enum Received {
     Continue,
     /// Answer with an ACK naming the sequence this end expects next.
     Ack { next_expected: u8 },
-    /// Answer with a NAK: the chunk was not the one expected, or promised more
-    /// than this end can hold.
+    /// Answer with a NAK: the chunk was not the one expected, or promised more than this end can hold.
     Nak,
     /// A whole message: `len` bytes are in the caller's buffer.
     Delivered { len: usize },
-    /// A frame that could not be read, dropped. The sender's timeout is the
-    /// recovery, because a corrupted acknowledgement is no better than none.
+    /// A frame that could not be read, dropped. The sender's timeout is the recovery, because a corrupted acknowledgement is no better than none.
     Dropped(DecodeError),
 }
 
@@ -590,8 +538,7 @@ pub struct Receiver {
 }
 
 impl Receiver {
-    /// `window` is the number the peer's sender was built with: it decides how
-    /// often an acknowledgement has to go out.
+    /// `window` is the number the peer's sender was built with: it decides how often an acknowledgement has to go out.
     pub fn new(window: u8) -> Self {
         assert!(
             (1..=MAX_WINDOW).contains(&window),
@@ -612,15 +559,12 @@ impl Receiver {
     }
 
     /// The next sequence number this end expects, which is what a refusal names:
-    /// a NAK tells the sender where the receiver is, so that it can send the
-    /// transfer again from the beginning.
+    /// a NAK tells the sender where the receiver is, so that it can send the transfer again from the beginning.
     pub fn next_expected(&self) -> u8 {
         self.seq
     }
 
-    /// Take one chunk. `buffer` is the reassembly buffer and `max_message` its
-    /// size: a START that promises more is refused outright rather than filling
-    /// the buffer and failing at the end.
+    /// Take one chunk. `buffer` is the reassembly buffer and `max_message` its size: a START that promises more is refused outright rather than filling the buffer and failing at the end.
     pub fn on_chunk(&mut self, chunk: &[u8], buffer: &mut [u8], max_message: usize) -> Received {
         let (header, payload) = match decode(chunk) {
             Ok(frame) => frame,
@@ -647,15 +591,13 @@ impl Receiver {
             self.since_ack = 0;
             self.repeated = false;
         } else if self.expected.is_none() {
-            // The middle of a transfer this end never saw start: the peer is
-            // ahead of us, or the START is the chunk that was lost.
+            // The middle of a transfer this end never saw start: the peer is ahead of us, or the START is the chunk that was lost.
             self.repeated = true;
             return Received::Nak;
         }
 
         if header.seq != self.seq {
-            // A repeat of the chunk before the one expected is acknowledged again
-            // — our ACK may be the thing that was lost — but a *gap* is not:
+            // A repeat of the chunk before the one expected is acknowledged again — our ACK may be the thing that was lost — but a *gap* is not:
             // nothing here can fill one.
             if header.seq.wrapping_add(1) == self.seq {
                 self.repeated = true;
@@ -688,8 +630,7 @@ impl Receiver {
         self.acknowledge()
     }
 
-    /// Give up on the transfer in progress. The sequence number stays: the next
-    /// START says where the peer is.
+    /// Give up on the transfer in progress. The sequence number stays: the next START says where the peer is.
     fn discard(&mut self) {
         self.expected = None;
         self.used = 0;
@@ -776,18 +717,14 @@ mod tests {
 
     #[test]
     fn capacity_leaves_room_for_the_frame_and_the_att_header() {
-        // A 23-byte MTU is 20 bytes of ATT payload, and a START spends five of
-        // them on the frame, so 15 bytes of message travel first.
+        // A 23-byte MTU is 20 bytes of ATT payload, and a START spends five of them on the frame, so 15 bytes of message travel first.
         assert_eq!(capacity(23, DEFAULT_CHUNK_MAX, 100), Some(15));
-        // A 247-byte MTU leaves 244, and the chunk ceiling is 244 whatever the
-        // MTU: the rest is the frame.
+        // A 247-byte MTU leaves 244, and the chunk ceiling is 244 whatever the MTU: the rest is the frame.
         assert_eq!(
             capacity(247, DEFAULT_CHUNK_MAX, 100),
             Some(244 - overhead(Some(100)))
         );
-        // A link the buffer cannot fill: an MTU of 517 (an Android phone asking
-        // for the most it can) would put 244 bytes of payload and a five-byte
-        // frame into a 244-byte buffer, so the buffer's ceiling wins.
+        // A link the buffer cannot fill: an MTU of 517 (an Android phone asking for the most it can) would put 244 bytes of payload and a five-byte frame into a 244-byte buffer, so the buffer's ceiling wins.
         assert_eq!(
             capacity(517, DEFAULT_CHUNK_MAX, 100),
             Some(244 - overhead(Some(100)))

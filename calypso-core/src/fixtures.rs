@@ -1,14 +1,9 @@
 //! Fixture generation: synthetic reps and `.pblog` log dumps.
 //!
-//! The client's fixtures (and, later, its history files) are **log dumps**: the
-//! `RepRecord` messages the device stores, framed for a byte stream as
-//! `[u32 little-endian length][record bytes]`. Records come from the same
-//! `pb::encode_*` calls the firmware uses, so a fixture cannot drift from the
-//! wire format.
+//! A dump is the `RepRecord` messages the device stores, framed as `[u32 little-endian length][record bytes]`.
+//! Records come from the same `pb::encode_*` calls the firmware uses, so a fixture cannot drift from the wire format.
 //!
-//! This is tooling support — the firmware never calls it. It is used by
-//! `examples/gen_fixtures.rs` (which writes `calypso-app/assets/fixtures/`) and
-//! by the store tests.
+//! Tooling support — the firmware never calls it. Used by `examples/gen_fixtures.rs` and the store tests.
 
 use alloc::vec::Vec;
 
@@ -37,13 +32,9 @@ pub fn sample(t_ms: u32, accel: [f32; 3]) -> Sample {
     }
 }
 
-/// Squat-like motion: the sensor travels from 0 down to `-a` and back, in
-/// `reps` repetitions separated by `rest_ms` of rest, sampled at 100 Hz.
-///
-/// `z(t) = -(a/2)(1 - cos(2*pi*t/T))`, whose second derivative has zero mean
-/// and zero first moment — so the movement genuinely starts and ends at rest in
-/// the same place, which is what ZUPT anchoring assumes. Returns the samples and
-/// the motion spans the detector should find.
+/// Squat-like motion: the sensor travels from 0 down to `-a` and back, in `reps` repetitions separated by `rest_ms` of rest, sampled at 100 Hz.
+/// `z(t) = -(a/2)(1 - cos(2*pi*t/T))`, whose second derivative has zero mean and zero first moment — so the movement genuinely starts and ends at rest in the same place, which is what ZUPT anchoring assumes.
+/// Returns the samples and the motion spans the detector should find.
 pub fn squat_set(reps: usize, t_ms: u32, rest_ms: u32, a: f32) -> (Vec<Sample>, Vec<RepSpan>) {
     let mut out = Vec::new();
     let mut spans = Vec::new();
@@ -78,11 +69,8 @@ pub fn squat_set(reps: usize, t_ms: u32, rest_ms: u32, a: f32) -> (Vec<Sample>, 
     (out, spans)
 }
 
-/// Replay samples through the sampler pipeline the firmware runs: ring buffer,
-/// detector, then the ZUPT-anchored trace per detected rep.
-///
-/// `trace_capacity` caps stored trace points as on the device, so a long rep
-/// comes back decimated with `summary.decimated == true`.
+/// Replay samples through the sampler pipeline the firmware runs: ring buffer, detector, then the ZUPT-anchored trace per detected rep.
+/// `trace_capacity` caps stored trace points as on the device, so a long rep comes back decimated with `summary.decimated == true`.
 pub fn detect_and_trace(
     samples: &[Sample],
     trace_capacity: usize,
@@ -121,16 +109,14 @@ pub fn push_record(dump: &mut Vec<u8>, record: &[u8]) {
     dump.extend_from_slice(record);
 }
 
-/// Append a rep (summary record + trace chunk records) to a dump. Returns the
-/// number of records written.
+/// Append a rep (summary record + trace chunk records) to a dump. Returns the number of records written.
 pub fn push_rep(
     dump: &mut Vec<u8>,
     rec_buf: &mut [u8],
     summary: &mut msg::RepSummary,
     trace: &[TracePoint],
 ) -> Result<u32, pb::Error> {
-    // The chunks carry the same identity as the summary, and that identity is the
-    // summary's — deriving it here is what keeps them together.
+    // The chunks carry the same identity as the summary, and that identity is the summary's — deriving it here is what keeps them together.
     let rep_uuid = pb::summary_uuid(summary).ok_or(pb::Error::Decode)?;
     summary.chunk_count = pb::chunk_count_for(trace.len());
     let n = pb::encode_summary(summary, rec_buf)?;
@@ -147,8 +133,7 @@ pub fn push_rep(
     Ok(written)
 }
 
-/// Convenience: generate a squat set and write it as a dump, returning the
-/// bytes. `reps` reps at 100 Hz with 0.8 s rests.
+/// Convenience: generate a squat set and write it as a dump, returning the bytes. `reps` reps at 100 Hz with 0.8 s rests.
 pub fn squat_dump(reps: usize, a: f32) -> Vec<u8> {
     let (samples, _) = squat_set(reps, 1500, 800, a);
     let reps = detect_and_trace(&samples, 512);
@@ -163,10 +148,8 @@ pub fn squat_dump(reps: usize, a: f32) -> Vec<u8> {
 }
 
 /// Parse a dump back into records using the `[u32 LE length][bytes]` framing.
-///
-/// Returns the records and whether the final one was cut short (a torn write,
-/// or a capture that ended mid-record). This is the reference implementation of
-/// the framing the client's Dart reader must match.
+/// Returns the records and whether the final one was cut short (a torn write, or a capture that ended mid-record).
+/// This is the reference implementation of the framing the client's Dart reader must match.
 pub fn read_dump(dump: &[u8]) -> (Vec<&[u8]>, bool) {
     let mut records = Vec::new();
     let mut pos = 0usize;
@@ -183,20 +166,13 @@ pub fn read_dump(dump: &[u8]) -> (Vec<&[u8]>, bool) {
     (records, truncated)
 }
 
-/// A squat set where the bar drifts to one side on the way down — the case the
-/// 3D plot exists to show.
-///
-/// Built by tilting the lateral acceleration on a normal squat set, so the path
-/// bows: the vertical travel is unchanged (so the detector and the summary are
-/// unaffected) but the trace visibly leaves the vertical plane.
+/// A squat set where the bar drifts to one side on the way down — the case the 3D plot exists to show.
+/// Built by tilting the lateral acceleration on a normal squat set, so the path bows: the vertical travel is unchanged (so the detector and the summary are unaffected) but the trace visibly leaves the vertical plane.
 pub fn dipped_squat_set(reps: usize, lateral_fraction: f32) -> (Vec<Sample>, Vec<RepSpan>) {
     let (mut samples, spans) = squat_set(reps, 1500, 800, 0.4);
     for s in samples.iter_mut() {
-        // Lateral push proportional to the *magnitude* of the vertical
-        // acceleration, so it always pushes the same way: the bar drifts left
-        // through the whole rep instead of returning to centre. That leaves the
-        // descent and the ascent as two distinct paths — a bow you can see —
-        // rather than one straight line traversed twice.
+        // Lateral push proportional to the magnitude of the vertical acceleration, so it always pushes the same way: the bar drifts left through the whole rep instead of returning to centre.
+        // That leaves the descent and the ascent as two distinct paths — a bow you can see — rather than one straight line traversed twice.
         let lateral = (f32::from(s.accel[2].abs()) * lateral_fraction) as i16;
         s.accel[0] = lateral;
     }

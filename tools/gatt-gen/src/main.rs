@@ -1,10 +1,8 @@
-//! `gatt-gen`: read a proto-defined GATT schema, check it, and write the code a
-//! target needs.
+//! `gatt-gen`: read a proto-defined GATT schema, check it, and write the code a target needs.
 //!
 //! ```sh
 //! gatt-gen rust-trouble --out ../calypso-core/src \
-//!   --messages crate::pb::msg --server CalypsoGatt ../proto/calypso_gatt.proto
-//! gatt-gen --write-options proto      # the vocabulary, for a consumer that wants it
+//!   --messages crate::pb::msg --server CalypsoGatt ../proto/calypso_gatt.proto gatt-gen --write-options proto      # the vocabulary, for a consumer that wants it
 //! ```
 
 use std::path::{Path, PathBuf};

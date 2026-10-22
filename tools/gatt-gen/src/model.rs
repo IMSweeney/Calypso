@@ -1,8 +1,6 @@
 //! The GATT schema as the generator understands it, parsed from proto.
 //!
-//! One `service` in the proto is one GATT service; one `rpc` is one
-//! characteristic, whose request type is what the central writes and whose
-//! response type is what the peripheral reads or notifies (see `SPEC.md` §5).
+//! One `service` in the proto is one GATT service; one `rpc` is one characteristic, whose request type is what the central writes and whose response type is what the peripheral reads or notifies (see `SPEC.md` §5).
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -61,8 +59,7 @@ impl Prop {
     }
 }
 
-/// A link security requirement. `trouble-host` 0.5 has no per-characteristic
-/// permissions, so the generator warns rather than pretending (see `PLAN.md`
+/// A link security requirement. `trouble-host` 0.5 has no per-characteristic permissions, so the generator warns rather than pretending (see `PLAN.md`
 /// errata E2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Perm {
@@ -99,8 +96,7 @@ impl Perm {
     }
 }
 
-/// A bare-value marker from `gatt_options.proto`: a fixed raw encoding rather
-/// than a serialized protobuf message.
+/// A bare-value marker from `gatt_options.proto`: a fixed raw encoding rather than a serialized protobuf message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Bare {
     U8,
@@ -234,9 +230,7 @@ impl Characteristic {
 
     /// The type that travels, in whichever direction the properties imply.
     ///
-    /// A characteristic has one value type in the attribute table, so a
-    /// characteristic with traffic in both directions must use the same type
-    /// both ways (see `validate`).
+    /// A characteristic has one value type in the attribute table, so a characteristic with traffic in both directions must use the same type both ways (see `validate`).
     pub fn value_type(&self) -> &ValueType {
         if self.props.iter().any(|p| p.is_to_device()) {
             &self.request
@@ -265,8 +259,7 @@ pub struct Service {
 }
 
 impl Service {
-    /// The last segment of the proto name, which is what generated Rust
-    /// identifiers are built from.
+    /// The last segment of the proto name, which is what generated Rust identifiers are built from.
     pub fn short_name(&self) -> &str {
         self.proto_name
             .rsplit('.')
@@ -299,13 +292,9 @@ impl Gatt {
             .find(|c| c.service == service && c.name == name)
     }
 
-    /// A hash of the schema, for the check at connect time: a firmware and an
-    /// app built from the same schema agree, and anything else is caught before
-    /// any typed traffic is believed.
+    /// A hash of the schema, for the check at connect time: a firmware and an app built from the same schema agree, and anything else is caught before any typed traffic is believed.
     ///
-    /// Over the canonical rendering of the model rather than over the
-    /// descriptor set: protoc's bytes depend on its version, the import order
-    /// and unknown fields, and prost re-encodes them differently again.
+    /// Over the canonical rendering of the model rather than over the descriptor set: protoc's bytes depend on its version, the import order and unknown fields, and prost re-encodes them differently again.
     pub fn schema_hash(&self) -> u64 {
         let mut hash = 0xcbf2_9ce4_8422_2325u64; // FNV-1a
         for byte in format!("gatt-gen/1\n{self}").bytes() {

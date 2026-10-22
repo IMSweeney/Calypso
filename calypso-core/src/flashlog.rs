@@ -1,25 +1,13 @@
-//! Append-only record log on NOR flash, structured as a ring of erase
-//! sectors. Used for the workout/rep store (see `docs/REP_TRACKING.md`).
+//! Append-only record log on NOR flash, structured as a ring of erase sectors.
 //!
-//! Layout:
-//! - The region is split into `N::ERASE_SIZE` sectors.
-//! - Each sector starts with an 8-byte header: magic + epoch (monotonic,
-//!   incremented every time the ring advances to a sector).
-//! - Records follow: `[magic u16, len u16, id u32, payload, crc16 u16, pad]`,
-//!   padded to 4-byte alignment (the ESP32 flash write granularity).
-//! - Records never span sectors; when a record doesn't fit, the ring advances
-//!   to the next sector (erasing it first — this is what makes the oldest
-//!   data fall off the end).
+//! Layout: the region is split into `N::ERASE_SIZE` sectors, each starting with an 8-byte header (magic + epoch, incremented as the ring advances).
+//! Records follow as `[magic u16, len u16, id u32, payload, crc16 u16, pad]`, padded to 4 bytes (the ESP32 flash write granularity).
+//! Records never span sectors: when one does not fit, the ring advances to the next sector and erases it first, which is what drops the oldest data.
+//! Sectors are written circularly with increasing epochs, so the head sector determines the on-flash order and no index table is needed.
 //!
-//! Power-loss behaviour: a crash mid-write leaves a record that fails its
-//! CRC check (or was never written, reading as 0xFF). On mount, the first
-//! invalid record marks the end of the sector's data; if the failure was on
-//! already-programmed bytes (can't rewrite without erasing), the log advances
-//! to a fresh sector instead. At most the record being written is lost.
-//!
-//! Sectors are always written in circular order with increasing epochs, so
-//! the on-flash order is fully determined by the head sector — no index
-//! tables are needed at mount time.
+//! Power loss: a crash mid-write leaves a record that fails its CRC or was never written (reading as 0xFF).
+//! On mount the first invalid record ends that sector's data; if it failed on already-programmed bytes, which cannot be rewritten without erasing, the log advances to a fresh sector instead.
+//! At most the record being written is lost.
 
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 
@@ -35,9 +23,7 @@ pub enum Error<E> {
     /// The flash refused or failed an operation, and this says which: see [`Phase`].
     Flash {
         phase: Phase,
-        /// The sector the operation was on. In the mount scan that is where the scan
-        /// stopped, which is the difference between "sector 0" and "the 212th header
-        /// of 624".
+        /// The sector the operation was on. In the mount scan that is where the scan stopped.
         sector: u32,
         source: E,
     },
@@ -48,8 +34,7 @@ pub enum Error<E> {
 }
 
 impl<E> Error<E> {
-    /// [`Error::Flash`] for one operation — spelled here rather than at each of the
-    /// fifteen call sites, where one of them would eventually be wrong.
+    /// [`Error::Flash`] for one operation, rather than at each of the fifteen call sites where one of them would eventually be wrong.
     fn flash(phase: Phase, sector: u32) -> impl FnOnce(E) -> Error<E> {
         move |source| Error::Flash {
             phase,
@@ -60,23 +45,14 @@ impl<E> Error<E> {
 }
 
 /// What a failing flash operation was doing.
-///
-/// A bare "flash error" has cost this project two sessions. [`FlashLog::mount`] reads
-/// every sector header, then scans the head sector's records, then — when that
-/// sector's tail is corrupt — **erases** the next one; [`FlashLog::append`] writes, and
-/// erases when the ring advances. "The flash failed" covers all of them, and they have
-/// different repairs: a refused erase is a parking problem (`esp-storage` will not
-/// erase or write while the other core runs — see `docs/GOTCHAS.md`), while a failed
-/// read is not, and nothing else can tell them apart.
+/// The repairs differ, and a bare "flash error" cannot tell them apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     /// Reading sector headers while looking for the head.
     ScanHeaders,
     /// Reading a sector's records.
     ReadRecords,
-    /// Erasing: the ring advancing a sector, a mount starting a fresh sector because
-    /// the head's tail was corrupt, or [`FlashLog::format`] erasing all of them (in
-    /// which case the sector is where it starts).
+    /// Erasing: the ring advancing a sector, a mount starting a fresh sector because the head's tail was corrupt, or [`FlashLog::format`] erasing all of them (in which case the sector is where it starts).
     Erase,
     /// Writing a record, or a sector header.
     Write,
@@ -88,21 +64,9 @@ fn pad4(n: u32) -> u32 {
 
 /// Read in whole aligned blocks.
 ///
-/// Every read in this module goes through it, and that is not fussiness — it is the
-/// only shape this flash's driver turned out to be reliable in from here. The symptom
-/// that taught us: `log partition: reading records in sector 6: StorageError` from the
-/// scan, while a diagnostic probe from a *shallower frame* read the same sector end to
-/// end in 64-byte blocks. Same bytes, same sector, same driver; the difference was that
-/// the scan's reads are however long the record happened to be, and esp-storage's
-/// `ReadStorage` implementation copies through a whole-sector scratch buffer for those
-/// (see `docs/GOTCHAS.md`).
-///
-/// So: read a whole `BLOCK` at a time, always, and copy out the window asked for. Small
-/// reads cost one block and the block is bounded, so nothing here needs a buffer bigger
-/// than 64 bytes.
-///
-/// `BLOCK` must be a multiple of the driver's `READ_SIZE` (4 on the ESP32, and every
-/// power of two up to 64 is), which is the constraint this exists to satisfy.
+/// `esp-storage` rejects a read whose offset or length is not a multiple of `READ_SIZE`, and the reads here are however long a record happens to be.
+/// So every read goes a whole `BLOCK` at a time and copies out the window asked for, which needs no buffer bigger than 64 bytes.
+/// `BLOCK` must be a multiple of the driver's `READ_SIZE` (4 on the ESP32).
 trait ReadBlocks: ReadNorFlash {
     fn read_blocks(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
         const BLOCK: usize = 64;
@@ -142,19 +106,15 @@ pub struct FlashLog<'a, N> {
     flash: &'a mut N,
     sector_size: u32,
     sectors: u32,
-    /// Sector currently being appended to.
     head: u32,
     head_epoch: u32,
-    /// Next write position within the head sector.
     write_offset: u32,
     next_id: u32,
 }
 
 impl<'a, N: NorFlash> FlashLog<'a, N> {
-    /// Mount the log over the whole flash region `flash` exposes (borrowed, so
-    /// the caller keeps ownership and can reuse it after the log is dropped),
-    /// scanning for the current head sector and write position. Formats
-    /// (erases everything) if no valid sector is found.
+    /// Mount the log over the whole flash region `flash` exposes, scanning for the current head sector and write position.
+    /// The flash is borrowed, so the caller can reuse it after the log is dropped. Formats (erases everything) if no valid sector is found.
     pub fn mount(flash: &'a mut N) -> Result<Self, Error<N::Error>> {
         let sector_size = N::ERASE_SIZE as u32;
         let capacity = flash.capacity() as u32;
@@ -188,14 +148,8 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         };
 
         match head {
-            // A ring with no valid header anywhere: initialise it in place.
-            //
-            // Deliberately *not* `format()`, which erases all 624 sectors of the
-            // 2.5 MB partition: there is nothing to invalidate (no sector has a
-            // valid header), and `advance_sector` erases each sector as the ring
-            // reaches it, so the rest is erased on demand. Erasing it all here
-            // would be ~19 s of flash traffic in the middle of boot — on a chip
-            // where the other core has to be parked for every sector.
+            // Nothing to invalidate: no sector has a valid header, and `advance_sector` erases each one as the ring reaches it.
+            // Calling `format()` here instead would erase all 624 sectors up front, ~19 s of boot.
             None => {
                 log.flash
                     .erase(0, log.sector_size)
@@ -207,9 +161,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
                 log.head_epoch = epoch;
                 let (end, last_id, clean) = log.scan_sector(head)?;
                 if !clean {
-                    // Tail is corrupt on programmed bytes: they cannot be
-                    // rewritten without an erase, so start a fresh sector.
-                    // Ids still continue from the last valid record.
+                    // Tail is corrupt on programmed bytes, which cannot be rewritten without an erase, so start a fresh sector; ids still continue from the last valid record.
                     log.next_id = match last_id {
                         Some(id) => id + 1,
                         None => log.last_id_before_head()?.map_or(1, |id| id + 1),
@@ -219,8 +171,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
                     log.write_offset = end;
                     log.next_id = match last_id {
                         Some(id) => id + 1,
-                        // Head has no records (power lost right after
-                        // advancing): continue ids from the previous sector.
+                        // Head has no records (power lost right after advancing): continue ids from the previous sector.
                         None => log.last_id_before_head()?.map_or(1, |id| id + 1),
                     };
                 }
@@ -241,8 +192,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         self.write_sector_header()
     }
 
-    /// Append a record; returns its id (monotonically increasing, starting
-    /// at 1). Erases the oldest sector when the ring wraps.
+    /// Append a record; returns its id (monotonically increasing, starting at 1). Erases the oldest sector when the ring wraps.
     pub fn append(&mut self, payload: &[u8]) -> Result<u32, Error<N::Error>> {
         if payload.len() > self.max_payload() {
             return Err(Error::TooLarge);
@@ -265,9 +215,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
             .write(pos, &hdr)
             .map_err(Error::flash(Phase::Write, sector))?;
 
-        // Payload, in 4-byte-aligned writes (ESP32 flash granularity):
-        // full words straight from the payload, then the tail word padded
-        // with 0xFF.
+        // Payload, in 4-byte-aligned writes (ESP32 flash granularity): full words straight from the payload, then the tail word padded with 0xFF.
         let full = payload.len() & !3;
         if full > 0 {
             self.flash
@@ -307,8 +255,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         self.sectors
     }
 
-    /// Iterate all live records, oldest first. Records larger than `buf`
-    /// are skipped.
+    /// Iterate all live records, oldest first. Records larger than `buf` are skipped.
     pub fn for_each(
         &mut self,
         buf: &mut [u8],
@@ -342,8 +289,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
                 live += 1;
             }
         }
-        // Sectors are written circularly with increasing epochs, so the
-        // oldest live sector is `live - 1` steps behind the head.
+        // Sectors are written circularly with increasing epochs, so the oldest live sector is `live - 1` steps behind the head.
         for k in (0..live).rev() {
             let sector = (self.head + self.sectors - k) % self.sectors;
             if !self.scan_records(sector, buf, &mut f)? {
@@ -353,8 +299,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         Ok(())
     }
 
-    /// Read back a single record by id. Returns the payload length written
-    /// into `buf`, if found.
+    /// Read back a single record by id. Returns the payload length written into `buf`, if found.
     pub fn read(&mut self, want_id: u32, buf: &mut [u8]) -> Result<Option<usize>, Error<N::Error>> {
         let mut found = None;
         self.for_each_while(buf, &mut |id: u32, payload: &[u8]| {
@@ -380,8 +325,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
             .map_err(Error::flash(Phase::Write, sector))
     }
 
-    /// Move to the next sector in the ring, erasing it (this is what drops
-    /// the oldest data on wrap) and writing a fresh header.
+    /// Move to the next sector in the ring, erasing it (this is what drops the oldest data on wrap) and writing a fresh header.
     fn advance_sector(&mut self) -> Result<(), Error<N::Error>> {
         self.head = (self.head + 1) % self.sectors;
         self.head_epoch = self.head_epoch.wrapping_add(1);
@@ -395,10 +339,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         Ok(())
     }
 
-    /// Validate the records in one sector. Returns `(end_offset, last_id,
-    /// clean)`: `clean` is false if scanning stopped on corrupt *programmed*
-    /// bytes (which cannot be rewritten without erasing) rather than on
-    /// erased space.
+    /// Validate the records in one sector. Returns `(end_offset, last_id, clean)`: `clean` is false if scanning stopped on corrupt *programmed* bytes (which cannot be rewritten without erasing) rather than on erased space.
     fn scan_sector(&mut self, sector: u32) -> Result<(u32, Option<u32>, bool), Error<N::Error>> {
         let mut last_id = None;
         self.scan_sector_with(sector, &mut [], |id, _| {
@@ -418,8 +359,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
     }
 
     /// Deliver each valid record's payload in a sector.
-    /// Returns false if iteration was stopped by `f` (a corrupt tail just
-    /// ends the sector's records, not the whole iteration).
+    /// Returns false if iteration was stopped by `f` (a corrupt tail just ends the sector's records, not the whole iteration).
     fn scan_records(
         &mut self,
         sector: u32,
@@ -430,10 +370,8 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
             .map(|(_, stop)| !matches!(stop, ScanStop::Requested))
     }
 
-    /// Walk one sector's records, validating magic/length/CRC. Delivers
-    /// `f(id, payload)` for each valid record whose payload fits in `buf`
-    /// (a zero-length `buf` validates structure without delivering data);
-    /// iteration stops when `f` returns false.
+    /// Walk one sector's records, validating magic/length/CRC.
+    /// Delivers `f(id, payload)` for each valid record whose payload fits in `buf` (a zero-length `buf` validates structure without delivering data); iteration stops when `f` returns false.
     /// Returns `(end_offset, stop_reason)`.
     fn scan_sector_with(
         &mut self,

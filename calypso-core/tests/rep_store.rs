@@ -190,3 +190,16 @@ fn summary_and_chunks_share_the_rep_uuid() {
         assert_eq!(kinds[1 + i as usize], format!("trace:{short}:{i}"));
     }
 }
+
+#[test]
+#[should_panic(expected = "is not a RepRecord")]
+fn a_crc_valid_record_that_is_not_a_rep_record_panics() {
+    let mut flash = MockFlash::new();
+    let mut buf = [0u8; RECORD_BUF_BYTES];
+    let mut rec = calypso_core::pb::msg::RepRecord::default();
+    let mut log = mount(&mut flash);
+    // The log CRCs whatever it is handed, so this passes the log's own check and is still not a RepRecord.
+    log.append(b"not a RepRecord").unwrap();
+
+    store::for_each_summary(&mut log, &mut buf, &mut rec, |_| {}).unwrap();
+}

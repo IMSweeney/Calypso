@@ -24,9 +24,7 @@ class StoredRep {
 
   /// Whether the app stored the trace with the rep.
   ///
-  /// A rep that has none was archived anyway — the summary is the part the device can
-  /// always give — so this is what tells a fetched trace from a fetch that failed (see
-  /// `archiveRep`).
+  /// A rep that has none was archived anyway — the summary is the part the device can always give — so this is what tells a fetched trace from a fetch that failed (see `archiveRep`).
   final bool hasTrace;
 
   /// Set: `scanBlocks` refuses a summary whose uuid does not parse.

@@ -8,16 +8,10 @@ import 'fake_ble_link.dart';
 
 /// The device's end of the pipe, for tests.
 ///
-/// The transport under test is one end; this is the other one doing what
-/// `calypso-esp32` does — cutting a message into frames on the notified
-/// characteristic, reassembling what the app writes on the other, and acknowledging
-/// both. It is `pipe.dart`'s own sender and receiver used the other way round, so a
-/// test that passes here has passed the protocol rather than a mock of it.
+/// The transport under test is one end; this is the other one doing what `calypso-esp32` does — cutting a message into frames on the notified characteristic, reassembling what the app writes on the other, and acknowledging both. It is `pipe.dart`'s own sender and receiver used the other way round, so a test that passes here has passed the protocol rather than a mock of it.
 class FakeDevice {
   FakeDevice(this.link, {this.mtu = 247}) {
-    // Answer each write as it happens, like a device that is listening: the app
-    // waits for the acknowledgement of its request before it will believe it
-    // arrived.
+    // Answer each write as it happens, like a device that is listening: the app waits for the acknowledgement of its request before it will believe it arrived.
     link.onWrite = _onWrite;
   }
 
@@ -32,8 +26,7 @@ class FakeDevice {
   /// Frames the device has notified, for the tests that count them.
   final List<Uint8List> notified = [];
 
-  /// Called with each message the app writes, for a test that wants to answer it
-  /// the way the firmware would (a trace request becomes a stream of chunks).
+  /// Called with each message the app writes, for a test that wants to answer it the way the firmware would (a trace request becomes a stream of chunks).
   void Function(Uint8List message)? onRequest;
 
   final Receiver _receiver = Receiver(SyncPipe.window);
@@ -52,11 +45,9 @@ class FakeDevice {
 
   /// Send `message` to the app: one transfer, one frame per chunk.
   ///
-  /// `drop` drops that chunk of the transfer (counting from 1), which is how a
-  /// notification the link loses is reproduced.
+  /// `drop` drops that chunk of the transfer (counting from 1), which is how a notification the link loses is reproduced.
   void send(Uint8List message, {int? drop}) {
-    // A sender per transfer: the sequence numbering is the receiver's to take from
-    // the START, and a test's device has nothing to carry between messages.
+    // A sender per transfer: the sequence numbering is the receiver's to take from the START, and a test's device has nothing to carry between messages.
     final sender = Sender(SyncPipe.window);
     sender.start(message.length, SyncPipe.messageMax);
     // `capacity` the function, not a local: the payload one chunk carries.
@@ -81,14 +72,12 @@ class FakeDevice {
 
   /// Put `status` in the table's calibration characteristic.
   ///
-  /// That is the whole of the device's side of it: the app reads the value whenever
-  /// its own clock says to, and the device's 1 Hz poll of the chip is what changes it.
+  /// That is the whole of the device's side of it: the app reads the value whenever its own clock says to, and the device's 1 Hz poll of the chip is what changes it.
   void servesCalibration(pb.CalibrationStatus status) {
     link.readValues[SyncClient.calibrationUuid] = status.writeToBuffer();
   }
 
-  /// A notification that acknowledges nothing: a frame whose CRC does not check
-  /// out, which the app is expected to drop rather than half-believe.
+  /// A notification that acknowledges nothing: a frame whose CRC does not check out, which the app is expected to drop rather than half-believe.
   void sendGarbage() => link.notify(
     SyncClient.messagesUuid,
     Uint8List.fromList([0x01, 0x02, 0x03, 0x04, 0x05]),
@@ -98,8 +87,7 @@ class FakeDevice {
     if (characteristicUuid != SyncClient.requestsUuid) return;
     final frame = decode(value);
     if (frame == null) return;
-    // The app acknowledging a chunk of ours: nothing for a test's device to do
-    // with it, since each `send` uses a sender of its own.
+    // The app acknowledging a chunk of ours: nothing for a test's device to do with it, since each `send` uses a sender of its own.
     if (frame.header.isReply) return;
 
     final received = _receiver.onChunk(value, _inbound, SyncPipe.messageMax);

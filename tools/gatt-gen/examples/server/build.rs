@@ -1,9 +1,6 @@
 //! Generates the server's message types and its GATT table.
 //!
-//! Two generators over one schema: `micropb-gen` for the messages the
-//! characteristics carry, `gatt-gen` for the table they are declared in. Both
-//! write into `$OUT_DIR`, which `src/main.rs` includes — so this is the shape of
-//! the integration, and it is a build dependency and two calls.
+//! Two generators over one schema: `micropb-gen` for the messages the characteristics carry, `gatt-gen` for the table they are declared in. Both write into `$OUT_DIR`, which `src/main.rs` includes — so this is the shape of the integration, and it is a build dependency and two calls.
 
 use std::path::Path;
 
@@ -16,8 +13,7 @@ const PROTO: &str = "proto/server.proto";
 fn main() {
     println!("cargo:rerun-if-changed={PROTO}");
 
-    // Both generators shell out to protoc. Rather than requiring a system one,
-    // point them at the binary this crate's build dependency ships.
+    // Both generators shell out to protoc. Rather than requiring a system one, point them at the binary this crate's build dependency ships.
     if std::env::var_os("PROTOC").is_none() {
         if let Ok(path) = protoc_bin_vendored::protoc_bin_path() {
             std::env::set_var("PROTOC", path);
@@ -41,12 +37,10 @@ fn main() {
 fn messages(out: &Path, vocabulary: &Path) {
     let mut generator = micropb_gen::Generator::new();
     generator.use_container_heapless();
-    // protoc resolves imports against `-I` paths only: the working directory is
-    // one, and the vocabulary is another.
+    // protoc resolves imports against `-I` paths only: the working directory is one, and the vocabulary is another.
     generator.add_protoc_arg("-I.");
     generator.add_protoc_arg(format!("-I{}", vocabulary.display()));
-    // Every container bounded: no allocator, and a message that does not fit is a
-    // compile-time problem rather than a runtime one.
+    // Every container bounded: no allocator, and a message that does not fit is a compile-time problem rather than a runtime one.
     generator.configure(".sensor", micropb_gen::Config::new().max_bytes(16));
 
     let dest = out.join("messages.rs");
@@ -57,13 +51,11 @@ fn messages(out: &Path, vocabulary: &Path) {
 
 /// The GATT table, into `$OUT_DIR/gatt.rs`.
 fn table(out: &Path) {
-    // No include paths: the vocabulary `proto/server.proto` imports is on
-    // `gatt-gen`'s own path.
+    // No include paths: the vocabulary `proto/server.proto` imports is on `gatt-gen`'s own path.
     let (schema, warnings) =
         gatt_gen::load(&Input::new([PROTO])).unwrap_or_else(|err| panic!("{err}"));
     for warning in &warnings {
-        // Things the schema asks for that this stack cannot do. A build is a
-        // reasonable place to say so; failing the build would be worse.
+        // Things the schema asks for that this stack cannot do. A build is a reasonable place to say so; failing the build would be worse.
         println!("cargo:warning={warning}");
     }
 
@@ -73,15 +65,12 @@ fn table(out: &Path) {
             // Where the generated table looks for the messages above.
             message_module: "crate::pb::msg".to_string(),
             server_name: "Server".to_string(),
-            // No characteristic of this schema is part of a pipe, so these say
-            // nothing yet: a pipe characteristic is sized by them when one is
-            // declared (see `proto/server.proto` for the shape).
+            // No characteristic of this schema is part of a pipe, so these say nothing yet: a pipe characteristic is sized by them when one is declared (see `proto/server.proto` for the shape).
             pipe_chunk_max: 244,
             pipe_msg_max: 0,
             window: 8,
             xfer_timeout_ms: 5000,
-            // Written into the generated file, so whoever finds it knows how to
-            // remake it.
+            // Written into the generated file, so whoever finds it knows how to remake it.
             regenerate_with: Some("cargo build".to_string()),
         },
     )

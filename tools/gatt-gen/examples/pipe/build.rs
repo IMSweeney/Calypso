@@ -1,8 +1,6 @@
 //! Generates the messages and the table, pipe glue included.
 //!
-//! The same two calls as `examples/server`, with a schema that declares a pipe —
-//! which is the difference that matters here: the generated table gains a module
-//! of constants and codecs for it (`pipe_bulk`), and `gatt-pipe` drives them.
+//! The same two calls as `examples/server`, with a schema that declares a pipe — which is the difference that matters here: the generated table gains a module of constants and codecs for it (`pipe_bulk`), and `gatt-pipe` drives them.
 
 use std::path::Path;
 
@@ -36,8 +34,7 @@ fn messages(out: &Path, vocabulary: &Path) {
     generator.use_container_heapless();
     generator.add_protoc_arg("-I.");
     generator.add_protoc_arg(format!("-I{}", vocabulary.display()));
-    // A message carries a payload, so its containers are bounded generously
-    // enough for a transfer to be worth making.
+    // A message carries a payload, so its containers are bounded generously enough for a transfer to be worth making.
     generator.configure(".bulk", micropb_gen::Config::new().max_bytes(256));
 
     let dest = out.join("messages.rs");
@@ -58,10 +55,7 @@ fn table(out: &Path) {
         &Config {
             message_module: "crate::pb::msg".to_string(),
             server_name: "Server".to_string(),
-            // What the pipe is sized with. The chunk ceiling is what one
-            // notification can hold at a 247-byte MTU; the message ceiling is
-            // what the reassembly buffer holds, and the runtime asserts the
-            // encoded message against it at compile time.
+            // What the pipe is sized with. The chunk ceiling is what one notification can hold at a 247-byte MTU; the message ceiling is what the reassembly buffer holds, and the runtime asserts the encoded message against it at compile time.
             pipe_chunk_max: 244,
             pipe_msg_max: 1024,
             window: 8,

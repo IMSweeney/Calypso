@@ -1,9 +1,7 @@
 //! Platform-independent logic shared by the Calypso firmware.
 //!
-//! This crate deliberately has no dependencies on esp-hal or other embedded
-//! crates, so it can be unit-tested on the host with the standard Rust test
-//! harness (`cargo test` in this directory). The firmware is `#![no_std]`, so
-//! everything here must be too when built for the device.
+//! This crate deliberately has no dependencies on esp-hal or other embedded crates, so it can be unit-tested on the host with the standard Rust test harness (`cargo test` in this directory).
+//! The firmware is `#![no_std]`, so everything here must be too when built for the device.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -13,18 +11,12 @@ pub mod ble;
 pub mod calibration;
 pub mod fixtures;
 pub mod flashlog;
-/// The BLE GATT table the device serves, generated from `proto/calypso_gatt.proto`
-/// by `gatt-gen` (see `tool/gen_gatt.sh`).
+/// The BLE GATT table the device serves, generated from `proto/calypso_gatt.proto` by `gatt-gen` (see `tool/gen_gatt.sh`) and committed.
 ///
-/// The allow is here rather than in the generated file because the generated file
-/// is items and nothing else: a file that carried its own `//!` docs and `#![allow]`
-/// could not be `include!`d, so it could not be generated into `$OUT_DIR` — and
-/// mounting is the consumer's business, not the generator's.
+/// The generated file is items and nothing else, so the allow lives here.
 #[allow(clippy::all, nonstandard_style, unused, irrefutable_let_patterns)]
 pub mod gatt;
 pub mod pb;
-/// The device's end of the sync pipe: a write becomes a `SyncRequest`, a
-/// `SyncMessage` becomes a run of notifications. `tools/gatt-pipe` is the framing.
 pub mod pipe;
 pub mod rep;
 pub mod sampler;
@@ -32,20 +24,10 @@ pub mod store;
 pub mod sync;
 pub mod uuid;
 
-/// Longest device name supported; a complete local name must fit in the
-/// 31-byte advertising packet alongside the flags field.
-///
-/// The name is a compile-time constant in the firmware, and read-only over GATT:
-/// it was writable once, which is why this is a `MAX` and not a `LEN` in the
-/// advertisement's terms — a longer name moves to the scan response.
-pub const DEVICE_NAME_MAX: usize = 22;
-
 /// Threshold (m/s²) under which a gravity component counts as "level".
 pub const LEVEL_THRESHOLD: f32 = 0.1;
 
-/// Whether the device is level along an axis, given that axis' gravity
-/// component (m/s²). The device is level along an axis when gravity is
-/// (almost) entirely orthogonal to it.
+/// Whether the device is level along an axis, given that axis' gravity component (m/s²).
 pub fn is_level_along_axis(gravity_component: f32) -> bool {
     gravity_component.abs() < LEVEL_THRESHOLD
 }

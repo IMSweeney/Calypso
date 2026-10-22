@@ -1,14 +1,7 @@
 //! Writes the client's test fixtures to `calypso-app/assets/fixtures/`.
+//! Fixtures are `.pblog` log dumps from the firmware's own encoders (see `calypso_core::fixtures`), so they cannot drift from the wire format.
 //!
-//! Fixtures are `.pblog` log dumps — the same records the device stores,
-//! produced by the firmware's own encoders (see `calypso_core::fixtures`), so
-//! they cannot drift from the wire format.
-//!
-//! Run from the repo root:
-//!
-//! ```text
-//! cargo run -p calypso-core --example gen_fixtures
-//! ```
+//! Run from the repo root: `cargo run -p calypso-core --example gen_fixtures`
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,8 +37,7 @@ fn main() -> std::io::Result<()> {
     // 1. A normal set: three squat reps, the happy path for the list and plot.
     write(&dir, "synthetic-squat.pblog", &fixtures::squat_dump(3, 0.4))?;
 
-    // 2. A single-rep set whose trace is one point: the degenerate plot case
-    //    (axis fitting, camera fit and the polyline must all cope).
+    // 2. A single-rep set whose trace is one point: the degenerate plot case (axis fitting, camera fit and the polyline must all cope).
     {
         let mut dump = Vec::new();
         let trace = vec![TracePoint {
@@ -66,15 +58,10 @@ fn main() -> std::io::Result<()> {
         write(&dir, "single-point.pblog", &dump)?;
     }
 
-    // 3. A long rep as the device would store it: more trace points than the
-    //    device's 512-point buffer, so the trace comes back decimated with
-    //    `decimated = true`.
+    // 3. A long rep as the device would store it: more trace points than the device's 512-point buffer, so the trace comes back decimated with `decimated = true`.
     //
-    //    Built by running the trace computation directly rather than through
-    //    the detector: a smooth 5 s squat has a peak acceleration of ~0.5 m/s^2,
-    //    under the detector's 0.6 m/s^2 start threshold. Real long reps are
-    //    jerky (that is why a long rep can overflow the device buffer at all),
-    //    but a smooth synthetic one cannot trip the detector.
+    //    Built by running the trace computation directly rather than through the detector: a smooth 5 s squat has a peak acceleration of ~0.5 m/s^2, under the detector's 0.6 m/s^2 start threshold.
+    //    Real long reps are jerky (that is why a long rep can overflow the device buffer at all), but a smooth synthetic one cannot trip the detector.
     {
         let (samples, _) = squat_set(1, 10_000, 1_000, 1.2);
         let lead_in = 300 / fixtures::SAMPLE_DT_MS as usize;
@@ -97,8 +84,7 @@ fn main() -> std::io::Result<()> {
         write(&dir, "long-decimated.pblog", &dump)?;
     }
 
-    // 4. A rep whose trace fell off the device's ring: the summary is there,
-    //    its chunks are not. The app must say "trace unavailable", not crash.
+    // 4. A rep whose trace fell off the device's ring: the summary is there, its chunks are not. The app must say "trace unavailable", not crash.
     {
         let mut dump = Vec::new();
         let summary = msg::RepSummary {
@@ -117,8 +103,7 @@ fn main() -> std::io::Result<()> {
         write(&dir, "ring-dropped.pblog", &dump)?;
     }
 
-    // 5. Extreme values: every field at its maximum encoding, to check the
-    //    decoders and the plot's axis fitting on pathological input.
+    // 5. Extreme values: every field at its maximum encoding, to check the decoders and the plot's axis fitting on pathological input.
     {
         let mut dump = Vec::new();
         let trace: Vec<TracePoint> = (0..4)
@@ -150,16 +135,14 @@ fn main() -> std::io::Result<()> {
         write(&dir, "extreme-values.pblog", &dump)?;
     }
 
-    // 6. A truncated dump: the last record ends mid-message, as a torn write or
-    //    a dropped packet would leave it. Decoding must report the truncation.
+    // 6. A truncated dump: the last record ends mid-message, as a torn write or a dropped packet would leave it. Decoding must report the truncation.
     {
         let full = fixtures::squat_dump(1, 0.4);
         let cut = full.len() - 40;
         write(&dir, "truncated.pblog", &full[..cut])?;
     }
 
-    // 7. A squat where the bar dips to one side: the vertical travel is the
-    //    same, but the path bows, which is what the 3D plot is for.
+    // 7. A squat where the bar dips to one side: the vertical travel is the same, but the path bows, which is what the 3D plot is for.
     {
         let (samples, _) = fixtures::dipped_squat_set(2, 0.35);
         let reps = fixtures::detect_and_trace(&samples, 512);
@@ -179,8 +162,7 @@ fn main() -> std::io::Result<()> {
         write(&dir, "dip-left.pblog", &dump)?;
     }
 
-    // 8. An empty dump: no reps at all (fresh device, or a wrap that erased
-    //    everything). The list and plot must handle it.
+    // 8. An empty dump: no reps at all (fresh device, or a wrap that erased everything). The list and plot must handle it.
     write(&dir, "empty.pblog", &[])?;
 
     Ok(())

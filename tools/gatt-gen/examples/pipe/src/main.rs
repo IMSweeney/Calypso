@@ -1,11 +1,7 @@
 //! A pipe, end to end, on the host.
 //!
 //! The generated glue (from `build.rs`) and the runtime (`gatt-pipe`) together:
-//! a message larger than one characteristic value is cut into chunks by one end,
-//! reassembled by the other, and acknowledged along the way. Nothing here touches
-//! a radio — the "link" is a loop over two buffers — which is the point: the
-//! failure modes a pipe has are timing and loss, and neither needs a radio to
-//! reproduce.
+//! a message larger than one characteristic value is cut into chunks by one end, reassembled by the other, and acknowledged along the way. Nothing here touches a radio — the "link" is a loop over two buffers — which is the point: the failure modes a pipe has are timing and loss, and neither needs a radio to reproduce.
 //!
 //! `cargo run -p gatt-gen-example-pipe`
 
@@ -28,13 +24,11 @@ mod gatt {
 use gatt_pipe::{Header, Received, Receiver, Send, Sender};
 use pb::msg;
 
-/// The smallest MTU a link can negotiate, so the chunking is visible: twenty
-/// bytes of ATT payload per chunk, less the frame.
+/// The smallest MTU a link can negotiate, so the chunking is visible: twenty bytes of ATT payload per chunk, less the frame.
 const MTU: usize = 23;
 
 fn main() {
-    // The table, and one message through its codec: this is what the generator
-    // knows and the runtime does not.
+    // The table, and one message through its codec: this is what the generator knows and the runtime does not.
     let server = gatt::Server::new_default("example-bulk").expect("the name fits");
     println!(
         "pipe bulk: {} -> {}, {} B a chunk, {} B a message, window {}",
@@ -55,9 +49,7 @@ fn main() {
     let mut message = [0u8; gatt::pipe_bulk::MESSAGE_MAX];
     let encoded = gatt::pipe_bulk::encode_request(&command, &mut message).expect("it fits");
 
-    // Two ends over one link. A real pair would be a device and a phone; here
-    // they are a sender and a receiver with a buffer each, which is all the
-    // runtime needs to be driven.
+    // Two ends over one link. A real pair would be a device and a phone; here they are a sender and a receiver with a buffer each, which is all the runtime needs to be driven.
     let capacity = gatt_pipe::capacity(MTU, gatt::pipe_bulk::CHUNK_MAX, encoded as u32)
         .expect("the link carries a frame");
     let mut sender = Sender::new(gatt::pipe_bulk::WINDOW);
@@ -106,8 +98,7 @@ fn main() {
         }
     }
 
-    // What arrived is the message that was sent: the same bytes, decoded by the
-    // same generated codec.
+    // What arrived is the message that was sent: the same bytes, decoded by the same generated codec.
     let decoded = gatt::pipe_bulk::decode_request(&reassembled[..encoded]).expect("it decodes");
     assert_eq!(decoded, command);
     println!(

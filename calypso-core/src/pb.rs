@@ -1,30 +1,9 @@
 //! Protobuf wire format for rep records and the BLE sync protocol.
 //!
-//! The schema lives in `proto/calypso.proto` (shared with the app) and the Rust
-//! types are generated from it at build time by `micropb-gen` (see `build.rs`).
-//! Those generated types **are** the records and the messages — `msg::RepSummary`,
-//! `msg::TraceChunk`, `msg::SyncMessage` and the rest are used directly, by
-//! [`crate::sync`], [`crate::store`] and the firmware.
+//! The schema is `proto/calypso.proto` (shared with the app) and the Rust types are generated from it at build time (see `build.rs`); those types **are** the records and messages.
+//! What is left here is the framing above them — the log's `[u32 len][record]` frame, the BLE envelope, and encode/decode into a caller's buffer, since the device has no allocator — and the boundary types where the on-chip representation is not the wire one.
 //!
-//! What is left here is the two things a schema type cannot be:
-//!
-//! - **the framing above them**: the log's `[u32 len][record]` frame, the BLE
-//!   envelope, and encode/decode into a caller's buffer — the device has no
-//!   allocator to encode into, so the caller brings the bytes;
-//! - **the boundary types**, where the on-chip representation is not the wire one.
-//!   [`crate::sampler::Sample`] and [`crate::rep::TracePoint`] keep acceleration
-//!   and quaternions as `i16` (protobuf has no 16-bit scalar, and the 100 Hz ring
-//!   and the trace buffer are held in RAM), a trace keeps absolute timestamps
-//!   where the wire carries offsets from the rep's start, a rep's identity is
-//!   `[u8; 16]` rather than the wire's bounded byte container, and
-//!   [`crate::calibration::Calibration`] packs four levels into one word. Each
-//!   conversion below is one of those crossings, and nothing here is a mirror of
-//!   a schema type.
-//!
-//! Log layout: each rep is one `RepSummary` record followed by
-//! `chunk_count` `TraceChunk` records carrying the same `rep_uuid`. Records are
-//! chunked because a flash log record must fit one 4 KB erase sector (see
-//! [`crate::flashlog`]).
+//! Log layout: each rep is one `RepSummary` record followed by `chunk_count` `TraceChunk` records carrying the same `rep_uuid`, because a log record must fit one 4 KB erase sector (see [`crate::flashlog`]).
 
 use crate::calibration::Calibration;
 use crate::rep::TracePoint;
@@ -37,11 +16,9 @@ pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/calypso.rs"));
 }
 
-/// Generated message types, for callers that need them directly.
 pub use proto::calypso_ as msg;
 
-/// Trace samples per [`msg::TraceChunk`]. Must match the `max_len`
-/// configured in `build.rs` (asserted by a test).
+/// Trace samples per [`msg::TraceChunk`]. Must match the `max_len` configured in `build.rs` (asserted by a test).
 pub const TRACE_CHUNK_SAMPLES: usize = 48;
 
 /// Errors from the record layer.
@@ -56,11 +33,7 @@ pub enum Error {
 }
 
 /// A decoded log record.
-///
-/// The `Trace` variant is large (a full chunk of samples is stored inline, so
-/// the enum is ~2 KB) — bounded by [`TRACE_CHUNK_SAMPLES`]. Callers that
-/// decode in a memory-tight context should keep the value short-lived; the
-/// `#[allow]` is deliberate rather than boxing, which would need an allocator.
+/// `Trace` stores a whole chunk inline (~2 KB, bounded by [`TRACE_CHUNK_SAMPLES`]); the `#[allow]` is deliberate rather than a `Box`, which would need an allocator.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, PartialEq)]
 pub enum Record {
@@ -68,7 +41,6 @@ pub enum Record {
     Trace(msg::TraceChunk),
 }
 
-/// Number of trace chunks needed for `trace_len` points.
 pub fn chunk_count_for(trace_len: usize) -> u32 {
     if trace_len == 0 {
         return 0;
@@ -84,7 +56,6 @@ pub fn uuid_to_field(rep_uuid: &RepUuid) -> heapless::Vec<u8, UUID_LEN> {
     field
 }
 
-/// A rep UUID read back off the wire, or `None` if it isn't 16 bytes.
 pub fn uuid_from_field(field: &[u8]) -> Option<RepUuid> {
     if field.len() != UUID_LEN {
         return None;
@@ -94,21 +65,15 @@ pub fn uuid_from_field(field: &[u8]) -> Option<RepUuid> {
     Some(uuid)
 }
 
-/// The UUID of a decoded summary record.
 pub fn summary_uuid(s: &msg::RepSummary) -> Option<RepUuid> {
     uuid_from_field(&s.rep_uuid)
 }
 
-/// The UUID of a decoded trace chunk.
 pub fn chunk_uuid(c: &msg::TraceChunk) -> Option<RepUuid> {
     uuid_from_field(&c.rep_uuid)
 }
 
-/// Convert calibration levels into their wire form.
-///
-/// `ready` is the device's own gate (see [`Calibration::is_ready`]) rather than
-/// something the app re-derives, so the two cannot disagree about whether reps
-/// are being recorded.
+/// Convert calibration levels into their wire form. `ready` is the device's own gate ([`Calibration::is_ready`]), not something the app re-derives.
 pub fn calibration_message(c: &Calibration) -> msg::CalibrationStatus {
     msg::CalibrationStatus {
         sys: c.sys as u32,
@@ -119,8 +84,7 @@ pub fn calibration_message(c: &Calibration) -> msg::CalibrationStatus {
     }
 }
 
-/// Convert one trace point into its wire form, with timestamps relative to
-/// `t0_ms` (the rep's first trace point).
+/// Convert one trace point into its wire form, with timestamps relative to `t0_ms` (the rep's first trace point).
 pub fn trace_sample_message(p: &TracePoint, t0_ms: u32) -> msg::TraceSample {
     msg::TraceSample {
         t_offset_ms: p.t_ms.saturating_sub(t0_ms),
@@ -137,8 +101,7 @@ pub fn trace_sample_message(p: &TracePoint, t0_ms: u32) -> msg::TraceSample {
     }
 }
 
-/// Back-convert a wire sample. `t_ms` is relative to the rep's first point
-/// (see `TraceChunk::first_t_offset_ms`).
+/// Back-convert a wire sample. `t_ms` is relative to the rep's first point (see `TraceChunk::first_t_offset_ms`).
 pub fn trace_point_from_message(s: &msg::TraceSample) -> TracePoint {
     TracePoint {
         t_ms: s.t_offset_ms,
@@ -148,12 +111,9 @@ pub fn trace_point_from_message(s: &msg::TraceSample) -> TracePoint {
     }
 }
 
-/// Build a chunk message from trace points (at most [`TRACE_CHUNK_SAMPLES`]
-/// are taken), timestamps relative to `t0_ms`.
+/// Build a chunk message from trace points (at most [`TRACE_CHUNK_SAMPLES`] are taken), timestamps relative to `t0_ms`.
 ///
-/// `total_chunks` is the number of chunks in the stream this record belongs to,
-/// or 0 for a record being stored in the log (see the field's comment in
-/// `proto/calypso.proto`).
+/// `total_chunks` is the number of chunks in the stream this record belongs to, or 0 for a record being stored in the log (see the field's comment in `proto/calypso.proto`).
 pub fn chunk_message(
     rep_uuid: RepUuid,
     index: u32,
@@ -179,11 +139,7 @@ pub fn chunk_message(
 }
 
 /// Encode a rep summary as a log record. Returns the encoded length.
-///
-/// The summary is the wire type, so there is nothing to convert: the caller fills
-/// in `rep_uuid` (minted when the rep closed) and `chunk_count` ([`chunk_count_for`]
-/// of the trace it is about to store), and this puts it in the log's record
-/// envelope.
+/// The caller fills in `rep_uuid` and `chunk_count`; the summary is the wire type, so nothing is converted.
 pub fn encode_summary(summary: &msg::RepSummary, out: &mut [u8]) -> Result<usize, Error> {
     record(msg::RepRecord_::Body::Summary(summary.clone()), out)
 }
@@ -226,13 +182,7 @@ fn encode_message<M: micropb::MessageEncode>(message: &M, out: &mut [u8]) -> Res
     Ok(capacity - writer.len())
 }
 
-/// Decode a log record.
-///
-/// This builds the message on the caller's stack — ~2 KB, because a full trace
-/// chunk is stored inline — so it is for host code and tests. Firmware should
-/// hold one [`msg::RepRecord`] (on the heap) and call [`decode_record_into`]: a
-/// 2 KB stack frame in an async task ends up inside the task's future, and on a
-/// 4 KB-sector device that is real RAM.
+/// Decode a log record, building the message on the caller's stack (~2 KB). Host code and tests; firmware should use [`decode_record_into`].
 pub fn decode_record(bytes: &[u8]) -> Result<Record, Error> {
     let mut message = msg::RepRecord::default();
     decode_record_into(&mut message, bytes)?;
@@ -243,16 +193,11 @@ pub fn decode_record(bytes: &[u8]) -> Result<Record, Error> {
     }
 }
 
-/// Decode a log record into a caller-owned message, which is what makes scanning
-/// a whole log allocate nothing and keep nothing large on the stack.
-///
-/// The buffer is reused as-is: whatever the last record left in it is dropped
-/// first. Returns [`Error::Empty`] if the bytes decoded cleanly but carried no
-/// body, so `is_ok()` still means "there is a record here".
+/// Decode a log record into a caller-owned message.
+/// The buffer is reused as-is: whatever the last record left in it is dropped first.
+/// Returns [`Error::Empty`] if the bytes decoded cleanly but carried no body, so `is_ok()` still means "there is a record here".
 pub fn decode_record_into(message: &mut msg::RepRecord, bytes: &[u8]) -> Result<(), Error> {
-    // Reset through the oneof rather than `*message = RepRecord::default()`:
-    // the latter builds a whole ~2 KB record as a temporary, which is the very
-    // thing this function exists to avoid.
+    // Reset through the oneof rather than `*message = RepRecord::default()`: the latter builds a whole ~2 KB record as a temporary, which is the very thing this function exists to avoid.
     message.body = None;
     message
         .decode_from_bytes(bytes)
@@ -263,9 +208,7 @@ pub fn decode_record_into(message: &mut msg::RepRecord, bytes: &[u8]) -> Result<
     Ok(())
 }
 
-/// Encode a trace request inside the `SyncRequest` envelope the app writes, which
-/// is one encoding rather than two: the envelope is what the write characteristic
-/// carries, and what a client has to produce to ask for anything.
+/// Encode a trace request inside the `SyncRequest` envelope the app writes — the envelope is what the write characteristic carries.
 pub fn encode_trace_request(request: &msg::TraceRequest, out: &mut [u8]) -> Result<usize, Error> {
     let envelope = msg::SyncRequest {
         body: Some(msg::SyncRequest_::Body::Trace(request.clone())),
@@ -273,7 +216,6 @@ pub fn encode_trace_request(request: &msg::TraceRequest, out: &mut [u8]) -> Resu
     encode_message(&envelope, out)
 }
 
-/// Decode a `SyncRequest` (app -> device).
 pub fn decode_sync_request(bytes: &[u8]) -> Result<msg::SyncRequest, Error> {
     let mut message = msg::SyncRequest::default();
     message
@@ -282,7 +224,6 @@ pub fn decode_sync_request(bytes: &[u8]) -> Result<msg::SyncRequest, Error> {
     Ok(message)
 }
 
-/// Decode a sync message (app -> device or device -> app).
 pub fn decode_sync(bytes: &[u8]) -> Result<msg::SyncMessage, Error> {
     let mut message = msg::SyncMessage::default();
     message
@@ -291,8 +232,7 @@ pub fn decode_sync(bytes: &[u8]) -> Result<msg::SyncMessage, Error> {
     Ok(message)
 }
 
-/// The trace request inside a `SyncRequest`, or [`Error::Empty`] if the bytes
-/// carry some other request (or none).
+/// The trace request inside a `SyncRequest`, or [`Error::Empty`] if the bytes carry some other request (or none).
 pub fn decode_trace_request(bytes: &[u8]) -> Result<msg::TraceRequest, Error> {
     Ok(match decode_sync_request(bytes)?.body {
         Some(msg::SyncRequest_::Body::Trace(trace)) => trace,

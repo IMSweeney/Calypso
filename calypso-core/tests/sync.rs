@@ -1,10 +1,7 @@
-//! The sync path: what the device says, and the rules it applies to what the app
-//! asks for.
+//! The sync path: what the device says, and the rules it applies to what the app asks for.
 //!
-//! Messages go out through the codec the pipe carries them with
-//! (`gatt::pipe_sync`), so "this fits a transfer" is checked here by the same code
-//! the device runs rather than by a number repeated in the test. How a message
-//! travels — chunks, acknowledgements, retries — belongs to `tests/pipe.rs`.
+//! Messages go out through the codec the pipe carries them with (`gatt::pipe_sync`), so "this fits a transfer" is checked here by the same code the device runs rather than by a number repeated in the test.
+//! How a message travels — chunks, acknowledgements, retries — belongs to `tests/pipe.rs`.
 
 use calypso_core::gatt::pipe_sync;
 use calypso_core::pb::{self, msg};
@@ -12,20 +9,16 @@ use calypso_core::pipe::MESSAGE_MAX;
 use calypso_core::sync::{summary_message, trace_request, SummaryCursor};
 use calypso_core::uuid::fixture_uuid;
 
-/// A message as the pipe carries it: the bytes the app reassembles, and their
-/// length.
+/// A message as the pipe carries it: the bytes the app reassembles, and their length.
 ///
-/// The `expect` is the assertion these tests exist for — the message has to
-/// encode into the pipe's reassembly buffer, which is the buffer both ends were
-/// generated with (`pipe_msg_max`).
+/// The `expect` is the assertion these tests exist for — the message has to encode into the pipe's reassembly buffer, which is the buffer both ends were generated with (`pipe_msg_max`).
 fn wire(message: &msg::SyncMessage) -> (Vec<u8>, usize) {
     let mut buf = [0u8; MESSAGE_MAX];
     let n = pipe_sync::encode_response(message, &mut buf).expect("the message fits a transfer");
     (buf[..n].to_vec(), n)
 }
 
-/// The trace request inside a written `SyncRequest`, validated the way the device
-/// does: bytes in, as a client sends them.
+/// The trace request inside a written `SyncRequest`, validated the way the device does: bytes in, as a client sends them.
 fn trace_request_of(bytes: &[u8]) -> Option<msg::TraceRequest> {
     trace_request(&pipe_sync::decode_request(bytes)?)
 }
@@ -45,9 +38,7 @@ fn worst_case_chunk_fits_a_transfer() {
     let (_, n) = wire(&msg::SyncMessage {
         body: Some(msg::SyncMessage_::Body::Trace(chunk)),
     });
-    // 2459 bytes worst case: the generated table's assertion is what makes this a
-    // build failure rather than a transfer that stalls part-way, and this says the
-    // number is what the wire really produces.
+    // 2459 bytes worst case: the generated table's assertion is what makes this a build failure rather than a transfer that stalls part-way, and this says the number is what the wire really produces.
     assert!(
         n < MESSAGE_MAX,
         "worst-case chunk is {n} bytes, and the pipe carries {MESSAGE_MAX}"

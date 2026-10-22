@@ -1,11 +1,7 @@
-//! The schema vocabulary: `gatt_options.proto`, and making sure the schema
-//! being compiled agrees with it.
+//! The schema vocabulary: `gatt_options.proto`, and making sure the schema being compiled agrees with it.
 //!
-//! An extension is only meaningful if both ends agree on its number, its field
-//! numbers and its enum values, and protobuf will happily decode a *different*
-//! `gatt_options.proto` that reuses the names. The vocabulary therefore ships
-//! with the tool, is put on the include path automatically, and is checked
-//! against the one the schema actually imported.
+//! An extension is only meaningful if both ends agree on its number, its field numbers and its enum values, and protobuf will happily decode a *different*
+//! `gatt_options.proto` that reuses the names. The vocabulary therefore ships with the tool, is put on the include path automatically, and is checked against the one the schema actually imported.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -15,12 +11,10 @@ use prost_reflect::DescriptorPool;
 use crate::error::Error;
 use crate::model::{Perm, Prop};
 
-/// The vocabulary, as shipped. Consumers that would rather write their own copy
-/// can take it from here (or `gatt-gen --write-options DIR`).
+/// The vocabulary, as shipped. Consumers that would rather write their own copy can take it from here (or `gatt-gen --write-options DIR`).
 pub const OPTIONS_PROTO: &str = include_str!("../proto/gatt_options.proto");
 
-/// The file name the schema has to import, and the name the vocabulary is
-/// written under.
+/// The file name the schema has to import, and the name the vocabulary is written under.
 pub const OPTIONS_PROTO_FILE: &str = "gatt_options.proto";
 
 /// The package the vocabulary is declared in.
@@ -42,8 +36,7 @@ pub fn write_options_proto(dir: &Path) -> Result<PathBuf, Error> {
 
 /// A directory holding the shipped vocabulary, for the include path.
 ///
-/// Written once per process: `protoc` reads the file, so two writers racing on
-/// one path could hand it half a file.
+/// Written once per process: `protoc` reads the file, so two writers racing on one path could hand it half a file.
 pub fn vocabulary_dir() -> Result<&'static Path, Error> {
     static DIR: OnceLock<Result<PathBuf, (String, String)>> = OnceLock::new();
     match DIR.get_or_init(|| {
@@ -61,8 +54,7 @@ pub fn vocabulary_dir() -> Result<&'static Path, Error> {
     }
 }
 
-/// Check that the vocabulary in this descriptor set is the one this tool
-/// generates for, and say which part differs when it is not.
+/// Check that the vocabulary in this descriptor set is the one this tool generates for, and say which part differs when it is not.
 pub fn check(pool: &DescriptorPool) -> Result<(), Error> {
     let mismatch = |what: &str, expected: String, found: String| {
         Error::Descriptor(format!(

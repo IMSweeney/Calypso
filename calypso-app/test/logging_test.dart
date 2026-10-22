@@ -156,8 +156,7 @@ void main() {
   test('the transport reports the session, and every message in it', () async {
     final records = captureLogs();
     final link = FakeBleLink();
-    // Served before connecting: the levels are a read, and the transport makes one as
-    // part of bringing the link up.
+    // Served before connecting: the levels are a read, and the transport makes one as part of bringing the link up.
     final device = FakeDevice(link)
       ..servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2));
     final transport = BleTransport(

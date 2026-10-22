@@ -1,7 +1,6 @@
 //! Failures the generator reports.
 //!
-//! A schema problem is `Invalid`, and carries every rule the schema broke
-//! rather than the first one, so one run of the generator is one round trip.
+//! A schema problem is `Invalid`, and carries every rule the schema broke rather than the first one, so one run of the generator is one round trip.
 
 use std::fmt;
 

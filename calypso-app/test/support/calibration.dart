@@ -4,9 +4,7 @@ import 'package:calypso/protocol/calypso.pb.dart' as pb;
 
 /// The IMU's calibration state, as the device's characteristic holds it.
 ///
-/// The device writes this from its own 1 Hz poll of the chip, and a client reads it
-/// whenever it likes — so a test serves one (`FakeDevice.servesCalibration`) rather
-/// than sending it.
+/// The device writes this from its own 1 Hz poll of the chip, and a client reads it whenever it likes — so a test serves one (`FakeDevice.servesCalibration`) rather than sending it.
 pb.CalibrationStatus calibrationStatus({
   int sys = 3,
   int accel = 3,

@@ -6,10 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// The pipe, against the cases both implementations run.
 ///
-/// `lib/gatt/pipe.dart` is a mirror of the Rust reference in `tools/gatt-pipe`,
-/// and these vectors belong to the protocol rather than to either side: one file,
-/// two state machines, the same answers. Run from `calypso-app` (which is where
-/// `flutter test` runs).
+/// `lib/gatt/pipe.dart` is a mirror of the Rust reference in `tools/gatt-pipe`, and these vectors belong to the protocol rather than to either side: one file, two state machines, the same answers. Run from `calypso-app` (which is where `flutter test` runs).
 void main() {
   final file = File('../tools/gatt-pipe/tests/vectors/pipe.txt');
   if (!file.existsSync()) {
@@ -29,8 +26,7 @@ void main() {
       capacity(247, defaultChunkMax, 100),
       defaultChunkMax - overhead(100),
     );
-    // An MTU a phone asked the most of would otherwise put a five-byte frame on
-    // top of 244 bytes of payload in a 244-byte buffer.
+    // An MTU a phone asked the most of would otherwise put a five-byte frame on top of 244 bytes of payload in a 244-byte buffer.
     expect(
       capacity(517, defaultChunkMax, 100),
       defaultChunkMax - overhead(100),
@@ -124,9 +120,7 @@ const _window = 8;
 
 /// Move one message through the pipe under this case's faults.
 ///
-/// The faults and the retry policy are the case's, and the order in which a chunk
-/// is dropped, corrupted and duplicated is the Rust harness's, deliberately: if
-/// the two disagreed about the harness they would disagree about the answers.
+/// The faults and the retry policy are the case's, and the order in which a chunk is dropped, corrupted and duplicated is the Rust harness's, deliberately: if the two disagreed about the harness they would disagree about the answers.
 _Outcome _pump(_Case c) {
   final message = c.message();
   final sender = Sender(_window);

@@ -1,18 +1,11 @@
 //! Rep detection and per-rep trace computation.
-//!
-//! Platform-independent and host-testable: the firmware feeds [`Detector`] one
-//! sample at a time, and when a rep closes it slices the sample ring for the
-//! reported span (plus [`MARGIN_MS`] each side) and calls [`compute_rep`].
-//!
-//! See `docs/REP_TRACKING.md`.
 
 use crate::pb::msg;
 use crate::sampler::Sample;
 
 /// Linear-acceleration magnitude (m/s²) that counts as "moving".
 pub const ACCEL_ON_THRESHOLD: f32 = 0.60;
-/// Magnitude below which the sensor counts as at rest (hysteresis below
-/// [`ACCEL_ON_THRESHOLD`] so a rep doesn't chatter on/off near the threshold).
+/// Magnitude below which the sensor counts as at rest (hysteresis below [`ACCEL_ON_THRESHOLD`] so a rep doesn't chatter on/off near the threshold).
 pub const ACCEL_REST_THRESHOLD: f32 = 0.25;
 /// How long motion must persist before a rep starts.
 pub const T_ON_MS: u32 = 100;
@@ -20,11 +13,9 @@ pub const T_ON_MS: u32 = 100;
 pub const T_REST_MS: u32 = 250;
 /// Shortest motion span still counted as a rep (noise/movement blips).
 pub const MIN_REP_MS: u32 = 400;
-/// Longest motion span that can be a rep; beyond this it's a set-up
-/// adjustment or an unrack, and the span is discarded.
+/// Longest motion span that can be a rep; beyond this it's a set-up adjustment or an unrack, and the span is discarded.
 pub const MAX_REP_MS: u32 = 8000;
-/// Rest samples kept either side of the motion span so ZUPT has an at-rest
-/// window to anchor to, and the app can plot the rep's endpoints.
+/// Rest samples kept either side of the motion span so ZUPT has an at-rest window to anchor to, and the app can plot the rep's endpoints.
 pub const MARGIN_MS: u32 = 200;
 
 /// Detector state (exposed for tests/logging).
@@ -35,8 +26,7 @@ pub enum State {
     Settle,
 }
 
-/// The motion span of a detected rep (milliseconds). Add [`MARGIN_MS`] at
-/// each end to get the trace window.
+/// The motion span of a detected rep (milliseconds). Add [`MARGIN_MS`] at each end to get the trace window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RepSpan {
     pub start_ms: u32,
@@ -100,9 +90,7 @@ impl Detector {
                 if mag < ACCEL_REST_THRESHOLD {
                     let since = *self.below_since.get_or_insert(s.t_ms);
                     if s.t_ms.saturating_sub(since) >= T_REST_MS {
-                        // ZUPT anchor: the sensor is at rest here, so the
-                        // velocity integration is anchored to zero at this
-                        // end of the rep (`compute_rep`).
+                        // ZUPT anchor: the sensor is at rest here, so the velocity integration is anchored to zero at this end of the rep (`compute_rep`).
                         let span = RepSpan {
                             start_ms: self.start_ms,
                             end_ms: since,
@@ -136,8 +124,7 @@ pub fn accel_magnitude(s: &Sample) -> f32 {
     sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
 }
 
-/// Rotate a body-frame vector into the world frame by a unit quaternion
-/// `[w, x, y, z]`: `v' = q ⊗ v ⊗ q*`.
+/// Rotate a body-frame vector into the world frame by a unit quaternion `[w, x, y, z]`: `v' = q ⊗ v ⊗ q*`.
 pub fn rotate_by_quat(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
     // t = 2 * (q.xyz × v)
@@ -153,9 +140,7 @@ pub fn rotate_by_quat(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
 }
 
 /// Roll and pitch (degrees) from a unit quaternion `[w, x, y, z]`.
-///
-/// These are the two angles that matter for bar tilt; yaw is deliberately not
-/// reported (it drifts without a magnetometer).
+/// Yaw is deliberately not reported: it drifts without a magnetometer.
 pub fn roll_pitch_deg(q: [f32; 4]) -> (f32, f32) {
     let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
     let roll = atan2f(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y));
@@ -165,9 +150,7 @@ pub fn roll_pitch_deg(q: [f32; 4]) -> (f32, f32) {
 }
 
 /// One point of a stored rep trace.
-///
-/// The raw `accel`/`quat` are kept alongside the computed `pos` so the app can
-/// re-derive traces with better algorithms later without a firmware update.
+/// The raw `accel`/`quat` are kept alongside the computed `pos` so the app can re-derive traces with better algorithms later without a firmware update.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct TracePoint {
     pub t_ms: u32,
@@ -188,8 +171,7 @@ impl TracePoint {
     };
 }
 
-/// Trace output buffer over caller-provided storage (no allocation, and the
-/// storage can live on the heap where a whole trace is too big for the stack).
+/// Trace output buffer over caller-provided storage (no allocation, and the storage can live on the heap where a whole trace is too big for the stack).
 pub struct TraceBuf<'a> {
     points: &'a mut [TracePoint],
     len: usize,
@@ -244,26 +226,11 @@ impl<'a> TraceBuf<'a> {
 
 /// Compute the ZUPT-anchored world-frame trace and summary for one rep.
 ///
-/// The summary is the wire type ([`msg::RepSummary`]) rather than a struct of our
-/// own: it is what gets stored, streamed and logged, and `rep_uuid` and
-/// `chunk_count` are filled in by the caller — the rep's identity is minted when
-/// it closes, and how many chunks the trace becomes depends on the storage that is
-/// holding it.
+/// `samples` should be the detector's span plus margin at each end, so the integration can be anchored at zero velocity at both ends.
+/// Any number of samples is accepted; if more than `N` are supplied the trace is decimated uniformly to fit.
 ///
-/// `samples` should be the detector's span plus margin at each end (the rest
-/// samples let the integration be anchored at zero velocity at both ends).
-/// Any number of samples is accepted; if more than `N` are supplied the trace
-/// is decimated uniformly to fit.
-///
-/// Integration: rotate each sample's linear acceleration into the world frame
-/// by its quaternion, integrate to velocity and position by trapezoid, then
-/// remove the linear drift in velocity and position so both start and end at
-/// rest (ZUPT anchoring). This rejects constant bias exactly and bounds the
-/// remaining position error to within one rep, which is what bar-path
-/// plotting needs.
-///
-/// Runs in three passes with running scalars only (no scratch buffers), so it
-/// needs no allocation on the device.
+/// Each sample's linear acceleration is rotated into the world frame by its quaternion, integrated to velocity and position by trapezoid, then the linear drift is removed so both start and end at rest.
+/// That rejects constant bias exactly and bounds the remaining position error to within one rep, which is what bar-path plotting needs.
 pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummary {
     out.clear();
     let mut summary = msg::RepSummary {
@@ -289,9 +256,7 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummar
         n.div_ceil(capacity).max(1)
     };
     summary.decimated = capacity > 0 && stride > 1;
-    // Anchor the decimation grid at the *last* sample, so the rep's end is
-    // always stored (it is the most interesting point when plotting) and the
-    // count stays within capacity.
+    // Anchor the decimation grid at the *last* sample, so the rep's end is always stored (it is the most interesting point when plotting) and the count stays within capacity.
     let first = if capacity == 0 { 0 } else { (n - 1) % stride };
 
     let t0 = samples[0].t_ms;
@@ -438,9 +403,6 @@ fn detrended_velocity(
 }
 
 // --- small no_std helpers -------------------------------------------------
-//
-// `calypso-core` builds for a `no_std` target, so `f32`'s std-only methods
-// are replaced by `libm`; the host test build uses the same code paths.
 
 fn sqrtf(x: f32) -> f32 {
     libm::sqrtf(x)

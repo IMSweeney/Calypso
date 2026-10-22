@@ -21,19 +21,13 @@ enum _Direction { rx, tx }
 
 /// The ATT MTU every chunk is sized from until the link has been asked.
 ///
-/// 23 is the one every link can carry (20 bytes of ATT payload), so a chunk built
-/// from it is a chunk any link takes: slow, and never truncated.
+/// 23 is the one every link can carry (20 bytes of ATT payload), so a chunk built from it is a chunk any link takes: slow, and never truncated.
 const int _minimumMtu = 23;
 
-/// How long the device has to acknowledge a request before it is sent again — three
-/// attempts of this, and the request has failed.
+/// How long the device has to acknowledge a request before it is sent again — three attempts of this, and the request has failed.
 ///
-/// **The schema's number** (`xferTimeoutMs`), which is also the device's own patience
-/// for a transfer that stops moving: a budget shorter than that re-sends a request the
-/// device is still working on, and every re-send restarts the trace it is streaming.
-/// Two seconds was short enough to do exactly that — a request's acknowledgement
-/// queues behind the trace notifications already on the link and took ~3 s — so the
-/// rep arrived with no trace, twice over. It is deliberately *not* the response budget:
+/// **The schema's number** (`xferTimeoutMs`), which is also the device's own patience for a transfer that stops moving: a budget shorter than that re-sends a request the device is still working on, and every re-send restarts the trace it is streaming.
+/// Two seconds was short enough to do exactly that — a request's acknowledgement queues behind the trace notifications already on the link and took ~3 s — so the rep arrived with no trace, twice over. It is deliberately *not* the response budget:
 /// how long a trace takes is `traceTimeout`, which starts when the request lands.
 const Duration _defaultXferTimeout = Duration(
   milliseconds: SyncPipe.xferTimeoutMs,
@@ -41,22 +35,16 @@ const Duration _defaultXferTimeout = Duration(
 
 /// How often the app reads the IMU's calibration levels by default, while connected.
 ///
-/// The same second the device polls the chip at: looking more often cannot see anything
-/// the device has not already written down.
+/// The same second the device polls the chip at: looking more often cannot see anything the device has not already written down.
 const Duration _defaultCalibrationPoll = Duration(seconds: 1);
 
-/// Reaching the device over the schema's interface: the UUIDs, the directions and the
-/// message types come from `proto/calypso_gatt.proto` (see
-/// `lib/gatt/gatt_client.dart`), so this file names none of them.
+/// Reaching the device over the schema's interface: the UUIDs, the directions and the message types come from `proto/calypso_gatt.proto` (see `lib/gatt/gatt_client.dart`), so this file names none of them.
 ///
 /// The generated `SyncClient` is that schema's typed client, and it is what reads the
-/// **calibration status** — the characteristic that carries a value. The pipe's two
-/// halves are deliberately not reached through it: a notification there is a chunk of
-/// a transfer, not a message, so those bytes go to the runtime in `lib/gatt/pipe.dart`
+/// **calibration status** — the characteristic that carries a value. The pipe's two halves are deliberately not reached through it: a notification there is a chunk of a transfer, not a message, so those bytes go to the runtime in `lib/gatt/pipe.dart`
 /// instead.
 ///
-/// What stays here is what a schema cannot say: scanning, connecting, the trace
-/// reassembly and its timeouts, and what the archive is told.
+/// What stays here is what a schema cannot say: scanning, connecting, the trace reassembly and its timeouts, and what the archive is told.
 class BleTransport implements RepTransport {
   BleTransport(
     this._link, {
@@ -75,10 +63,7 @@ class BleTransport implements RepTransport {
 
   /// How often the app asks the device for the IMU's calibration levels.
   ///
-  /// The device keeps that characteristic current from its own 1 Hz poll of the chip,
-  /// so this is the app's clock and not a rate the device imposes: a read costs one ATT
-  /// round trip, and how many of those a UI is willing to pay for is the UI's business
-  /// (which is why the levels are a read rather than a notification).
+  /// The device keeps that characteristic current from its own 1 Hz poll of the chip, so this is the app's clock and not a rate the device imposes: a read costs one ATT round trip, and how many of those a UI is willing to pay for is the UI's business (which is why the levels are a read rather than a notification).
   final Duration calibrationPoll;
 
   /// The schema's typed client, for the characteristics that carry a value.
@@ -97,10 +82,7 @@ class BleTransport implements RepTransport {
   String? _deviceId;
   StreamSubscription<Uint8List>? _messagesSub;
 
-  /// The app's end of the pipe: one receiver for everything the device sends, and
-  /// one sender for everything the app asks with. Both directions are the same
-  /// frame on the same two characteristics, so what arrives has to be sorted by the
-  /// frame rather than by where it came from (`_onNotification`).
+  /// The app's end of the pipe: one receiver for everything the device sends, and one sender for everything the app asks with. Both directions are the same frame on the same two characteristics, so what arrives has to be sorted by the frame rather than by where it came from (`_onNotification`).
   final pipe.Receiver _receiver = pipe.Receiver(SyncPipe.window);
   final pipe.Sender _sender = pipe.Sender(SyncPipe.window);
   final Uint8List _inbound = Uint8List(SyncPipe.messageMax);
@@ -208,14 +190,12 @@ class BleTransport implements RepTransport {
           '"attribute not found". Try turning Bluetooth off and on.',
         );
       }
-      // Ask for the most the pipe can use — a chunk's frame is what it is sized
-      // from — and take what the link gives rather than what was asked for.
+      // Ask for the most the pipe can use — a chunk's frame is what it is sized from — and take what the link gives rather than what was asked for.
       try {
         _mtu = await _link.requestMtu(deviceId, SyncPipe.chunkMax + 3);
         bleLog.info('ATT MTU $_mtu');
       } catch (e) {
-        // A link that will not say: the smallest MTU every stack guarantees is
-        // slower and never wrong.
+        // A link that will not say: the smallest MTU every stack guarantees is slower and never wrong.
         _mtu = _minimumMtu;
         bleLog.warning(
           'could not negotiate an MTU ($e); sizing chunks for $_mtu',
@@ -245,9 +225,7 @@ class BleTransport implements RepTransport {
       if (!connected) _onConnectionLost(error);
     });
     try {
-      // Raw frames, not messages: a notification is a chunk of a transfer until
-      // the pipe has reassembled it, and the ones that are acknowledgements of the
-      // app's own transfer never become a message at all.
+      // Raw frames, not messages: a notification is a chunk of a transfer until the pipe has reassembled it, and the ones that are acknowledgements of the app's own transfer never become a message at all.
       _messagesSub = _link
           .valueStream(deviceId, SyncClient.messagesUuid)
           .listen(
@@ -262,9 +240,7 @@ class BleTransport implements RepTransport {
       return;
     }
 
-    // The schema's client for this connection, and the one thing it is for here: the
-    // calibration levels. Read once now, so the hint is right from the first frame,
-    // and asked for again on the app's own interval.
+    // The schema's client for this connection, and the one thing it is for here: the calibration levels. Read once now, so the hint is right from the first frame, and asked for again on the app's own interval.
     _client = SyncClient(_GattLink(_link, deviceId));
     await refreshCalibration();
     _calibrationTimer = Timer.periodic(
@@ -278,16 +254,9 @@ class BleTransport implements RepTransport {
 
   /// Ask the device for the IMU's calibration levels, and publish them.
   ///
-  /// A read rather than a subscription: a level is a state, and how often the app looks
-  /// is [`calibrationPoll`]. A read that fails is a warning and nothing more — the
-  /// levels are a hint, and a link that answers a read with an error is not a link to
-  /// tear down over it.
+  /// A read rather than a subscription: a level is a state, and how often the app looks is [`calibrationPoll`]. A read that fails is a warning and nothing more — the levels are a hint, and a link that answers a read with an error is not a link to tear down over it.
   ///
-  /// **One read at a time, whatever the poll says.** A read is an ATT round trip on a
-  /// queue the pipe's writes share: on a link that is answering slowly (or not at all)
-  /// a poll that ignored the last read would stack them up, and the acknowledgements
-  /// the device is waiting for would end up behind them. A poll that misses its turn is
-  /// no loss — the next one is a second away, and the levels change slower than that.
+  /// **One read at a time, whatever the poll says.** A read is an ATT round trip on a queue the pipe's writes share: on a link that is answering slowly (or not at all) a poll that ignored the last read would stack them up, and the acknowledgements the device is waiting for would end up behind them. A poll that misses its turn is no loss — the next one is a second away, and the levels change slower than that.
   Future<void> refreshCalibration() async {
     final client = _client;
     if (client == null || _calibrationReadInFlight) return;
@@ -321,10 +290,7 @@ class BleTransport implements RepTransport {
 
   /// The sync service's characteristics that the schema does not declare.
   ///
-  /// The device's table is generated from the schema, so one here is a tree that is
-  /// not this firmware's: a cached database from an older build, or firmware this app
-  /// predates. The attributes after it belong to that other table, which is what makes
-  /// them worth refusing (docs/GOTCHAS.md).
+  /// The device's table is generated from the schema, so one here is a tree that is not this firmware's: a cached database from an older build, or firmware this app predates. The attributes after it belong to that other table, which is what makes them worth refusing (docs/GOTCHAS.md).
   static List<String> _strangersIn(List<DiscoveredService> services) => [
     for (final service in services)
       if (_sameUuid(service.uuid, SyncClient.serviceUuid))
@@ -362,9 +328,7 @@ class BleTransport implements RepTransport {
 
   /// Stop asking the device for the levels, and drop the client that asks.
   ///
-  /// Both belong to the link that is going away, whether it was closed or lost: a
-  /// poll left running would read a characteristic of a connection that no longer
-  /// exists (`_client` holds its device id), once a second, for ever.
+  /// Both belong to the link that is going away, whether it was closed or lost: a poll left running would read a characteristic of a connection that no longer exists (`_client` holds its device id), once a second, for ever.
   void _stopCalibrationPoll() {
     _calibrationTimer?.cancel();
     _calibrationTimer = null;
@@ -425,8 +389,7 @@ class BleTransport implements RepTransport {
 
   /// The summaries the device has pushed on this connection, in the order they arrived.
   ///
-  /// Synchronous on purpose: the rep list draws a row for a rep whose trace is still
-  /// being fetched, and a build cannot await.
+  /// Synchronous on purpose: the rep list draws a row for a rep whose trace is still being fetched, and a build cannot await.
   List<pb.RepSummary> get pushedSummaries => _summaries.values.toList();
 
   @override
@@ -445,10 +408,7 @@ class BleTransport implements RepTransport {
     final completer = Completer<List<pb.TraceSample>>();
     _pending[uuid] = completer;
     final response = completer.future;
-    // The failure can arrive while the request is still going out — a dropped
-    // connection fails it there — and a completer nobody is listening to yet
-    // reports that as an unhandled error rather than to the caller that will
-    // await it below.
+    // The failure can arrive while the request is still going out — a dropped connection fails it there — and a completer nobody is listening to yet reports that as an unhandled error rather than to the caller that will await it below.
     unawaited(response.then((_) {}, onError: (Object _) {}));
     _requestTimers.remove(uuid)?.cancel();
 
@@ -459,9 +419,7 @@ class BleTransport implements RepTransport {
       ),
     );
     try {
-      // The request itself is a transfer now, and it is acknowledged before the
-      // device answers: the response budget starts when it lands, not when it is
-      // sent, or a slow link would spend it on the request.
+      // The request itself is a transfer now, and it is acknowledged before the device answers: the response budget starts when it lands, not when it is sent, or a slow link would spend it on the request.
       await _request(request);
     } catch (e) {
       _pending.remove(uuid);
@@ -512,21 +470,15 @@ class BleTransport implements RepTransport {
     status.set(BleStatus.idle);
   }
 
-  /// Send one request to the device, as a transfer, and wait for the device to
-  /// acknowledge it.
+  /// Send one request to the device, as a transfer, and wait for the device to acknowledge it.
   ///
-  /// The wait is the point of the pipe: the written characteristic has no write
-  /// response, so a write reports nothing at all — the acknowledgement of the last
-  /// chunk, on the other characteristic, is the only evidence the device has the
-  /// request. No acknowledgement within `xferTimeout` sends the whole thing
-  /// again, from the start.
+  /// The wait is the point of the pipe: the written characteristic has no write response, so a write reports nothing at all — the acknowledgement of the last chunk, on the other characteristic, is the only evidence the device has the request. No acknowledgement within `xferTimeout` sends the whole thing again, from the start.
   Future<void> _request(pb.SyncRequest request) async {
     final bytes = SyncPipe.encodeRequest(request);
     _logMessage(_Direction.tx, SyncClient.requestsUuid, bytes);
 
     for (var attempt = 1; attempt <= pipe.maxAttempts; attempt++) {
-      // Whatever the attempt before this left in flight is gone: a transfer that
-      // was not acknowledged is a transfer to send again, from the start.
+      // Whatever the attempt before this left in flight is gone: a transfer that was not acknowledged is a transfer to send again, from the start.
       _sender.abort();
       _sender.start(bytes.length, SyncPipe.messageMax);
       _acknowledged = Completer<void>();
@@ -558,9 +510,7 @@ class BleTransport implements RepTransport {
       final send = _sender.next(bytes, capacity, frame);
       if (send.state == pipe.SendState.done) return;
       if (send.state == pipe.SendState.windowFull) {
-        // The window is 127 chunks and a request is tens of bytes: reaching this
-        // means a message that should not exist, so it is said rather than waited
-        // on.
+        // The window is 127 chunks and a request is tens of bytes: reaching this means a message that should not exist, so it is said rather than waited on.
         throw StateError(
           'the request did not fit one window (${bytes.length} bytes)',
         );
@@ -590,8 +540,7 @@ class BleTransport implements RepTransport {
     }
   }
 
-  /// One value from the device: a chunk of a transfer, or the acknowledgement of
-  /// the app's own.
+  /// One value from the device: a chunk of a transfer, or the acknowledgement of the app's own.
   void _onNotification(Uint8List value) {
     bleLog.fine(
       describeMessage(_Direction.rx.name, SyncClient.messagesUuid, value),
@@ -624,9 +573,7 @@ class BleTransport implements RepTransport {
       case pipe.ReceivedKind.nak:
         unawaited(_writeReply(_receiver.nextExpected));
       case pipe.ReceivedKind.delivered:
-        // The end of a message is where an acknowledgement is owed, whatever the
-        // window's cadence says: the device's sender is waiting on it to start
-        // anything else.
+        // The end of a message is where an acknowledgement is owed, whatever the window's cadence says: the device's sender is waiting on it to start anything else.
         unawaited(_writeReply(_receiver.nextExpected));
         _onMessage(
           SyncPipe.decodeResponse(
@@ -640,8 +587,7 @@ class BleTransport implements RepTransport {
     }
   }
 
-  /// The one frame the app owes the device: an acknowledgement, on the
-  /// characteristic the device waits on.
+  /// The one frame the app owes the device: an acknowledgement, on the characteristic the device waits on.
   Future<void> _writeReply(int nextExpected) async {
     final frame = Uint8List(8);
     final length = pipe.encode(
@@ -653,8 +599,7 @@ class BleTransport implements RepTransport {
   }
 
   void _onMessage(pb.SyncMessage message) {
-    // The bytes are logged at the plugin seam (`raw`); this is what the
-    // transport made of them.
+    // The bytes are logged at the plugin seam (`raw`); this is what the transport made of them.
     bleLog.fine(
       '${_Direction.rx.name} ${SyncClient.messagesUuid} '
       '${describeSyncMessage(message)}',
@@ -729,9 +674,7 @@ class BleTransport implements RepTransport {
 
 /// The generated client's view of the link: one device, and the schema's own names.
 ///
-/// `SyncClient` is generated against `GattClientLink`, which knows nothing of device
-/// ids — a client built from a schema has no business naming a connection — so this is
-/// where the two meet.
+/// `SyncClient` is generated against `GattClientLink`, which knows nothing of device ids — a client built from a schema has no business naming a connection — so this is where the two meet.
 class _GattLink implements GattClientLink {
   _GattLink(this._link, this._deviceId);
 

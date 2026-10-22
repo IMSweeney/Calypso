@@ -1,5 +1,4 @@
-//! Reading the schema: custom options out of a descriptor set, and the model
-//! that comes out the other side.
+//! Reading the schema: custom options out of a descriptor set, and the model that comes out the other side.
 
 mod common;
 
@@ -29,8 +28,7 @@ fn the_example_schema_becomes_the_services_it_declares() {
     assert!(level.request.is_empty());
     assert_eq!(level.max, Some(100));
 
-    // The rpc's two directions are the two halves of the characteristic: the
-    // request is what the central writes, the response what it reads.
+    // The rpc's two directions are the two halves of the characteristic: the request is what the central writes, the response what it reads.
     let rx = gatt.characteristic("fixture.Device", "Rx").unwrap();
     assert_eq!(
         rx.request,
@@ -71,9 +69,7 @@ fn the_descriptor_set_is_the_interface_between_the_two_back_ends() {
     descriptor::descriptor_set(&fixture_input("valid/device.proto"), &out)
         .expect("protoc accepts the example");
 
-    // The bytes on disk have to describe the same schema as reading the proto
-    // directly: the other language's generator reads the descriptor set, not the
-    // proto.
+    // The bytes on disk have to describe the same schema as reading the proto directly: the other language's generator reads the descriptor set, not the proto.
     let (from_set, _) = descriptor::load_from_descriptor_set(&out).unwrap();
     let (from_proto, _) = load("valid/device.proto").unwrap();
     assert_eq!(from_set.to_string(), from_proto.to_string());
@@ -83,8 +79,7 @@ fn the_descriptor_set_is_the_interface_between_the_two_back_ends() {
 
 #[test]
 fn a_schema_carrying_its_own_vocabulary_is_checked_against_the_shipped_one() {
-    // A vocabulary that renumbers the properties still decodes, and means
-    // something else, so it has to be caught rather than believed.
+    // A vocabulary that renumbers the properties still decodes, and means something else, so it has to be caught rather than believed.
     let dir = std::env::temp_dir().join("gatt-gen-vocabulary-mismatch");
     std::fs::create_dir_all(&dir).unwrap();
     let renumbered = gatt_gen::OPTIONS_PROTO.replace("READ = 1;", "READ = 9;");
@@ -92,8 +87,7 @@ fn a_schema_carrying_its_own_vocabulary_is_checked_against_the_shipped_one() {
     std::fs::write(dir.join("gatt_options.proto"), renumbered).unwrap();
 
     let mut input = fixture_input("valid/device.proto");
-    // Ahead of the crate's own copy, which is what a consumer vendoring the
-    // vocabulary looks like.
+    // Ahead of the crate's own copy, which is what a consumer vendoring the vocabulary looks like.
     input.includes.insert(0, dir.clone());
 
     match gatt_gen::load(&input) {

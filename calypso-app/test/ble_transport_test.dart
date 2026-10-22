@@ -338,8 +338,7 @@ void main() {
       SyncPipe.chunkMax + 3,
     ], reason: 'the most the pipe can use, and not a byte more');
 
-    // A summary does not fit 20 bytes of ATT payload: it travels as several
-    // frames, and the app reassembles it.
+    // A summary does not fit 20 bytes of ATT payload: it travels as several frames, and the app reassembles it.
     device.send(summaryMessage(u(1)));
     await pumpEventQueue();
     expect(device.notified.length, greaterThan(1), reason: 'several chunks');
@@ -522,8 +521,7 @@ void main() {
     var notifications = 0;
     transport.calibration.addListener(() => notifications++);
 
-    // A second read of the same levels: the app asks, the device answers, and
-    // nothing changed.
+    // A second read of the same levels: the app asks, the device answers, and nothing changed.
     await Future<void>.delayed(const Duration(milliseconds: 60));
     expect(
       link.reads[SyncClient.calibrationUuid]!,

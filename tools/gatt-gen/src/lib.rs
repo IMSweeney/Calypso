@@ -1,17 +1,8 @@
-//! Generates type-checked GATT code for both ends of a BLE link from proto-defined
-//! services.
+//! Generates type-checked GATT code for both ends of a BLE link from proto-defined services.
 //!
-//! The schema is a set of `.proto` files: a `service` with `option
-//! (gatt.service)` is a GATT service, an `rpc` with `option
-//! (gatt.characteristic)` is a characteristic whose request type is what the
-//! central writes and whose response type is what the peripheral reads or
-//! notifies. `SPEC.md` is the design; `PLAN.md` records what of it this stack can
-//! actually do.
+//! The schema is a set of `.proto` files: a `service` with `option (gatt.service)` is a GATT service, an `rpc` with `option (gatt.characteristic)` is a characteristic whose request type is what the central writes and whose response type is what the peripheral reads or notifies. `SPEC.md` is the design; `PLAN.md` records what of it this stack can actually do.
 //!
-//! The crate reads the schema, checks it, and hands a validated model to one of
-//! its generators — [`generator::server`] for the device, [`generator::client`]
-//! for the app — which turn it into a file the consumer checks in. It runs on the
-//! host, so it may use `std` and real dependencies; the code it emits may not.
+//! The crate reads the schema, checks it, and hands a validated model to one of its generators — [`generator::server`] for the device, [`generator::client`] for the app — which turn it into a file the consumer checks in. It runs on the host, so it may use `std` and real dependencies; the code it emits may not.
 //!
 //! ```no_run
 //! use gatt_gen::generator::{Config, server::rust_trouble};

@@ -2,9 +2,7 @@
 
 //! Loading a fixture, for the tests that check what the generator makes of it.
 //!
-//! Fixtures are proto files under `tests/fixtures/`. They import
-//! `gatt_options.proto`, which the crate ships, so nothing here reaches outside
-//! the crate.
+//! Fixtures are proto files under `tests/fixtures/`. They import `gatt_options.proto`, which the crate ships, so nothing here reaches outside the crate.
 
 use std::path::PathBuf;
 
@@ -16,9 +14,7 @@ pub fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// An input for one fixture. The descriptor set names files relative to an
-/// include directory, so the fixture's own directory is one; the vocabulary's
-/// comes from the crate itself.
+/// An input for one fixture. The descriptor set names files relative to an include directory, so the fixture's own directory is one; the vocabulary's comes from the crate itself.
 pub fn fixture_input(name: &str) -> Input {
     let file = fixture_path(name);
     Input {

@@ -21,20 +21,14 @@ abstract class BleLink {
 
   /// The ATT MTU to size a chunk from, after asking for [expected].
   ///
-  /// The pipe sizes every frame from this, and a frame the link cannot carry is a
-  /// write that fails or a notification the stack truncates — so the number comes
-  /// from the link rather than from a constant. `universal_ble` answers with the
-  /// negotiated MTU on Android, and with the write length Apple allows plus the
-  /// ATT header on Apple platforms, which is the same number for our purposes.
+  /// The pipe sizes every frame from this, and a frame the link cannot carry is a write that fails or a notification the stack truncates — so the number comes from the link rather than from a constant. `universal_ble` answers with the negotiated MTU on Android, and with the write length Apple allows plus the ATT header on Apple platforms, which is the same number for our purposes.
   Future<int> requestMtu(String deviceId, int expected);
 
   Future<void> disconnect(String deviceId);
 
   /// Read a characteristic once.
   ///
-  /// A read is an ATT round trip, so how often it happens is the caller's clock. The
-  /// value is whatever the device last put there, which for a state it polls itself is
-  /// as fresh as that poll.
+  /// A read is an ATT round trip, so how often it happens is the caller's clock. The value is whatever the device last put there, which for a state it polls itself is as fresh as that poll.
   Future<Uint8List> read(
     String deviceId,
     String serviceUuid,
@@ -55,8 +49,7 @@ abstract class BleLink {
 
   /// Write a characteristic.
   ///
-  /// `withResponse` is the write that reports failure, so it is the default; a
-  /// characteristic that offers only write-without-response asks for the other.
+  /// `withResponse` is the write that reports failure, so it is the default; a characteristic that offers only write-without-response asks for the other.
   Future<void> write(
     String deviceId,
     String serviceUuid,

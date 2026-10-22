@@ -1,10 +1,6 @@
 //! Every case both implementations of the pipe have to agree on.
 //!
-//! The cases are data — `tests/vectors/pipe.txt` — because there are two
-//! implementations of this protocol: this one, and the app's in Dart. Two suites
-//! is how two implementations drift apart quietly, so both read this file and
-//! answer the same. The numbers in it were produced by this side, which is the
-//! reference.
+//! The cases are data — `tests/vectors/pipe.txt` — because there are two implementations of this protocol: this one, and the app's in Dart. Two suites is how two implementations drift apart quietly, so both read this file and answer the same. The numbers in it were produced by this side, which is the reference.
 
 use gatt_pipe::{Acked, Header, Received, Receiver, Send, Sender, DEFAULT_CHUNK_MAX, MAX_ATTEMPTS};
 
@@ -67,9 +63,7 @@ struct Outcome {
 
 /// Move one message through the pipe under this case's faults.
 ///
-/// The faults and the retry policy are the case's, not this harness's: it is the
-/// same shape the app's test drives, deliberately, down to the order in which a
-/// chunk is dropped, corrupted and duplicated.
+/// The faults and the retry policy are the case's, not this harness's: it is the same shape the app's test drives, deliberately, down to the order in which a chunk is dropped, corrupted and duplicated.
 fn pump(case: &Case) -> Outcome {
     let message = case.message();
     let mut sender = Sender::new(WINDOW);

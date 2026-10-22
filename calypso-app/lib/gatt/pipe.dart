@@ -2,14 +2,9 @@ library;
 
 import 'dart:typed_data';
 
-/// The chunked pipe, for the app's side of a link whose characteristics are a
-/// pair.
+/// The chunked pipe, for the app's side of a link whose characteristics are a pair.
 ///
-/// A mirror of `tools/gatt-pipe` (Rust), which is the reference: the frame, the
-/// sender and the receiver, with no buffers of their own and no clock — the caller
-/// brings both. Both implementations are checked against the same cases in
-/// `tools/gatt-pipe/tests/vectors/pipe.txt`, because two implementations of one
-/// protocol is how two implementations of one protocol drift apart.
+/// A mirror of `tools/gatt-pipe` (Rust), which is the reference: the frame, the sender and the receiver, with no buffers of their own and no clock — the caller brings both. Both implementations are checked against the same cases in `tools/gatt-pipe/tests/vectors/pipe.txt`, because two implementations of one protocol is how two implementations of one protocol drift apart.
 ///
 /// The frame:
 ///
@@ -17,9 +12,7 @@ import 'dart:typed_data';
 /// | seq u8 | flags u8 | [total_len varint, START only] | payload | crc16 LE |
 /// ```
 ///
-/// `seq` is the chunk's own number on data and *cumulative* — the next number its
-/// sender expects — on an acknowledgement, which is the decision the reference
-/// documents at length.
+/// `seq` is the chunk's own number on data and *cumulative* — the next number its sender expects — on an acknowledgement, which is the decision the reference documents at length.
 class PipeFlags {
   static const int start = 0x01;
   static const int end = 0x02;
@@ -41,8 +34,7 @@ const int _attHeader = 3;
 /// sequence number.
 const int maxWindow = 127;
 
-/// The largest chunk any link is asked to carry: a characteristic's storage is a
-/// constant on the device, so the frame has a ceiling of its own.
+/// The largest chunk any link is asked to carry: a characteristic's storage is a constant on the device, so the frame has a ceiling of its own.
 const int defaultChunkMax = 244;
 
 /// How many transfers a sender makes before giving up on one.
@@ -77,11 +69,8 @@ int overhead(int? totalLen) =>
 
 /// How much payload fits in one chunk of a link whose ATT MTU is [mtu].
 ///
-/// Two ceilings, whichever is lower: the link's ([mtu] less the ATT header and
-/// the frame), and the buffer's — [chunkMax] is the characteristic's backing
-/// buffer and holds the *frame*, so the header and the CRC come out of it too.
-/// A peer negotiating more than `chunkMax + 3` would otherwise get a chunk too
-/// big for the buffer it is built in.
+/// Two ceilings, whichever is lower: the link's ([mtu] less the ATT header and the frame), and the buffer's — [chunkMax] is the characteristic's backing buffer and holds the *frame*, so the header and the CRC come out of it too.
+/// A peer negotiating more than `chunkMax + 3` would otherwise get a chunk too big for the buffer it is built in.
 int? capacity(int mtu, int chunkMax, int totalLen) {
   final frame = overhead(totalLen);
   final usable = mtu - _attHeader - frame;
@@ -240,8 +229,7 @@ class Sender {
   int get attempts => _attempts;
   bool get isIdle => !_active && _inFlight == 0;
 
-  /// Begin a transfer of [messageLen] bytes, giving up if the peer's reassembly
-  /// buffer could not hold it.
+  /// Begin a transfer of [messageLen] bytes, giving up if the peer's reassembly buffer could not hold it.
   void start(int messageLen, int maxMessage) {
     if (!isIdle) throw StateError('a transfer is already in flight');
     if (messageLen > maxMessage) {
@@ -259,10 +247,7 @@ class Sender {
 
   /// The next chunk to send, written into [out].
   ///
-  /// [SendState.done] once the END chunk has gone out, which is what an empty
-  /// message needs as much as a long one: the whole message is on the wire, and
-  /// only the acknowledgement is outstanding. The transfer stays active until
-  /// then, which is what keeps the next message waiting.
+  /// [SendState.done] once the END chunk has gone out, which is what an empty message needs as much as a long one: the whole message is on the wire, and only the acknowledgement is outstanding. The transfer stays active until then, which is what keeps the next message waiting.
   Send next(Uint8List message, int capacity, Uint8List out) {
     if (!_active || _endSent) return const Send.done();
     if (_inFlight >= window) return const Send.windowFull();
@@ -350,8 +335,7 @@ enum ReceivedKind {
   /// A whole message: [Received.length] bytes are in the caller's buffer.
   delivered,
 
-  /// A frame that could not be read, dropped: the sender's timeout is the way
-  /// out, because a corrupted acknowledgement is no better than none.
+  /// A frame that could not be read, dropped: the sender's timeout is the way out, because a corrupted acknowledgement is no better than none.
   dropped,
 }
 
@@ -362,8 +346,7 @@ class Received {
   final int length;
 }
 
-/// The receiving half: reassembles one message at a time into the caller's
-/// buffer.
+/// The receiving half: reassembles one message at a time into the caller's buffer.
 class Receiver {
   Receiver(this.window) {
     if (window < 1 || window > maxWindow) {
@@ -384,8 +367,7 @@ class Receiver {
   bool get inTransfer => _expected != null;
 
   /// The next sequence number this end expects, which is what a refusal names:
-  /// a NAK tells the sender where the receiver is, so that it can send the
-  /// transfer again from the beginning.
+  /// a NAK tells the sender where the receiver is, so that it can send the transfer again from the beginning.
   int get nextExpected => _seq;
 
   /// Take one chunk. [buffer] is the reassembly buffer and [maxMessage] its size.
