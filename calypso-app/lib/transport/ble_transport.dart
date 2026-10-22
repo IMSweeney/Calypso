@@ -423,6 +423,12 @@ class BleTransport implements RepTransport {
   @override
   Stream<pb.RepSummary> watchSummaries() => _summaryCtrl.stream;
 
+  /// The summaries the device has pushed on this connection, in the order they arrived.
+  ///
+  /// Synchronous on purpose: the rep list draws a row for a rep whose trace is still
+  /// being fetched, and a build cannot await.
+  List<pb.RepSummary> get pushedSummaries => _summaries.values.toList();
+
   @override
   Future<List<pb.TraceSample>> trace(String uuid) async {
     final cached = _completed[uuid];

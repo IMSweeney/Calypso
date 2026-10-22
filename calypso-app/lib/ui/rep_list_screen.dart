@@ -28,6 +28,29 @@ const String seedFixture = String.fromEnvironment(
   defaultValue: 'synthetic-squat',
 );
 
+/// How a rep's trace is getting on, which is the one thing the list cannot show from the
+/// summary alone: a rep is stored the moment its fetch is over, so "not in the archive
+/// yet" *is* "being fetched", and the archive knows whether the trace came with it.
+enum TraceState {
+  /// The app has the trace: the row can be plotted.
+  fetched,
+
+  /// Being fetched — or waiting its turn in the queue behind another rep.
+  fetching,
+
+  /// The fetch is over and the archive has the rep without its trace.
+  missing,
+}
+
+/// One row: a rep the device has told the app about, and where its trace got to.
+class RepRow {
+  const RepRow(this.summary, this.receivedAt, this.state);
+
+  final pb.RepSummary summary;
+  final DateTime? receivedAt;
+  final TraceState state;
+}
+
 class RepListScreen extends StatefulWidget {
   const RepListScreen({
     super.key,
@@ -88,8 +111,69 @@ class _RepListScreenState extends State<RepListScreen> {
 
   void _onSummary(pb.RepSummary summary) {
     final archive = _archive;
-    if (archive == null) return;
+    if (archive == null || !mounted) return;
+    // It goes on screen now, with its trace still to come: a fetch is not instant, and a
+    // rep that is invisible until it is archived is a rep the user cannot tell from one
+    // the device never sent.
+    setState(() {});
     unawaited(_addToLog(archive, summary));
+  }
+
+  /// What the list shows: every rep the device has told the app about, newest first.
+  ///
+  /// The archive holds the reps whose fetch is over; the transport holds the summaries
+  /// that are not archived yet — which is the same thing as being fetched. Which side a
+  /// rep is on, and whether its block carries a trace, is its state.
+  List<RepRow> _rows(RepArchive? archive) {
+    final stored = archive?.reps ?? const <StoredRep>[];
+    final rows = <RepRow>[
+      for (final rep in stored.reversed)
+        RepRow(
+          rep.summary,
+          rep.receivedAt,
+          rep.hasTrace ? TraceState.fetched : TraceState.missing,
+        ),
+    ];
+    final archived = {for (final rep in stored) rep.uuid};
+    final fetching = [
+      for (final summary in _ble.pushedSummaries)
+        if (summary.uuid case final uuid? when !archived.contains(uuid))
+          summary,
+    ];
+    rows.insertAll(0, [
+      for (final summary in fetching.reversed)
+        RepRow(summary, null, TraceState.fetching),
+    ]);
+    return rows;
+  }
+
+  /// The state of a rep's trace, as the row's trailing widget.
+  ///
+  /// An icon and its word, and no spinner: a spinner never stops animating, and a widget
+  /// test that waits for the tree to settle would wait for ever (docs/GOTCHAS.md).
+  Widget _traceState(TraceState state) {
+    final scheme = Theme.of(context).colorScheme;
+    final (icon, label, colour) = switch (state) {
+      TraceState.fetched => (
+        Icons.check_circle_outline,
+        'trace',
+        scheme.primary,
+      ),
+      TraceState.fetching => (
+        Icons.downloading_outlined,
+        'fetching',
+        scheme.secondary,
+      ),
+      TraceState.missing => (Icons.error_outline, 'no trace', scheme.error),
+    };
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: colour),
+        const SizedBox(width: 6),
+        Text(label, style: TextStyle(color: colour, fontSize: 12)),
+      ],
+    );
   }
 
   Future<void> _addToLog(RepArchive archive, pb.RepSummary summary) async {
@@ -203,6 +287,7 @@ class _RepListScreenState extends State<RepListScreen> {
   @override
   Widget build(BuildContext context) {
     final archive = _archive;
+    final rows = _rows(archive);
     final statusLine = _statusLine;
     return Scaffold(
       appBar: AppBar(
@@ -227,18 +312,17 @@ class _RepListScreenState extends State<RepListScreen> {
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
-                : archive == null || archive.reps.isEmpty
+                : rows.isEmpty
                 ? Center(child: Text(_error ?? 'No reps yet'))
                 : ListView.separated(
-                    itemCount: archive.reps.length,
+                    itemCount: rows.length,
                     separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (context, index) {
-                      final stored =
-                          archive.reps[archive.reps.length - 1 - index];
-                      final s = stored.summary;
+                      final row = rows[index];
+                      final s = row.summary;
                       return ListTile(
                         title: Text(
-                          'Rep ${uuidShort(s.uuid)} · ${_formatTime(stored.receivedAt)}',
+                          'Rep ${uuidShort(s.uuid)} · ${_formatTime(row.receivedAt)}',
                         ),
                         subtitle: Text(
                           '${(s.durationMs / 1000).toStringAsFixed(1)} s · '
@@ -248,15 +332,19 @@ class _RepListScreenState extends State<RepListScreen> {
                           '${s.pitchRangeDeg.toStringAsFixed(1)}°'
                           '${s.decimated ? ' · decimated' : ''}',
                         ),
-                        trailing: const Icon(Icons.view_in_ar_outlined),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => PlotScreen(
-                              store: archive,
-                              repUuid: stored.uuid,
-                            ),
-                          ),
-                        ),
+                        trailing: _traceState(row.state),
+                        // A rep still being fetched has nothing to plot yet, and the
+                        // screen it opens would say so in more words.
+                        onTap: row.state == TraceState.fetching
+                            ? null
+                            : () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => PlotScreen(
+                                    store: archive!,
+                                    repUuid: s.uuid!,
+                                  ),
+                                ),
+                              ),
                       );
                     },
                   ),

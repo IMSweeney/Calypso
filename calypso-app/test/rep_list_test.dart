@@ -20,6 +20,32 @@ import 'support/fake_ble_link.dart';
 import 'support/fake_device.dart';
 import 'support/test_uuid.dart';
 
+/// A rep's trace as the device answers a request with it: one chunk, one point.
+Uint8List traceChunk(String uuid, {int totalChunks = 1}) =>
+    pb.SyncMessage(
+      trace: pb.TraceChunk(
+        repUuid: uuidToBytes(uuid)!,
+        index: 0,
+        firstTOffsetMs: 0,
+        totalChunks: totalChunks,
+        samples: [
+          pb.TraceSample(
+            tOffsetMs: 0,
+            px: 0,
+            py: 0,
+            pz: 0,
+            ax: 0,
+            ay: 0,
+            az: -100,
+            qw: 16384,
+            qx: 0,
+            qy: 0,
+            qz: 0,
+          ),
+        ],
+      ),
+    ).writeToBuffer();
+
 FixtureTransport fixtureTransport(String name) => FixtureTransport.fromBytes(
   Uint8List.fromList(File('assets/fixtures/$name.pblog').readAsBytesSync()),
 );
@@ -56,6 +82,7 @@ void main() {
   _bleWiring();
   _calibrationHint();
   _liveSummaries();
+  _traceStates();
 
   testWidgets('it archives the source and lists the reps newest first', (
     tester,
@@ -293,6 +320,92 @@ void _liveSummaries() {
       await ble.close();
     },
   );
+}
+
+/// The list says where each rep's trace is: fetched, being fetched, or gone. A rep that
+/// is invisible until it is archived is a rep the user cannot tell from one the device
+/// never sent.
+void _traceStates() {
+  Future<(FakeBleLink, FakeDevice, BleTransport)> connected(
+    WidgetTester tester,
+  ) async {
+    final link = FakeBleLink();
+    final device = FakeDevice(link);
+    final ble = BleTransport(
+      link,
+      traceTimeout: const Duration(milliseconds: 50),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RepListScreen(archive: MemoryArchive(), ble: ble, fixture: ''),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Connect'));
+    await tester.pump();
+    link.seeDevice('device-1', 'Calypso');
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    return (link, device, ble);
+  }
+
+  testWidgets('a rep whose trace is in flight says so', (tester) async {
+    final (_, device, ble) = await connected(tester);
+
+    device.send(summaryMessage(u(0)));
+    // The request has gone out and nothing has answered it: no time has passed, so this
+    // is the fetch in flight and not a fetch that failed.
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.textContaining('Rep ${uuidShort(u(0))}'), findsOneWidget);
+    expect(find.text('fetching'), findsOneWidget);
+    expect(find.text('trace'), findsNothing);
+
+    // Nothing ever answers, so let the fetch fail and leave no timer behind.
+    await tester.pumpAndSettle();
+    expect(find.text('no trace'), findsOneWidget);
+
+    // The calibration poll runs while connected: close the link so it does not outlive
+    // the tree (docs/GOTCHAS.md).
+    await ble.close();
+  });
+
+  testWidgets('a rep whose trace arrived says so, and opens', (tester) async {
+    final (_, device, ble) = await connected(tester);
+    // Answer each request with the rep's trace, as the device would.
+    device.onRequest = (message) {
+      final requested = uuidFromBytes(
+        pb.SyncRequest.fromBuffer(message).trace.repUuid,
+      );
+      if (requested != null) device.send(traceChunk(requested));
+    };
+
+    device.send(summaryMessage(u(1)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('trace'), findsOneWidget);
+    expect(find.text('no trace'), findsNothing);
+
+    await tester.tap(find.textContaining('Rep ${uuidShort(u(1))}'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PlotScreen), findsOneWidget);
+
+    await ble.close();
+  });
+
+  testWidgets('a rep whose trace never came says so', (tester) async {
+    final (_, device, ble) = await connected(tester);
+
+    device.send(summaryMessage(u(2)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('no trace'), findsOneWidget);
+    expect(find.text('trace'), findsNothing);
+
+    await ble.close();
+  });
 }
 
 void _bleWiring() {

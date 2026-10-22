@@ -13,6 +13,7 @@ class StoredRep {
     required this.offset,
     required this.length,
     this.receivedAt,
+    this.hasTrace = false,
   });
 
   final pb.RepSummary summary;
@@ -20,6 +21,13 @@ class StoredRep {
   final int offset;
   final int length;
   final DateTime? receivedAt;
+
+  /// Whether the app stored the trace with the rep.
+  ///
+  /// A rep that has none was archived anyway — the summary is the part the device can
+  /// always give — so this is what tells a fetched trace from a fetch that failed (see
+  /// `archiveRep`).
+  final bool hasTrace;
 
   /// Set: `scanBlocks` refuses a summary whose uuid does not parse.
   String get uuid => summary.uuid!;
@@ -57,6 +65,7 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
   var pos = 0;
   int? blockStart;
   var blockLength = 0;
+  var blockHasTrace = false;
   (String, pb.RepSummary)? pending;
 
   while (pos + 4 <= bytes.length) {
@@ -91,13 +100,16 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
             offset: blockStart!,
             length: blockLength,
             receivedAt: receivedAt[pending.$1],
+            hasTrace: blockHasTrace,
           ),
         );
       }
       pending = (uuid, record.summary);
       blockStart = pos;
       blockLength = 0;
+      blockHasTrace = false;
     }
+    if (record.hasTrace()) blockHasTrace = true;
     blockLength += 4 + length;
     pos = start + length;
   }
@@ -113,6 +125,7 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
       offset: blockStart!,
       length: blockLength,
       receivedAt: receivedAt[pending.$1],
+      hasTrace: blockHasTrace,
     ),
   );
   return BlockScan(reps, truncated, bytes.length);
