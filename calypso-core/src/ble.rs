@@ -6,8 +6,8 @@
 //! host-tested ([`build_advertising`], `tests/advertising.rs`): a mistake in
 //! them is a device that is invisible on air with nothing to say for itself, and
 //! a *client* may have cached the old bytes under the same address, which makes a
-//! corrected firmware look unchanged (the address is bumped in `main.rs` for
-//! exactly that reason).
+//! corrected firmware look unchanged (the address is the key such a cache lives
+//! under: `main.rs` puts the schema's hash in it).
 
 use trouble_host::prelude::*;
 

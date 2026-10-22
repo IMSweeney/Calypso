@@ -338,16 +338,41 @@ call is dropped.
 
 ### CoreBluetooth caches the GATT database per address
 
-**Symptom.** A corrected firmware still looks unchanged from the Mac.
+**Symptom.** A corrected firmware still looks unchanged from the Mac — and, once the
+cached tree is stale in a way the client's own checks miss, the connection fails with
+an error that names nothing:
 
-**Cause.** CoreBluetooth caches a peripheral's services and characteristics keyed
-to its **Bluetooth address**, and `universal_ble` prefers that cache to asking
-again. Reflashing does not change the address.
+```
+UniversalBleException: Code: UniversalBleErrorCode.unknownError,
+  Message: The attribute could not be found., Details: 10
+```
 
-**Fix.** The firmware bumps its random address whenever the GATT layout changes
-(see where the address is set in `main.rs`), and the app's error message names
-both this cause and the stale-firmware one. Turning Bluetooth off and on clears
-the cache.
+**Cause.** CoreBluetooth keeps a peripheral's services and characteristics keyed to
+its **Bluetooth address**, and the plugin prefers that cache to asking again
+(`UniversalBleAsyncServiceDiscovery`: `if let cachedServices = peripheral.services`).
+Reflashing does not change the address, so a client keeps the tree it had — and
+`setNotifiable` then resolves the characteristic *out of that tree*
+(`peripheral.getCharacteristic(…)`) and writes the CCCD at the handle *it* has. That
+handle is in another build's table, so the device answers ATT 0x0A, Attribute Not
+Found; `universal_ble` maps a platform code that is not one of the names it knows to
+`unknownError` and puts the raw code in `details`, which is why `Details: 10` is the
+only part of that message that says anything. It is the ATT error, from the device.
+
+On the device side the same connection looks healthy — `BLE connection established`,
+and a subscription that never lands, because what was subscribed to was a handle this
+table does not have.
+
+**Fix.** The firmware's address carries two bytes of `SCHEMA_HASH`, so a build whose
+table changed is a device no client has cached, and the rule needs nobody to remember
+it. It was a literal before — *bump the address when the layout changes* — and it was
+missed twice with the address unchanged: `01edf64` removed the gravity service and
+`ca23`, `bee5c1e` turned the two characteristics into a pipe. What the hash cannot see
+(the generator's own emission, which `gatt-gen/N` covers when it is bumped) still
+wants a hand.
+
+Two other levers, for when it happens anyway: turning Bluetooth off and on clears the
+cache, and the app refuses a tree whose sync service carries a characteristic the
+schema does not declare rather than subscribing on somebody else's handles.
 
 ### Diagnostic that actually found these
 
