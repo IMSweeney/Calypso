@@ -74,9 +74,13 @@ A few figures are printed for exactly this purpose, and they are the first thing
 
 - `Radio up, heap free N B`, `Rep detector ready, heap free N B`,
   `Sync buffers ready, heap free N B` — how much heap is left at each stage.
-- `Stack in use before the tasks: N B` — `main`'s frame.
-- `BLE connection established (stack N B)` — depth inside the GATT task.
-- the 1 Hz sampler line, which carries `stack N B` beside the heap figure.
+- `Stack before the tasks: N B used of M B, K B at the deepest` — the linker
+  stack, which is whatever the DRAM region has left over. The third figure is the
+  high-water mark since boot, read back from a pattern `main` paints the unused
+  stack with, so it is the number to compare against the total.
+- `BLE connection established (stack N B used of M B, K B at the deepest)` — the
+  same three figures, deeper in the GATT task.
+- the 1 Hz sampler line, which carries the same three beside the heap figure.
 
 [`docs/GOTCHAS.md`](../docs/GOTCHAS.md) says what the numbers should be and what
 each failure mode looks like.

@@ -76,6 +76,16 @@ Where Calypso is and what is left. Feature documentation lives in
   is read-only, and the NVS name blob and its codec are gone. The gravity service and
   characteristic went the same way (the level verdict in the firmware log is now its
   only reader).
+- **The stack's figures are named and measured** — the boot log's
+  `Stack in use before the tasks: 39594 B` was *headroom*, not use: `Reset` sets the
+  stack pointer to `_stack_start` at the top of the 128 KB RWDATA region and the
+  stack grows down, so 3,130 B were in use of 42,724 B. The line now carries all
+  three figures (used, total, and the deepest since boot, read back from a pattern
+  `main` paints the unused stack with before any task can be switched to), and the
+  DRAM the stack competes with is written down: a 64 KB static heap region is 74% of
+  it, and the frames to watch are `esp-storage`'s 4,144-byte sector buffer — on every
+  flash read — the ~2.2 KB `SyncMessage` temporaries, and release's 4,688-byte
+  `Join3::poll`. See [docs/GOTCHAS.md](docs/GOTCHAS.md).
 
 ## Open
 
@@ -240,15 +250,18 @@ device's typed request decode with it.
       the flash partition layer first, then the radio path.
 - [ ] Tune the detector's thresholds against real reps (`calypso-core/src/rep.rs`);
       they are currently fitted to synthetic motion.
-- [ ] **The stack is a landmine.** Every flash read allocates `esp-storage`'s
-      4096-byte `FlashSectorBuffer` on the stack, and the linker stack is shared with
-      the BLE task and interrupts at `Stack in use before the tasks: 39594 B` out of
-      ~42 KB. It works, but a few KB of headroom is all there is; the numbers to watch
-      are in [docs/GOTCHAS.md](docs/GOTCHAS.md).
 - [ ] Dependency hygiene: `esp-radio` is built with `coex` and `wifi`, and
       `smoltcp`/`embassy-net` are declared, while the firmware deliberately does
       not initialise Wi-Fi. Decide whether to trim the features or to document
       why they stay.
+- [ ] **Trim the static heap region if the deepest stack figure ever asks for it.**
+      `heap_allocator!(size: 64 * 1024)` is what the linker stack competes with most
+      (74% of the DRAM below it), the 98,768 B reclaimed region is registered first
+      and filled first, and the boot log has ~22 KB of it free once the sync buffers
+      are built — so the surplus is stack the linker cannot use. Each byte trimmed
+      moves one-for-one into the stack and comes off the heap's margin under a
+      connection, so the change wants the connection-time `heap free` in hand. See
+      [docs/GOTCHAS.md](docs/GOTCHAS.md).
 
 ### Client
 - [ ] **A rep archived without its trace stays traceless for ever.** The trace fetch

@@ -90,15 +90,64 @@ overwrite, and the sector erase is why one region per sector was ever the layout
 
 ## Stack and heap
 
-### `main`'s stack is a remainder, and it is invisible to clippy
+### The linker stack is a remainder, and the log line measured the wrong end of it
 
-**Cause.** `main` runs on the linker's stack, which is not a sized buffer:
-`_stack_end` is wherever the RWDATA sections ended, so **every static and every
-heap region carved out of DRAM makes it smaller.** It was 22,532 bytes; removing
-the Wi-Fi init made it 41,932 — the same change, twice the stack. It has to hold
-`main`'s frame, every `join3` poll, and interrupt contexts.
+**Symptom.** `Stack in use before the tasks: 39594 B` out of ~42 KB reads as a
+device about to run out of stack, and the roadmap read it that way. It was
+**headroom**, not use. The two are swapped by measuring from the wrong end: `Reset`
+loads `_stack_start` into `a1` (esp-hal's `ld/sections/stack.x` puts `_stack_start`
+at the *end* of the RWDATA region) and the stack grows down, so a stack pointer's
+distance to `_stack_end` is the space left below it. In use on that build, at that
+moment: 3,130 B.
 
-**Two consequences.**
+**Cause.** The stack is not a sized buffer. `dram_seg` is 128 KB here
+(`0x3ffc0000..0x3ffe0000`); `.data` and `.bss` are placed from the bottom and
+`_stack_start` is pinned to the region's end, so **every static and every heap
+region carved out of DRAM makes the stack smaller** — it is whatever is left over.
+Removing the Wi-Fi init *grew* it from 22,532 to 41,932 bytes, which is the same
+fact seen from the other side. It has to hold `main`'s frame, every poll chain
+under it, and the interrupt that switched to this task.
+
+Where the 128 KB goes in the debug build — 88,348 B below the stack, 42,724 B of
+stack:
+
+| Bytes | |
+|---|---|
+| 65,536 | the firmware's own **static heap region** (`heap_allocator!(size: 64 * 1024)` in `main`) |
+| 14,552 | `.data` + `.data.wifi`: trouble-host's packet pool (4,036), esp-phy tables (1,944), esp-rtos' scheduler (1,408), esp-hal (2,100), xtensa-lx-rt (492) |
+| 4,000 | radio/BTDM/PHY statics (`vflash_mem` 2,048, esp-radio, esp-phy) |
+| 3,872 | the embassy task `POOL` — where `main`'s future lives, so it is *not* on the stack |
+| 516 | the generated GATT value buffers (246 B each) |
+
+The first row is 74% of everything the stack competes with, and it is the only
+one that gives back stack one-for-one: the reclaimed DRAM region (98,768 B, at
+`0x3ffe7e30`) is outside `dram_seg` and costs the stack nothing, and regions are
+filled first-fit in the order `main` registers them, so the surplus at the top of
+the static 64 KB is exactly what the stack does not get.
+
+**The frames, which is what to watch** (debug / release):
+
+| Frame | |
+|---|---|
+| 4,144–4,160 | `esp-storage`'s 4096-byte `FlashSectorBuffer` — **on every flash read, write and erase**; in release LTO inlines it into `flashlog`'s `read_blocks` (4,256 there) |
+| ~2,200 | the `SyncMessage` the pipe and `pb` build by value (`chunk_message`, `encode_summary`, `Session::send_*`, `keep_sending`) |
+| 896 / 4,688 | `Join3::poll` — release has all three poll bodies inlined into it |
+| 1,312 / 2,000 | `TaskStorage::poll`, i.e. `main`'s own poll |
+| 1,712 | `CalypsoGatt::new_with_config`, at boot only |
+| ~1,700 | the largest radio/BTDM/PHY interrupt frames, on whatever stack they interrupt |
+
+So the deepest path is a poll chain plus one of those — ~10–15 KB in release
+against 44 KB — and nothing allocates stack dynamically. **The number to watch is
+the deepest figure in the log line**, and it is measured rather than calculated:
+`main` paints everything below its stack pointer with `0xA5` before
+`esp_rtos::start`, and `stack_deepest()` scans up from the painted floor for the
+lowest byte anything has written since. Two limits: the bottom 256 bytes are never
+painted or scanned (the `stack-protector` guard is 60 bytes above `_stack_end`,
+and a stack that got in there would have written it first), and the paint has to
+happen before a task can be switched to inside an interrupt, since the interrupted
+context's frame outlives the paint that wrote over it.
+
+**Two consequences of the remainder.**
 
 - `main` carries `#[allow(clippy::large_stack_frames)]`, even though the crate
   denies that lint at a 1 KB threshold. Anything large in `main` needs a human
@@ -107,32 +156,49 @@ the Wi-Fi init made it 41,932 — the same change, twice the stack. It has to ho
   value is large stack. Every big buffer here is allocated through `AllocVec` +
   `Box::leak`; `SampleRing` borrows its buffer for the same reason.
 
-Check frames without hardware by reading the `entry a1, N` immediate out of the
-ELF (N × 8 bytes):
+### Reading a frame size out of the ELF
+
+The `entry a1, N` prologue is a function's stack use (N × 8 bytes), but on this
+toolchain `objdump -d` prints **hex only for `.text`**: GNU objcopy/objdump
+2.47.20260726 with esp-16.2.0 decodes `.rwtext` and the vectors, and nothing at all
+in the 294 KB IROM section. A grep over the listing therefore covers the interrupt
+handlers and misses every Rust function, including the 4,144-byte one above —
+which is how "the largest frame is 240 units" survived so long.
+
+Disassemble the section as a binary instead, which does work:
 
 ```console
-xtensa-esp32-elf-objdump -d target/xtensa-esp32-none-elf/debug/calypso \
-  | grep -oE 'entry\s+a1, [0-9]+' | awk '{print $3}' | sort -n | tail
+xtensa-esp32-elf-objcopy -O binary --only-section=.text \
+  target/xtensa-esp32-none-elf/debug/calypso /tmp/text.bin
+xtensa-esp32-elf-objdump -b binary -m xtensa -D \
+  --adjust-vma=0x400d0020 /tmp/text.bin | less
 ```
 
-At the time of writing the largest frame is 240 units (1920 bytes) and nothing
-allocates stack dynamically, so no single function is the problem.
+`0x400d0020` is `irom_seg`'s origin in esp-hal's `ld/esp32/memory.x`, and it is
+where every address in the dump maps back to. The `entry` immediate decodes by
+hand if a script is easier: three bytes `36 b1 b2` with `b0`'s low nibble `6` and
+`b1`'s low nibble `1`, and frame = `(((b2 << 4) | (b1 >> 4)) & 0xfff) * 8`.
 
 ### `Detected a write to the stack guard value`
 
 That is a stack overflow, and by the time it prints, the task is dead. The boot
-log's `stack N B` figures say where. Note the radio's own tasks have small heap
-stacks too, so it is not always the main one. If a figure approaches ~20 KB, move
-a buffer to the heap — there is no stack to grow into.
+log's stack figures say where, and by then the deepest one is the interesting one:
+a guard hit means the deepest figure had been climbing towards the total for a
+while. Note the radio's own tasks have small heap stacks too, so it is not always
+the main one. If the deepest figure approaches the total, move a buffer to the
+heap — or give the stack back some DRAM, which is one constant (see the entry
+above).
 
 The probes, in boot order:
 
-- `Radio up, heap free N B`, then the setup lines, then `Stack in use before the
-  tasks: N B` — `main`'s frame, measured just before `join3` starts.
-- `BLE connection established (stack N B)` — depth inside the GATT task.
-- the sampler line, which carries `stack N B` beside the heap figure. It prints
-  when the IMU's state changes, and otherwise once a minute: the 1 Hz version said
-  the same six numbers 3,600 times an hour and buried everything else.
+- `Radio up, heap free N B`, then the setup lines, then `Stack before the tasks:
+  N B used of M B, K B at the deepest` — just before `join3` starts.
+- `BLE connection established (stack N B used of M B, K B at the deepest)` —
+  depth inside the GATT task.
+- the sampler line, which carries the same three stack figures beside the heap
+  one. It prints when the IMU's state changes, and otherwise once a minute: the
+  1 Hz version said the same six numbers 3,600 times an hour and buried everything
+  else.
 
 ### A log that just stops is usually the heap
 
@@ -424,11 +490,12 @@ the generated ones, because they are what the *maths* runs on rather than what t
   the wire's quantized ints. A rep's trace is up to 512 points.
 
 What makes this more than tidiness: **a decoded message is ~2 KB** — a full trace chunk
-is stored inline in a `TraceSample` list — and the device's stack is the documented
-landmine above. That is why `pb::decode_record_into` reuses a caller-owned buffer, why
-the summary batch lives on the heap, and why `stream_trace` carries the firmware's only
-`large_stack_frames` exemption. Holding decoded messages in the sampling path would
-move kilobytes onto a stack that has none to spare.
+is stored inline in a `TraceSample` list — and a frame that size is real stack on a
+linker stack that is only a remainder (see the entry above). That is why
+`pb::decode_record_into` reuses a caller-owned buffer, why the summary batch lives on
+the heap, and why `stream_trace` carries the firmware's only `large_stack_frames`
+exemption. Holding decoded messages in the sampling path would put kilobytes of
+composed futures into every poll of it.
 
 Everything else is the generated type, on the device too: `compute_rep` returns a
 `msg::RepSummary` (the caller fills in the uuid it minted and the `chunk_count` its
