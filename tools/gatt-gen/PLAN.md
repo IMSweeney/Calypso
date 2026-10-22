@@ -47,17 +47,18 @@ schema cannot say (scanning, reconnecting, reassembly, timeouts).
 
 - `tools/gatt-pipe` — the chunked transport of §7 (`src/lib.rs` was this crate's
   for a while, which made a code generator something a device would have to depend
-  on): the frame, a sender and a receiver that hold no buffers and no clock, and
-  17 tests that drive them against each other over a link which drops, corrupts,
+  on): the frame, a sender and a receiver that hold no buffers and no clock, and a
+  host suite that drives them against each other over a link which drops, corrupts,
   duplicates and stalls chunks.
 
-Still to do for the pipe to be usable: the generator emitting the per-pipe glue
-(§8.1's fixed-capacity buffers and the handles the runtime owns), the device-side
-embassy driver, the app's Dart mirror — driven from the same cases, so the two
-implementations cannot disagree — and a schema that declares a pipe. The config
-file of §5.2 and the schema-version characteristic of §9 (the hash itself is
-already generated) are also still open.
-Section 4 is the order; section 3 is what is still open.
+Landed since this review: the generator emits the per-pipe glue (§8.1's
+fixed-capacity buffers and the handles the runtime owns), `calypso-esp32` drives the
+pipe from write events and the connection's MTU, the app has its Dart mirror driven
+from the same cases (`tools/gatt-pipe/tests/vectors/pipe.txt`), and
+`proto/calypso_gatt.proto` declares a pipe. The hash is generated and carried as a
+stamp in the device's own address rather than as a §9 characteristic, and the §5.2
+config file is a set of generator flags instead. What is left is the bench session,
+which is `ROADMAP.md`'s item and not this crate's.
 
 Decided by the review's first round: this stack's property enforcement gap is
 accepted (no typed wrappers in v1 — a characteristic's declared properties are
@@ -161,7 +162,7 @@ default `QueueType.global` serialises every command, including write-without-res
 | E6 | 7.1: `seq` on data chunks and on ACKs | Two meanings in one field. Give ACKs their own `ack_seq`. Also: `pipe_msg_max` and `u8` seq imply `window < 128`, pipes must be `WRITE_NO_RSP` + `NOTIFY` only (INDICATE and write-with-response change the retry story), a pipe characteristic is never READ, and the receiver must tolerate a chunk that is pure ACK |
 | E7 | 6.4 rule 6: warn above 20 bytes; example sets `max_len: 32` on `Info` | The example trips its own rule. Decide the intent ("sized for a 23-byte MTU only if you promise one") and state it in the schema docs |
 | E8 | 5.3 example | The `pipe: "main"` pair with `READ` on `Info` and `PERM_ENCRYPTED` everywhere is a sketch, not a buildable schema today (E2, E7). Keep it as the doc example but mark it aspirational, or fix it |
-| E9 | — | Silent on the migration: under the pipe, one transfer carries one message, so `TraceChunk.total_chunks` (the app's only end-of-stream signal) and `trace_reassembly.dart`'s tolerant assembler are subsumed by pipe framing. Say so, because that is the win: it also removes the head-of-line `await` that `ROADMAP.md` blames for trace latency |
+| E9 | — | Silent on the migration: under the pipe, one transfer carries one message, so `TraceChunk.total_chunks` (the app's only end-of-stream signal) and `trace_reassembly.dart`'s tolerant assembler are subsumed by pipe framing, and the head-of-line `await` that `ROADMAP.md` blames for trace latency goes with it. **What shipped:** `total_chunks` stayed, because it delimits a *trace* (several `TraceChunk` messages) rather than a transfer, which is the only thing the pipe changed the travel of |
 | E10 | — | Silent on `is_subscribed`. `notify` returns `Ok` with nobody subscribed, which this project has already paid for. Generated code should expose the check the firmware currently hand-rolls |
 | E11 | — | Silent on the empty message: a transfer may carry an `Empty` (encoded length 0) or a message that encodes to 0 bytes. The chunker must not confuse "START carrying nothing" with an aborted transfer |
 | E12 | — | Silent on reconnects: CCCD state, a transfer in flight when the link drops, and the retry of a half-sent transfer. `gatt-pipe` needs an explicit reset |

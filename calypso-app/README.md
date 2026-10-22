@@ -29,7 +29,7 @@ the Mac; development against fixtures needs neither.
 ## Test
 
 ```sh
-flutter test                 # 106 tests, no device, no simulator
+flutter test                 # no device, no simulator
 flutter analyze              # expected clean
 ```
 
