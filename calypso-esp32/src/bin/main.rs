@@ -1161,6 +1161,10 @@ impl Sync<'_> {
             payload,
         } = self;
         let mtu = conn.raw().att_mtu() as usize;
+        // Frames of the *message* this call gets out (the reply is not one). A message
+        // wider than the window is sent in waves, and a wave that stops short is the
+        // thing to see when a transfer stalls (docs/GOTCHAS.md).
+        let mut frames = 0u32;
 
         loop {
             if payload.resize(pipe::FRAME_MAX, 0).is_err() {
@@ -1171,7 +1175,10 @@ impl Sync<'_> {
                 // the chunk it is about would otherwise go out ahead of it.
                 Some(len) => len,
                 None => match session.next_chunk(mtu, payload.as_mut_slice()) {
-                    Some(len) => len,
+                    Some(len) => {
+                        frames += 1;
+                        len
+                    }
                     None => break,
                 },
             };
@@ -1182,6 +1189,17 @@ impl Sync<'_> {
                 warn!("sync: notify failed");
                 return;
             }
+        }
+        // The wave that stopped short says so, because the alternative is an app
+        // waiting for frames that are sitting in this buffer.
+        if frames > 0 && session.awaiting_ack() {
+            info!(
+                "sync {}: {} frame(s) of a {} B message out, window full at {} — the rest goes when the acknowledgement lands",
+                session.kind().name(),
+                frames,
+                session.message_len(),
+                pipe::WINDOW,
+            );
         }
         payload.clear();
     }
@@ -1380,6 +1398,8 @@ async fn stream_trace(
         let t0_ms = trace.get(0).map(|p| p.t_ms).unwrap_or(0);
         (t0_ms, trace.len())
     };
+
+    log_trace(&rep_uuid, points);
 
     // A request for one chunk sends one chunk; a request for the trace sends all of
     // it. Which is a cursor position and a stop, not a different stream.
@@ -1796,6 +1816,19 @@ fn leak_session(
     points: &'static mut [TracePoint],
 ) -> &'static mut Session<'static> {
     Box::leak(Box::new(Session::new(outgoing, incoming, points)))
+}
+
+/// What a trace request turned into, in a frame of its own: the defmt formatting state
+/// is a local, and `stream_trace`'s frame is on the stack the BLE stack also runs on
+/// (`clippy::large_stack_frames`, which is denied here).
+#[inline(never)]
+fn log_trace(rep_uuid: &RepUuid, points: usize) {
+    info!(
+        "trace {}: {} points, {} chunks",
+        UuidShort(Some(rep_uuid)),
+        points,
+        calypso_core::pb::chunk_count_for(points),
+    );
 }
 
 /// Milliseconds since `start`, which is what the pipe's timeouts are measured in.

@@ -366,6 +366,17 @@ impl Sender {
         }
     }
 
+    /// Whether the message in flight stopped only because the window is full: there is
+    /// more of it to send, and the acknowledgement that makes room is what lets it out.
+    ///
+    /// This is the caller's cue to *flush the message again* rather than to start
+    /// anything new — a message wider than the window is sent in waves, and a send path
+    /// that only ever flushes a message when it starts one leaves the rest of the wave
+    /// in the buffer for ever (see `docs/GOTCHAS.md`).
+    pub fn awaiting_ack(&self) -> bool {
+        self.active && !self.end_sent && self.in_flight >= self.window
+    }
+
     pub fn window(&self) -> u8 {
         self.window
     }

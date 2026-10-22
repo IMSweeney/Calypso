@@ -457,6 +457,14 @@ fn a_message_wider_than_the_window_goes_in_waves() {
         assert!(!wave.is_empty(), "a wave that carries nothing is a stall");
         waves += 1;
         frames += wave.len();
+        // What the device's log line is built on: the wave stopped because the window is
+        // full and there is more of the message behind it.
+        if waves == 1 {
+            assert!(
+                session.awaiting_ack(),
+                "the first wave stops at the window, with the message unfinished"
+            );
+        }
         for frame in &wave {
             now += 10;
             phone.take(&mut session, frame, now);
@@ -467,6 +475,10 @@ fn a_message_wider_than_the_window_goes_in_waves() {
     assert!(
         frames > 8,
         "and more frames than the window holds: {frames}"
+    );
+    assert!(
+        !session.awaiting_ack(),
+        "and a message that is out is not waiting on the window"
     );
 }
 

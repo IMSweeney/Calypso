@@ -44,6 +44,10 @@ pub const MESSAGE_MAX: usize = pipe_sync::MESSAGE_MAX;
 /// reports before (or instead of) an exchange.
 pub const ATT_MTU_DEFAULT: usize = 23;
 
+/// Chunks a sender may have in flight before it waits for an acknowledgement: the
+/// schema's number (`tool/gen_gatt.sh --window`), which both ends are generated with.
+pub const WINDOW: u8 = pipe_sync::WINDOW;
+
 /// The ATT MTU a frame is sized from.
 ///
 /// The peer's, when it negotiated one — and **the characteristic's ceiling when it
@@ -208,6 +212,19 @@ impl<'a> Session<'a> {
     /// for an acknowledgement.
     pub fn is_idle(&self) -> bool {
         self.sender.is_idle()
+    }
+
+    /// The bytes of the message being sent, or zero when the pipe is free: for the log
+    /// line that says how wide a message is.
+    pub fn message_len(&self) -> usize {
+        self.outgoing_len
+    }
+
+    /// Whether what is in flight stopped because the window is full — the rest of a
+    /// message wider than the window, waiting for an acknowledgement
+    /// ([`gatt_pipe::Sender::awaiting_ack`]).
+    pub fn awaiting_ack(&self) -> bool {
+        self.sender.awaiting_ack()
     }
 
     /// Whether a trace is being streamed (`next_trace_message` has more).
