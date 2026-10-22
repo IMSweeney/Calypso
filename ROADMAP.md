@@ -202,15 +202,19 @@ device's typed request decode with it.
       does the *device's* log show a `rep … stored` or `IMU calibration saved` beside a
       drop, and does it still drop running **without** `--features fake-reps` (i.e. with
       no periodic flash writes)?
-- [ ] **Trace latency is tens of seconds**, and it is head-of-line blocking: the
-      firmware's GATT loop `await`s the ATT response to a trace request, and that waits
-      behind the previous rep's ~150 trace notifications in the controller's queue. The
-      app tolerates it (its trace timeout is an *idle* timeout, 30 s of silence,
-      reset by every chunk) and logs which shape a failure was, but the latency is
-      real. The pipe is the lever — a request becomes a transfer, the response a
-      stream of transfers, and nothing waits behind a queue of three-point
-      notifications — and the *measurement* belongs to the migration's bench
-      session above, since the cause may not be the only one.
+- [ ] **Trace latency is tens of seconds**, and the cause is now visible in the two
+      logs rather than argued about: the link's ATT MTU is **23** — the unnegotiated
+      default — so a chunk is framed at 14 bytes of payload and one `TraceChunk` (~2 KB)
+      is ~150 notifications. The pipe carries one message at a time and, since
+      `6e28f16`, waits for an acknowledgement every 4 chunks, so ten chunks is ~375
+      round trips. Two questions, in order: **why is the MTU 23** when CoreBluetooth
+      reports a 512-byte write limit — an exchange that never reaches the host stack,
+      or one trouble-host does not apply to the connection (`att_mtu()` is what the
+      framing uses, and the firmware logs it at connect now)? And can a *peripheral*
+      do anything about it at all, the exchange being the client's to initiate?
+      Then the measurement belongs to the bench session above. (This replaces the old
+      note about head-of-line blocking behind the GATT loop's ATT response: the pipe
+      migration removed that path, and what is left has this cause instead.)
 - [ ] `universal_ble`'s own command queue throws an **unhandled** `TimeoutException`
       when a command is issued against a link that has already gone (our code logs its
       side as `trace …: request failed: TimeoutException`). Nothing the caller can

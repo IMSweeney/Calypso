@@ -499,6 +499,39 @@ budget restarts, and a whole-stream one would have given up on a healthy device.
 `chunkIdleTimeout` (700 ms) is what closes it — that is what ends a stream from firmware
 that never set `total_chunks`.
 
+### A window of 127 is not flow control
+
+**Symptom.** The device streams a trace and the app never moves: `sync trace chunk:
+unanswered after 7 attempts, dropped` on the device, and on the app
+`sync: no acknowledgement of the request (attempt 3 of 3)` for a request the device had
+already answered. The app *is* receiving messages — summaries arrive and are logged — so
+both ends look half-alive.
+
+**Cause.** The pipe's window is how many chunks a sender may have in flight, and the
+device took the 127 it was generated with as licence to put a whole message on the air
+without waiting for anything. At the MTU this link has — **23**, the ATT default, which
+is 14 bytes of payload in an 18-byte frame — a 2 KB trace chunk is ~150 notifications,
+and they left as one blast. The phone's writes queue behind that blast, including the
+acknowledgements the device was waiting for. Thirty-five seconds of retries later the
+device gave up on the chunk; the app's own request had timed out twice in the same
+window; and the archive sync that request belonged to stopped where it was. Summaries
+are *one* frame, which is why they kept arriving and made the app look healthy.
+
+**How to see it.** The app's log carries the frame size of everything the client
+received: `raw 0000ca21-… 18B 55 00 …` is an 18-byte frame, and 18 bytes means an MTU
+of 23 — a frame is what is left of the ATT payload after the pipe's own overhead.
+Nothing else said so: the app's `ATT MTU 515` is Apple's *write* limit, not the link's,
+and the firmware logged nothing at all about it. It logs `ATT MTU N` at connect now.
+
+**Fix.** `--window 8`: the sender stops after 8 chunks in flight and the receiver
+acknowledges every `window / 2`, so the acknowledgement *paces* the transfer instead of
+trailing behind it — which is the whole point of the mechanism, and what 127 defeated.
+
+**Corollary: a poll is traffic too.** The app's calibration read is once a second and
+invisible next to that blast, but six of them were completing in the same millisecond —
+queued behind the same congested link, in front of the writes the pipe was waiting on. A
+poll keeps one request in flight for that reason.
+
 ### An acknowledgement is also a request for the next message
 
 **Symptom.** One message repeats as fast as the link allows — about thirty a second on a

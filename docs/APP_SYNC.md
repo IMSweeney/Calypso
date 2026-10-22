@@ -61,12 +61,16 @@ buys, and what it costs:
   acknowledgement of their own: the count is the acknowledgement. A device that
   hears nothing gives up on a message after three attempts (`XFER_TIMEOUT_MS`
   apart), and the app does the same for a request.
-- **One message at a time.** A transfer is finished by its acknowledgement, so
-  neither end can start the next message until the one before it is done. The device
-  orders what it owes the app — the trace it asked for, then the summaries — and the app
-  sends one request at a time. (Nothing may be sent unconditionally here: the app
-  acknowledges every message, an acknowledgement is a write, and a write is where the
-  device asks itself what to send next — see `GOTCHAS.md`.)
+- **One message at a time, and at most eight chunks of it on the wire.** A transfer is
+  finished by its acknowledgement, so neither end can start the next message until the
+  one before it is done: the device orders what it owes the app — the trace it asked
+  for, then the summaries — and the app sends one request at a time. The *window* is the
+  flow control for the message itself: the sender stops at 8 chunks in flight and the
+  receiver acknowledges every `window / 2`, so a large message is paced by
+  acknowledgements rather than sent as a burst (`GOTCHAS.md` has what a window of 127
+  cost). (Nothing may be sent unconditionally here either: the app acknowledges every
+  message, an acknowledgement is a write, and a write is where the device asks itself
+  what to send next.)
 - **Chunks are sized from the link**, not assumed: the device reads its ATT MTU off
   the connection, and the app asks for one after connecting (`requestMtu`). Both
   clamp to the characteristic's own 244 bytes, so a phone that negotiates more than
