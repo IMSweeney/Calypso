@@ -483,12 +483,16 @@ async fn main(spawner: Spawner) -> ! {
                     Err(_) => continue,
                 };
                 info!("BLE connection established (stack {})", Stack);
-                // **The one number that decides how a message travels.** Every chunk
-                // is framed to fit the link, so a central that leaves the ATT default
-                // of 23 in place gets 14 bytes of payload per notification and a
-                // trace chunk arrives as ~150 of them (docs/GOTCHAS.md, "A window of
-                // 127 is not flow control").
-                info!("ATT MTU {}", conn.raw().att_mtu());
+                // What a message is cut into, on this link: the MTU the peer's stack
+                // reports, and the frame the framing will use given it. `23` is the
+                // spec default and what a central that never sends the exchange
+                // leaves behind — it is not the size of the notifications that follow
+                // (docs/GOTCHAS.md, "A window of 127 is not flow control").
+                info!(
+                    "ATT MTU {}: notifications up to {} bytes",
+                    conn.raw().att_mtu(),
+                    pipe::frame_ceiling(conn.raw().att_mtu() as usize)
+                );
                 // A read returns the last value published, so it is published before
                 // a client can ask for it.
                 publish_calibration(&gatt);

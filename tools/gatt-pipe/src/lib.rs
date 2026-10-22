@@ -74,11 +74,11 @@ pub mod flags {
 }
 
 /// `seq` and `flags`.
-const HEADER: usize = 2;
+pub const HEADER: usize = 2;
 /// CRC-16, little endian.
 const CRC: usize = 2;
 /// The ATT header a notification or a write costs: opcode plus a 2-byte handle.
-const ATT_HEADER: usize = 3;
+pub const ATT_HEADER: usize = 3;
 
 /// The largest window a wrapping `u8` sequence number can acknowledge
 /// unambiguously.

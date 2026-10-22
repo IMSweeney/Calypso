@@ -11,7 +11,9 @@
 //! stalls until it is given up on.
 
 use calypso_core::pb::{self, msg, TRACE_CHUNK_SAMPLES};
-use calypso_core::pipe::{Kind, Session, Stalled, FRAME_MAX, MESSAGE_MAX, XFER_TIMEOUT_MS};
+use calypso_core::pipe::{
+    Kind, Session, Stalled, ATT_MTU_DEFAULT, FRAME_MAX, MESSAGE_MAX, XFER_TIMEOUT_MS,
+};
 use calypso_core::rep::TracePoint;
 use calypso_core::sync::{self, SummaryCursor};
 use calypso_core::uuid::{fixture_uuid, RepUuid};
@@ -22,9 +24,9 @@ use micropb::MessageEncode;
 /// where the pipe's own buffer is the narrower of the two ceilings.
 const MTU: usize = 247;
 
-/// The smallest one, where the link is: 20 bytes of ATT payload, five of them the
-/// frame.
-const SMALL_MTU: usize = 23;
+/// A small one, negotiated: 41 bytes of ATT payload after the ATT header, five or six
+/// of them the frame. Not [`ATT_MTU_DEFAULT`], which is a link that never said.
+const SMALL_MTU: usize = 65;
 
 /// The heap the session's buffers sit in, as the firmware leaks them.
 struct Buffers {
@@ -67,6 +69,21 @@ fn rep_summary(index: u32) -> msg::RepSummary {
 
 fn summary(index: u32) -> msg::SyncMessage {
     sync::summary_message(rep_summary(index))
+}
+
+/// A whole trace chunk: the largest message the device sends, and the one whose frame
+/// count says what a link's MTU is worth.
+fn chunk() -> msg::SyncMessage {
+    let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES).map(point).collect();
+    msg::SyncMessage {
+        body: Some(msg::SyncMessage_::Body::Trace(pb::chunk_message(
+            fixture_uuid(1),
+            0,
+            0,
+            TRACE_CHUNK_SAMPLES as u32,
+            &points,
+        ))),
+    }
 }
 
 /// Everything waiting on the wire, taken to the app. Returns the reps whose
@@ -231,17 +248,24 @@ fn a_message_larger_than_a_chunk_travels_in_several() {
 fn a_small_mtu_is_more_chunks_of_the_same_message() {
     let mut buffers = Buffers::new(4);
     let mut session = buffers.session();
-    let message = summary(4);
-    assert!(session.send(Kind::Summary, &message));
+    let message = chunk();
 
-    let big = drain(&mut session, MTU).len();
+    // One *window* of chunks either way — the window is what a drain can take without
+    // an acknowledgement — so the comparison is of the bytes it carries, not of the
+    // frames a whole message needs (which the next test counts).
+    assert!(session.send(Kind::Trace, &message));
+    let big = drain(&mut session, MTU);
     session.reset();
-    assert!(session.send(Kind::Summary, &message));
-    let small = drain(&mut session, SMALL_MTU).len();
+    assert!(session.send(Kind::Trace, &message));
+    let small = drain(&mut session, SMALL_MTU);
 
+    assert_eq!(big.len(), small.len(), "one window of chunks either way");
+    let bytes = |frames: &[Vec<u8>]| frames.iter().map(|f| f.len()).sum::<usize>();
     assert!(
-        small > big,
-        "20 bytes of ATT payload per chunk against 244: {small} vs {big}"
+        bytes(&small) < bytes(&big),
+        "41 bytes of ATT payload per chunk against 244: {} vs {}",
+        bytes(&small),
+        bytes(&big)
     );
 }
 
@@ -272,6 +296,36 @@ fn the_send_path_stops_at_one_transfer_until_it_is_acknowledged() {
     }
     assert!(session.is_idle(), "and now the pipe is free");
     assert!(session.send(Kind::Trace, &summary(2)));
+}
+
+#[test]
+fn a_link_that_never_negotiated_is_framed_at_the_characteristic() {
+    let mut buffers = Buffers::new(TRACE_CHUNK_SAMPLES);
+    let mut session = buffers.session();
+    let message = chunk();
+
+    // 23 is the ATT default, and it is what a central that never sends the exchange
+    // leaves behind — macOS does not. It is not a peer that can only take 20 bytes:
+    // a frame of 20 is a trace chunk in ~150 notifications, which is what starved the
+    // link (docs/GOTCHAS.md).
+    assert!(session.send(Kind::Trace, &message));
+    let unattended = drain(&mut session, ATT_MTU_DEFAULT);
+    assert_eq!(
+        unattended[0].len(),
+        calypso_core::pipe::frame_ceiling(ATT_MTU_DEFAULT),
+        "the characteristic's ceiling, not the ATT default's"
+    );
+    assert!(unattended[0].len() > ATT_MTU_DEFAULT);
+
+    // A peer that asked for a small one gets frames that fit what it asked for.
+    session.reset();
+    assert!(session.send(Kind::Trace, &message));
+    let negotiated = drain(&mut session, SMALL_MTU);
+    assert_eq!(
+        negotiated[0].len(),
+        calypso_core::pipe::frame_ceiling(SMALL_MTU)
+    );
+    assert!(negotiated[0].len() < unattended[0].len());
 }
 
 #[test]

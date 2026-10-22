@@ -40,6 +40,35 @@ use gatt_pipe::{flags, Header, Received, Receiver, Send, Sender, MAX_ATTEMPTS};
 /// generated table asserts that `micropb`'s worst case for a `SyncMessage` fits it.
 pub const MESSAGE_MAX: usize = pipe_sync::MESSAGE_MAX;
 
+/// The ATT MTU when nobody exchanges one: the spec's default, and what a connection
+/// reports before (or instead of) an exchange.
+pub const ATT_MTU_DEFAULT: usize = 23;
+
+/// The ATT MTU a frame is sized from.
+///
+/// The peer's, when it negotiated one — and **the characteristic's ceiling when it
+/// did not**. `23` is the spec's default and what a central that never sends the
+/// exchange leaves behind; **macOS never sends one**, so framing to that number is 14
+/// bytes of payload per notification and ~150 notifications for one trace chunk
+/// (`docs/GOTCHAS.md`). A peer that has not said is not a peer that can only take 20
+/// bytes: this device notified 193-byte payloads to the same client for as long as
+/// traces have existed, and a frame that fits the characteristic is what both ends'
+/// buffers are already sized for. A peer that *did* negotiate gets what it asked for.
+pub fn frame_mtu(att_mtu: usize) -> usize {
+    if att_mtu <= ATT_MTU_DEFAULT {
+        CHUNK_MAX + gatt_pipe::ATT_HEADER
+    } else {
+        att_mtu
+    }
+}
+
+/// The largest frame a link whose ATT MTU is `att_mtu` will carry, which is what a
+/// message is cut into: the characteristic's ceiling, unless the peer negotiated
+/// something smaller than that.
+pub fn frame_ceiling(att_mtu: usize) -> usize {
+    CHUNK_MAX.min(frame_mtu(att_mtu) - gatt_pipe::ATT_HEADER)
+}
+
 /// Bytes of payload one chunk carries, before its frame: the characteristic's
 /// backing buffer, and therefore the most one write or notification holds.
 pub const CHUNK_MAX: usize = pipe_sync::CHUNK_MAX;
@@ -266,13 +295,13 @@ impl<'a> Session<'a> {
 
     /// The next chunk of the message in flight, written into `out` (which must
     /// hold [`FRAME_MAX`] bytes), or `None` when there is nothing to send — the
-    /// whole message is out, or the window is full (it cannot be: the window is
-    /// wider than any message this device sends).
+    /// whole message is out, or the window is full.
     ///
-    /// `mtu` is the negotiated ATT MTU, read from the connection: the chunk is
-    /// clamped to it, so the notification fits the link as well as the buffer.
+    /// `mtu` is the ATT MTU the connection reports, and [`frame_mtu`] is what to do
+    /// with it: a peer that never negotiated is framed at the characteristic rather
+    /// than at the spec's default.
     pub fn next_chunk(&mut self, mtu: usize, out: &mut [u8]) -> Option<usize> {
-        let capacity = gatt_pipe::capacity(mtu, CHUNK_MAX, self.outgoing_len as u32)?;
+        let capacity = gatt_pipe::capacity(frame_mtu(mtu), CHUNK_MAX, self.outgoing_len as u32)?;
         match self
             .sender
             .next(&self.outgoing[..self.outgoing_len], capacity, out)
