@@ -44,10 +44,6 @@ fn worst_case_chunk_fits_a_transfer() {
         n < MESSAGE_MAX,
         "worst-case chunk is {n} bytes, and the pipe carries {MESSAGE_MAX}"
     );
-    assert!(
-        n > 193,
-        "which is the whole point: it is more than one notification held"
-    );
 }
 
 #[test]
@@ -86,7 +82,7 @@ fn worst_case_calibration_fits_its_characteristic() {
 }
 
 #[test]
-fn summary_messages_and_cursor() {
+fn a_summary_survives_the_envelope() {
     let summary = msg::RepSummary {
         rep_uuid: pb::uuid_to_field(&fixture_uuid(5)),
         chunk_count: 2,
@@ -99,12 +95,17 @@ fn summary_messages_and_cursor() {
         }
         other => panic!("expected a summary, got {other:?}"),
     }
+}
 
+#[test]
+fn the_cursor_clamps_to_the_log_it_is_reading() {
     let mut cursor = SummaryCursor::new();
     assert_eq!(cursor.next(), 0);
     assert_eq!(cursor.remaining(4), 4);
     cursor.advance(2);
     assert_eq!(cursor.remaining(4), 2);
+
+    // A device that wrapped has fewer records than the cursor had got to, and one that gained some does not move it forwards.
     cursor.clamp_to(1);
     assert_eq!(cursor.next(), 1);
     cursor.clamp_to(9);

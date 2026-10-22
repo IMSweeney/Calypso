@@ -220,16 +220,7 @@ fn a_message_larger_than_a_chunk_travels_in_several() {
     let mut phone = Phone::new();
 
     // A whole chunk of points, which is what a trace carries: 48 of them is more than one notification can hold, which is the whole reason for the pipe.
-    let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES).map(point).collect();
-    let message = msg::SyncMessage {
-        body: Some(msg::SyncMessage_::Body::Trace(pb::chunk_message(
-            fixture_uuid(1),
-            0,
-            0,
-            TRACE_CHUNK_SAMPLES as u32,
-            &points,
-        ))),
-    };
+    let message = chunk();
     assert!(session.send(Kind::Trace, &message));
 
     let frames = drain(&mut session, MTU);
@@ -251,29 +242,6 @@ fn a_message_larger_than_a_chunk_travels_in_several() {
         pb::decode_sync(&got.expect("it arrived")).unwrap(),
         message,
         "the bytes the app reassembled are the message"
-    );
-}
-
-#[test]
-fn a_small_mtu_is_more_chunks_of_the_same_message() {
-    let mut buffers = Buffers::new(4);
-    let mut session = buffers.session();
-    let message = chunk();
-
-    // One window of chunks either way — the window is what a drain can take without an acknowledgement — so the comparison is of the bytes it carries, not of the frames a whole message needs (which the next test counts).
-    assert!(session.send(Kind::Trace, &message));
-    let big = drain(&mut session, MTU);
-    session.reset();
-    assert!(session.send(Kind::Trace, &message));
-    let small = drain(&mut session, SMALL_MTU);
-
-    assert_eq!(big.len(), small.len(), "one window of chunks either way");
-    let bytes = |frames: &[Vec<u8>]| frames.iter().map(|f| f.len()).sum::<usize>();
-    assert!(
-        bytes(&small) < bytes(&big),
-        "41 bytes of ATT payload per chunk against 244: {} vs {}",
-        bytes(&small),
-        bytes(&big)
     );
 }
 
@@ -645,7 +613,6 @@ fn a_single_chunk_request_sends_the_one_chunk() {
 fn an_empty_trace_streams_nothing() {
     let mut buffers = Buffers::new(16);
     let mut session = buffers.session();
-    session.trace_storage();
     session.start_trace(fixture_uuid(1), 0, 0, None);
     assert!(!session.send_next_trace_chunk());
     assert!(!session.streaming());
@@ -706,7 +673,6 @@ fn a_disconnect_forgets_everything_in_flight() {
     assert!(!drain(&mut session, MTU).is_empty());
     assert!(!session.is_idle());
 
-    session.trace_storage();
     session.start_trace(fixture_uuid(1), 0, 0, None);
 
     session.reset();

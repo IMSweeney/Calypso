@@ -5,7 +5,7 @@ use calypso_core::store::RECORD_BUF_BYTES;
 use calypso_core::uuid::fixture_uuid;
 
 #[test]
-fn squash_set_is_detected_and_traced() {
+fn squat_set_is_detected_and_traced() {
     let (samples, spans) = squat_set(3, 1500, 800, 0.4);
     assert_eq!(spans.len(), 3);
 

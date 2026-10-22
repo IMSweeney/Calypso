@@ -165,29 +165,29 @@ fn summary_and_chunks_share_the_rep_uuid() {
     summary.rep_uuid = calypso_core::pb::uuid_to_field(&want);
     store::append_rep(&mut log, &mut buf, &mut summary, trace).unwrap();
 
-    let short = String::from_utf8_lossy(&calypso_core::uuid::short(&want)).to_string();
-    let mut kinds = Vec::new();
-    log.for_each(
-        &mut buf,
-        |_, payload| match calypso_core::pb::decode_record(payload).unwrap() {
-            calypso_core::pb::Record::Summary(s) => {
-                kinds.push(format!("summary:{short}:chunks={}", s.chunk_count));
-            }
-            calypso_core::pb::Record::Trace(t) => {
-                kinds.push(format!("trace:{short}:{}", t.index));
-            }
-        },
-    )
+    let mut records = Vec::new();
+    log.for_each(&mut buf, |_, payload| {
+        records.push(calypso_core::pb::decode_record(payload).unwrap())
+    })
     .unwrap();
 
     let expected_chunks = calypso_core::pb::chunk_count_for(trace.len());
-    assert_eq!(kinds.len(), 1 + expected_chunks as usize);
-    assert_eq!(
-        kinds[0],
-        format!("summary:{short}:chunks={expected_chunks}")
-    );
-    for i in 0..expected_chunks {
-        assert_eq!(kinds[1 + i as usize], format!("trace:{short}:{i}"));
+    assert_eq!(records.len(), 1 + expected_chunks as usize);
+    match &records[0] {
+        calypso_core::pb::Record::Summary(s) => {
+            assert_eq!(calypso_core::pb::summary_uuid(s), Some(want));
+            assert_eq!(s.chunk_count, expected_chunks);
+        }
+        other => panic!("the rep starts with its summary, not {other:?}"),
+    }
+    for (i, record) in records[1..].iter().enumerate() {
+        match record {
+            calypso_core::pb::Record::Trace(t) => {
+                assert_eq!(calypso_core::pb::chunk_uuid(t), Some(want), "chunk {i}");
+                assert_eq!(t.index, i as u32, "chunks are stored in index order");
+            }
+            other => panic!("expected a trace chunk, got {other:?}"),
+        }
     }
 }
 

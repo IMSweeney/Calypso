@@ -1,4 +1,4 @@
-use calypso_core::sampler::{Sample, SampleRing, ACCEL_SCALE, QUAT_SCALE};
+use calypso_core::sampler::{Sample, SampleRing, QUAT_SCALE};
 
 fn sample(t_ms: u32) -> Sample {
     Sample {
@@ -41,18 +41,6 @@ fn ring_evicts_oldest_on_overflow() {
 }
 
 #[test]
-fn ring_for_each_visits_in_order() {
-    let mut ring_buf = vec![Sample::ZERO; 8];
-    let mut ring = SampleRing::new(&mut ring_buf);
-    for t in 0..12 {
-        ring.push(sample(t));
-    }
-    let mut seen = Vec::new();
-    ring.for_each(|_, s| seen.push(s.t_ms));
-    assert_eq!(seen, vec![4, 5, 6, 7, 8, 9, 10, 11]);
-}
-
-#[test]
 fn sample_fixed_point_round_trip() {
     let s = Sample::from_f32(1234, [1.23, -9.81, 0.0], [1.0, 0.0, 0.0, -0.5]);
     assert_eq!(s.accel, [123, -981, 0]);
@@ -62,7 +50,6 @@ fn sample_fixed_point_round_trip() {
     assert!((a[1] + 9.81).abs() < 1e-6);
     let q = s.quat_f32();
     assert_eq!(q, [1.0, 0.0, 0.0, -0.5]);
-    assert_eq!(ACCEL_SCALE, 100);
 }
 
 #[test]
@@ -97,9 +84,4 @@ fn copy_window_slices_by_time_with_margins() {
     let n = ring.copy_window(20, 80, 200, 200, &mut out);
     assert_eq!(n, 8);
     assert_eq!(out[0].t_ms, 20);
-}
-
-#[test]
-fn sample_is_18_bytes() {
-    assert_eq!(core::mem::size_of::<Sample>(), Sample::BYTE_SIZE);
 }

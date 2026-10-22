@@ -21,8 +21,6 @@ pub struct Sample {
 }
 
 impl Sample {
-    pub const BYTE_SIZE: usize = 20;
-
     pub const ZERO: Sample = Sample {
         t_ms: 0,
         accel: [0; 3],
