@@ -1,6 +1,6 @@
 # Partition table for Calypso firmware (4MB flash).
 # nvs / phy_init keep their default offsets so existing stored data
-# (BLE device name, BNO055 calibration) survives the repartition.
+# (the BNO055 calibration) survives the repartition.
 # Name,     Type, SubType,  Offset,    Size
 nvs,        data, nvs,      0x9000,    0x6000
 phy_init,   data, phy,      0xf000,    0x1000

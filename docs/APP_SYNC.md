@@ -1,10 +1,11 @@
 # App sync
 
-How the app gets reps from the device: the BLE interface, the sync
-protocol, and the archive the client keeps.
+How the app gets reps from the device: the BLE interface, the sync protocol, and
+the archive the client keeps.
 
-The client is the **archive of record**. The device's log is a ring that erases
-its oldest sectors, so the app keeps everything it has ever synced; the device is a buffer between sessions.
+The client is the **archive of record**. The device's log is a ring that erases its
+oldest sectors, so the app keeps everything it has ever synced; the device is a
+buffer between sessions.
 
 ## The device's BLE interface
 
@@ -19,22 +20,18 @@ Service `0000ca20-b0cd-11ec-871f-d45ddf138840` — advertised, so a scan can fil
 **One characteristic each way, and that is the design.** The body of the message
 says what it is — a `summary` or a `trace` chunk — so nothing here distinguishes a
 response from a push, and a new kind of message is a new arm of the oneof rather
-than a new characteristic, a new UUID and a new subscription.
+than a new characteristic, a new UUID and a new subscription. The acknowledgements
+travel on the characteristic they are *not* about, which is what lets two carry
+both directions.
 
-The third is the exception that says what the rule is about: calibration is a
-**state**, not a message about something happening, so it is a characteristic the app
-reads when its own UI wants the levels instead of a body pushed at the device's choice
-of moment. On the pipe it could only be pushed — and a push had to be sent whenever it
-might have changed, which on a link that carries one message at a time meant it
-competed with the summaries (and once meant it was sent for ever: see
-[`GOTCHAS.md`](GOTCHAS.md), "An acknowledgement is also a request for the next
-message"). The app reads it once while connecting and then once a second, and nothing
-the device does depends on that cadence.
+Calibration is the exception, and says what the rule is about: a level is a
+**state**, not a message about something happening, so it is a value the app reads
+when its UI wants it rather than a body pushed at the device's choice of moment.
+See [`CALIBRATION.md`](CALIBRATION.md) for what the levels mean.
 
-They were three characteristics once: summaries, trace chunks and a bare
-`TraceRequest` each had their own. Collapsing them removed the asymmetry between the
-two directions, the two subscriptions the app had to make, and a CCCD-slot count
-that could be got wrong in silence (`docs/GOTCHAS.md`).
+GAP is the other service: `0x2A00` (the device name) and `0x2A01` (the appearance),
+both **read only**. The name is a compile-time constant in the firmware. The
+advertisement carries the flags, the service UUID and the local name.
 
 ### The pipe
 
@@ -49,75 +46,52 @@ against the same cases in `tools/gatt-pipe/tests/vectors/pipe.txt`. The frame:
 ```
 
 `START` and `END` say where a chunk is in a message; `ACK` and `NAK` are the
-acknowledgements, and they travel on the *other* characteristic from the data they
-are about, which is why both directions can share two characteristics. What the pipe
-buys, and what it costs:
+acknowledgements. What the pipe buys, and what it costs:
 
 - **A trace chunk is one transfer, not three points a notification.** A whole
   `TraceChunk` (48 samples, ~2 KB) crosses as a few notifications, and
   `total_chunks` still tells the app when it has the whole trace — that delimits a
   *trace*, not a transfer.
-- **Nothing is lost quietly.** Writes have no response, and notifications have no
-  acknowledgement of their own: the count is the acknowledgement. A device that
-  hears nothing gives up on a message after three attempts (`XFER_TIMEOUT_MS`
-  apart), and the app gives up on a request on the *same* clock — the schema's
-  `--xfer-timeout`, which both ends are generated with, because a shorter budget
-  re-sends a request into work that is still happening (`GOTCHAS.md`).
-- **One message at a time, and at most eight chunks of it on the wire.** A transfer is
-  finished by its acknowledgement, so neither end can start the next message until the
-  one before it is done: the device orders what it owes the app — the trace it asked
-  for, then the summaries — and the app sends one request at a time. The *window* is the
-  flow control for the message itself: the sender stops at 8 chunks in flight and the
-  receiver acknowledges every `window / 2`, so a large message is paced by
-  acknowledgements rather than sent as a burst (`GOTCHAS.md` has what a window of 127
-  cost). (Nothing may be sent unconditionally here either: the app acknowledges every
-  message, an acknowledgement is a write, and a write is where the device asks itself
-  what to send next.)
+- **Nothing is lost quietly.** Writes have no response and notifications no
+  acknowledgement of their own, so the count is the acknowledgement. Either end
+  gives up on a message after three attempts spaced by the schema's
+  `--xfer-timeout` (5 s), which the device and the app are both generated with: a
+  shorter budget re-sends a request into work that is still happening.
+- **One message at a time, and at most eight chunks of it on the wire.** A transfer
+  is finished by its acknowledgement, so neither end starts the next message until
+  the one before it is done: the device orders what it owes the app — the trace it
+  asked for, then the summaries — and the app sends one request at a time. The
+  *window* is the flow control for the message itself: the sender stops at 8 chunks
+  in flight and the receiver acknowledges every `window / 2`, so a large message is
+  paced by acknowledgements rather than sent as a burst.
 - **Chunks are sized from the link, or from the characteristic when the link says
-  nothing.** The device reads the ATT MTU off the connection and frames each chunk to
-  fit it — but `23` is the spec's default and what a central reports when it never sent
-  the Exchange MTU Request (**macOS never does**), so a connection reporting 23 is
-  framed at the characteristic's 244 bytes instead: a peer that did not say is not a peer
-  that can only take 20. A peer that *did* negotiate something smaller gets frames that
-  fit it. The app asks its own stack for an MTU after connecting (`requestMtu`) and
-  clamps to the same ceiling, so neither end ever sends a frame bigger than the
-  characteristic holds.
-
-GAP is the other service: `0x2A00` (the device name) and `0x2A01` (the
-appearance), both **read only**. The name is a compile-time constant in the
-firmware — the app could rename the device once, which meant a writable
-characteristic and a name blob in NVS, and it does not any more.
-
-Calibration has a characteristic of its own (`0000ca24-…`), read by the app: the
-device's table holds the levels its 1 Hz poll of the chip last wrote, and a read
-returns them. See [`CALIBRATION.md`](CALIBRATION.md) for what the levels mean.
-
-The advertisement carries the flags, the **service UUID** and the local name (30
-of the 31 available bytes for `Calypso`).
+  nothing.** The device reads the ATT MTU off the connection and frames each chunk
+  to fit it — but `23` is the spec's default and what a central reports when it
+  never sent the Exchange MTU Request (macOS never does), so a connection reporting
+  23 is framed at the characteristic's 244 bytes instead. A peer that *did*
+  negotiate something smaller gets frames that fit it. The app asks its own stack
+  for an MTU after connecting (`requestMtu`) and clamps to the same ceiling, so
+  neither end ever sends a frame bigger than the characteristic holds.
 
 ## Transports
 
-Everything except the radio sits behind one interface, so the whole data path
-runs in `flutter test` and in the Simulator (which has no CoreBluetooth at all):
+Everything except the radio sits behind one interface, so the whole data path runs
+in `flutter test` and in the Simulator (which has no CoreBluetooth at all):
 
 ```dart
 abstract class RepTransport {
-  /// Summaries on the device, oldest first.
   Future<List<pb.RepSummary>> summaries();
-
-  /// Follow the device as new reps arrive.
   Stream<pb.RepSummary> watchSummaries();
-
-  /// One rep's trace, reassembled from chunks.
-  Future<List<pb.TraceSample>> trace(String repUuid);
+  Future<List<pb.TraceSample>> trace(String uuid);
+  Future<void> close();
 }
 ```
 
 The types are the generated ones throughout, down to the plot: the archive stores
-`RepRecord`s and the UI reads fields off the messages, so a field added to
-`proto/calypso.proto` reaches the screen without anyone remembering to copy it. What
-`lib/model/` holds is extensions that *derive* from the messages — physical units, tilt
-ranges, the calibration wording — see [`GOTCHAS.md`](GOTCHAS.md).
+records and the UI reads fields off the messages, so a field added to
+`proto/calypso.proto` reaches the screen without anyone remembering to copy it.
+What `lib/model/` holds is extensions that *derive* from the messages — physical
+units, tilt ranges, the calibration wording.
 
 ## Summary sync
 
@@ -132,17 +106,16 @@ Two paths, one destination: the archive.
   app is connected appears without another Connect. The subscription is not
   per-connection: the transport's stream outlives a link, and summaries arrive on it
   only while one is up.
-- **Incremental, on the device's side.** The device keeps a cursor
-  (`SummaryCursor`) of how far its subscriber has been brought up to date, so
-  re-subscribing sends only what is new, and it advances the cursor only for a
-  message the pipe took. Nothing goes out to a subscriber that is not there at all:
-  a transfer nobody acknowledges is abandoned after three attempts, so the firmware
-  checks the subscription itself (see [`GOTCHAS.md`](GOTCHAS.md)) rather than
-  inferring it from a notify that always reports success. What the batch does not
-  send this tick is still in the batch, and the cursor has not moved past it.
-- **Wrap-safe.** Old reps disappear from the device's ring but not from the
-  client's archive. The cursor is clamped to the log's actual count, so a device
-  that wrapped re-syncs from the oldest id it still has.
+- **Incremental, on the device's side.** The device keeps a cursor (`SummaryCursor`)
+  of how far its subscriber has been brought up to date, so re-subscribing sends
+  only what is new, and it advances the cursor only for a message the pipe took.
+  Nothing goes out to a subscriber that is not there: the firmware asks the server
+  whether the characteristic is subscribed rather than inferring it from a notify
+  that always reports success. What the batch does not send this tick is still in
+  the batch, and the cursor has not moved past it.
+- **Wrap-safe.** Old reps disappear from the device's ring but not from the client's
+  archive. The cursor is clamped to the log's actual count, so a device that wrapped
+  re-syncs from the oldest id it still has.
 - **Idempotent, at the log.** Both paths ask the archive what it holds and skip
   that, so a rep summarised twice — around a reconnect, say — is written once. The
   writes are chained, so the two paths cannot interleave on the same rep either.
@@ -154,36 +127,38 @@ holds no rep state of its own.
 
 ## Trace sync
 
-The app writes a `TraceRequest { rep_uuid, all_chunks, chunk_index }` (as a
-transfer of its own) and the device streams `TraceChunk` messages in response, one
-per transfer.
+The app writes a `TraceRequest { rep_uuid, all_chunks, chunk_index }` (as a transfer
+of its own) and the device streams `TraceChunk` messages in response, one per
+transfer.
 
 - **One transfer per stored chunk.** The log stores 48 points per record (sized to
   fit a flash sector) and each record is one message: it crosses as a few
-  notifications of at most 244 bytes, against the three points a notification the
-  device used to cut for Apple's ~185-byte MTU. How many notifications a message
-  takes is the pipe's business, not the client's.
+  notifications of at most 244 bytes. How many notifications a message takes is the
+  pipe's business, not the client's.
 - **End of stream.** Every streamed chunk carries `total_chunks`, the number of
   chunks in that stream, so the client knows which is the last. A streamed chunk is
-  a stored one now, so that number is also the summary's `chunk_count` — the field
+  a stored one now, so that number is also the summary's `chunk_count`; the field
   stays because a *stream* is what the client is reassembling, and a record in the
   log leaves it 0.
-- **Reassembly is tolerant.** `TraceAssembler` keys chunks by index, so
-  out-of-order arrival works, a repeated index replaces the earlier one, and chunks for another rep are ignored. `missingIndices()` reports gaps so a single chunk can be re-requested.
+- **Reassembly is tolerant.** `TraceAssembler` keys chunks by index, so out-of-order
+  arrival works, a repeated index replaces the earlier one, and chunks for another
+  rep are ignored. `missingIndices()` reports gaps so a single chunk can be
+  re-requested.
 
 ## The archive
 
 `HistoryStore` is the client's copy of everything synced, and **the only source of
 truth for what the app shows**:
 
-- Records live in `history.pblog` — the same `[u32 LE length][RepRecord]` framing
-  as fixtures and captures, so history, a fixture and a dumped log are one format ([`FIXTURES.md`](FIXTURES.md)).
+- Records live in `history.pblog` — the same `[u32 LE length][record]` framing as
+  fixtures and captures, so history, a fixture and a dumped log are one format
+  ([`FIXTURES.md`](FIXTURES.md)).
 - **What exists is read out of the log**: `contains(uuid)`, the list, its order and
   each rep's trace all come from the records. Nothing else can make a rep exist, and
   nothing else can stop one existing — which is also what makes re-syncing a no-op
   rather than a second copy of a rep.
-- Client receipt times live in a small `received.json` beside it, because the
-  device has no RTC: its timestamps are uptime milliseconds and are meaningless across reboots.
-  **Decoration, never truth** — losing it costs the list its timestamps (a rep with
-  no time shows `—`) and nothing else, and entries for reps the log does not hold
-  are dropped when it is loaded.
+- Client receipt times live in a small `received.json` beside it, because the device
+  has no RTC: its timestamps are uptime milliseconds and are meaningless across
+  reboots. **Decoration, never truth** — losing it costs the list its timestamps (a
+  rep with no time shows `—`) and nothing else, and entries for reps the log does
+  not hold are dropped when it is loaded.

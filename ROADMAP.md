@@ -6,86 +6,33 @@ Where Calypso is and what is left. Feature documentation lives in
 ## Done
 
 - **Sampling and rep detection** — 100 Hz IMU sampling, RAM ring, rep detector,
-  ZUPT-anchored trace + summary stats. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
+  ZUPT-anchored trace and summary stats. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
 - **Per-rep storage** — a flash log ring holds each rep's summary and trace, and
   survives power loss. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
-- **IMU calibration routine** — the device stays up and usable while
-  uncalibrated, the app explains what to do, and recording is gated. See
+- **IMU calibration routine** — the device stays up and usable while uncalibrated,
+  the app explains what to do, and recording is gated. See
   [docs/CALIBRATION.md](docs/CALIBRATION.md).
 - **BLE sync** — summaries auto-stream to a subscriber, traces stream on request,
   per-rep UUIDs identify reps across reboots. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
-- **Client app** — sync, archive, rep list, 3D bar-path plot, calibration hint,
-  BLE transport, all testable without hardware.
-- **Save calibration between power cycles** — a 22-byte BNO055 profile in NVS.
-- **Flash log reads that survive the driver's alignment rule** — `flashlog` read
-  records by their length, and `esp-storage`'s `ReadNorFlash::read` refuses a length
-  that is not a multiple of `READ_SIZE`, quietly enough that reps stored fine and
-  could then never be read back (which broke both mounts and every trace). Reads are
-  whole 64-byte blocks now and the test mock enforces `READ_SIZE = 4` as the driver
-  does. See [docs/GOTCHAS.md](docs/GOTCHAS.md).
-- **The notify characteristic carries a chunk** — sized to `sync::SYNC_CHUNK_MAX`
-  rather than a summary's 128 bytes, which is why traces stopped part-way with
-  nothing said at either end. Every message the device sends shares it now, and all
-  three are bounded against it by a size test.
-- **Flash failures name themselves** — a boot or store failure carries the operation
-  (phase), the sector and, where the driver lets us, the real `FlashStorageError`,
-  plus a raw probe of the failing sector. Two sessions went on "flash read/write
-  error" before this. See [docs/GOTCHAS.md](docs/GOTCHAS.md).
-- **Every BLE message is logged** — to a rotating file, at the plugin seam (`raw`) and
-  at the transport (`rx`/`tx`), with one line per session step, so a session can be
-  read back without a console. See [calypso-app/README.md](calypso-app/README.md).
-- **The app's archive is the only source of truth** — the UI is served from the log,
-  the receipt times beside it are decoration that cannot make a rep exist, and live
-  summaries are written to it as they arrive.
-- **Bench mode** — `cargo run --features fake-reps` stores a synthetic rep every 10 s,
-  exercising the whole device -> log -> BLE -> app path without lifting. See
+- **A chunked pipe over one characteristic each way** — messages larger than one
+  value are framed, chunked and reassembled by both ends, so a stored trace chunk
+  is one transfer rather than three points per notification. Written and tested on
+  both ends; no bench session yet (see Open).
+- **A generated BLE interface** — `proto/calypso_gatt.proto` declares the service
+  and its characteristics; `gatt-gen` writes the device's table
+  (`calypso-core/src/gatt.rs`) and the app's typed client
+  (`calypso-app/lib/gatt/gatt_client.dart`), both committed, with
+  `calypso-core/tests/gatt_generated.rs` failing if either drifts from the schema.
+  **Not yet checked on hardware.**
+- **Client app** — sync, the archive of record, rep list, 3D bar-path plot,
+  calibration hint, BLE transport, all testable without hardware.
+- **Bench mode** — `cargo run --features fake-reps` stores a synthetic rep every
+  10 s, exercising the whole device → log → BLE → app path without lifting. See
   [calypso-esp32/README.md](calypso-esp32/README.md).
-- **One characteristic each way** — the sync service carries a `SyncMessage` out on
-  `0000ca21` and a `SyncRequest` in on `0000ca22`, whatever the body, instead of a
-  characteristic per message kind. The interface can now grow — the next request is a
-  new arm of a oneof, not a new UUID — and the app subscribes once. It also removed
-  the asymmetry between the two directions and the CCCD count that could be got wrong
-  in silence. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
-- **The GATT table is generated from the proto** — the sync service is declared in
-  `proto/calypso_gatt.proto` (a service is a GATT service, an rpc a characteristic;
-  the messages stay in `proto/calypso.proto`), and `gatt-gen` turns it into
-  `calypso-core/src/gatt.rs`: the table, the value types, the property set, the UUIDs
-  and the decoded write. The hand-built table, its `GATT_TABLE_MAX` /
-  `NOTIFIABLE_CHARACTERISTICS` pair and the per-message sizes are gone — the schema
-  declares them and the attribute and CCCD counts are summed at compile time.
-  Generated by hand and committed (`calypso-core/tool/gen_gatt.sh`), so the firmware
-  build needs no generator or protoc at all, with `tests/gatt_generated.rs` failing if
-  the committed file and the schema drift apart. `gatt-gen` is its own crate
-  (`tools/gatt-gen`) so anything else that speaks proto-defined BLE can use it; see
-  its `PLAN.md` for what was verified against `trouble-host` and what it cannot do.
-  **Not yet checked on hardware**, and the app still speaks the same three UUIDs by
-  hand. The chunked pipe those two characteristics will carry is written and
-  tested — `tools/gatt-pipe`, the app's mirror of it, and the generator's glue for
-  a schema that declares one — but nothing uses it yet: see the migration under
-  Open.
-- **The app's BLE client is generated from the same schema** — `SyncClient` in
-  `calypso-app/lib/gatt/gatt_client.dart` carries the service and characteristic
-  UUIDs, subscribes, and decodes and encodes the two messages, all from
-  `proto/calypso_gatt.proto` by way of `calypso-app/tool/gen_gatt.sh` (committed,
-  like the table, with `calypso-core/tests/gatt_generated.rs` checking both). It
-  reaches the radio through a four-method interface it declares itself, which the
-  app implements over `BleLink` and the tests implement as a fake — so the
-  generated client is exercised without hardware. `BleTransport` keeps what a
-  schema cannot say: scanning, connecting, trace reassembly and its timeouts.
-- **A device name that cannot be written** — the name is a compile-time constant, GAP
-  is read-only, and the NVS name blob and its codec are gone. The gravity service and
-  characteristic went the same way (the level verdict in the firmware log is now its
-  only reader).
-- **The stack's figures are named and measured** — the boot log's
-  `Stack in use before the tasks: 39594 B` was *headroom*, not use: `Reset` sets the
-  stack pointer to `_stack_start` at the top of the 128 KB RWDATA region and the
-  stack grows down, so 3,130 B were in use of 42,724 B. The line now carries all
-  three figures (used, total, and the deepest since boot, read back from a pattern
-  `main` paints the unused stack with before any task can be switched to), and the
-  DRAM the stack competes with is written down: a 64 KB static heap region is 74% of
-  it, and the frames to watch are `esp-storage`'s 4,144-byte sector buffer — on every
-  flash read — the ~2.2 KB `SyncMessage` temporaries, and release's 4,688-byte
-  `Join3::poll`. See [docs/GOTCHAS.md](docs/GOTCHAS.md).
+- **Diagnostics that can be read back** — the app logs every BLE message to a
+  rotating file, and the firmware's boot log carries the heap and stack figures.
+  See [calypso-app/README.md](calypso-app/README.md) and
+  [docs/GOTCHAS.md](docs/GOTCHAS.md).
 
 ## Open
 
@@ -93,203 +40,118 @@ Where Calypso is and what is left. Feature documentation lives in
 
 - [ ] **Decide what "calibrated" means, because `accel == 3` is not reliable.**
       The BNO055's accelerometer status wanders while the device sits still: a
-      hardware log reads `acc:3 → acc:1 → acc:0 → acc:0 → acc:1 → acc:3` over ~100 s,
-      with the stored profile applied and verified byte-for-byte at boot. Rep
-      recording is gated on `Calibration::is_ready()` (`accel == 3 && gyro == 3`), so
-      it paused and resumed on its own through that window — every dip is a rep not
-      recorded, with no explanation on screen. The options, roughly in order of
-      preference:
+      hardware log reads `acc:3 → acc:1 → acc:0 → acc:0 → acc:1 → acc:3` over
+      ~100 s, with the stored profile applied and verified byte-for-byte at boot.
+      Rep recording is gated on `accel == 3 && gyro == 3`, so it paused and
+      resumed on its own through that window — every dip is a rep not recorded,
+      with no explanation on screen. The options, roughly in order of preference:
 
-      1. gate on the gyroscope only (it is the one that is stable, and whose drift is
-         what fabricates motion);
-      2. treat a profile that read back byte-for-byte as good enough, and accept
-         `accel < 3` — the offsets are what correct drift, the flag is the chip's
-         opinion of them;
+      1. gate on the gyroscope only (it is the stable one, and its drift is what
+         fabricates motion);
+      2. treat a profile that read back byte-for-byte as good enough and accept
+         `accel < 3`;
       3. keep `accel == 3` and accept that a still device stops recording at random.
 
-      Whichever it is, the app's hint and `docs/CALIBRATION.md` both state the rule, so
-      they change with it.
-- [ ] **The accelerometer's calibration does not come back from NVS** in a way the
-      chip reports as calibrated: `load_calibration` applies the profile and the
-      read-back matches, yet `acc` reads 0 afterwards (the gyroscope returns to 3 on
-      its own, from stillness). Needs a bench answer before the gate is changed: is it
-      the saved profile, or does the chip simply not derive `ACC` from a restore?
-- [ ] Confirm on hardware that the profile really does survive a power cycle, given
-      the above.
+      The app's hint and [docs/CALIBRATION.md](docs/CALIBRATION.md) both state the
+      rule, so they change with it.
+- [ ] **Settle whether the saved calibration is what the chip wants.** Applying
+      the profile reads back byte-for-byte, yet `acc` reads 0 afterwards while
+      `gyro` returns to 3 on its own, so either the profile is not the thing the
+      chip derives `ACC` from or the restore is not complete. `accel < 3` is
+      harmless if the gate stops depending on it (above).
 
 ### Sync over the pipe
 
-The device and the app exchange one message per characteristic value today, which
-is why traces are re-chunked to three points a notification and why the app
-reassembles them by index with `total_chunks` as its only end-of-stream signal.
-The chunked pipe is written and tested — `tools/gatt-pipe` for the protocol, its
-mirror in `calypso-app/lib/gatt/pipe.dart`, and the generator's glue for a schema
-that declares one — and it is unused. Moving Calypso onto it is one change rather
-than five: the schema edit makes both generated files different, and takes the
-device's typed request decode with it.
-
-- [x] **The schema.** `pipe: "sync"` on `Requests` and `Messages`, `max_len` gone
-      (a pipe sizes transfers, not values), and `pipe_msg_max` sized for a whole
-      `TraceChunk` rather than for a third of one. That number is the point: one
-      notification then carries a chunk instead of a third of one, so
-      `sync::BLE_CHUNK_SAMPLES` and the trace streamer that used it go away.
-      `TraceChunk.total_chunks` and the app's `TraceAssembler` **stay**: they
-      delimit a *trace* (several `TraceChunk` messages), not a transfer, and the
-      pipe only changes how each message travels. **This is where the "size chunks
-      to the negotiated MTU" item went** — sizing the pipe's chunks from the MTU
-      is what that item was reaching for, and its ~12 points per notification was
-      never reachable by reading the MTU alone, because the budget behind the old
-      ceiling was a 64-byte worst-case point.
-
-      Two things the first attempt at this turned up, both of which decide the
-      shape of the work:
-
-      - **The write flavour decides how the device sends.** A transfer larger than
-        the window cannot progress without an acknowledgement, and an
-        acknowledgement arrives as a *write event* on the other characteristic —
-        so a small window turns the firmware's send path from "build it and
-        notify it" into a queue pumped by the connection's event loop. At
-        `window = MAX_WINDOW` (127) no message this device sends can exceed the
-        window, so the send path stays a loop, at the price of the pipe's own
-        flow control: what bounds a burst is the link — `notify` awaits the packet
-        pool, and the app serialises its writes — and the acknowledgements only
-        report delivery.
-      - **The schema's `max_len` module disappears** when no characteristic is
-        single-shot, and so does `SYNC_CHUNK_MAX <= RECORD_BUF_BYTES`: the message
-        ceiling (the pipe's reassembly buffer) is larger than the flash record
-        buffer, which was never the relationship that mattered. What matters — that
-        `micropb`'s bound for `SyncMessage` fits the pipe — the generated table
-        already asserts at compile time.
-- [x] **The device session**, in `calypso-core`: the pipe's two ends over the
-      buffers, turning a write into a message and a message into notifications.
-      No embassy and no radio, so this half is host-testable like the rest of that
-      crate. It is `src/pipe.rs`, and `tests/pipe.rs` runs it against the app's own
-      half: a chunk lost, an acknowledgement swallowed, a transfer that stalls
-      until it is given up on, a trace whose chunk never arrived.
-- [x] **The device wiring**, in `calypso-esp32`: write events into the session,
-      chunks out as notifications, the MTU read from the connection rather than
-      assumed, and a tick for the timeouts. The queue a small window would have
-      needed is three lines of ordering instead (`keep_sending`), because at
-      `window = MAX_WINDOW` the pipe never fills: what gates a message now is the
-      *acknowledgement* of the one before it, not the window.
-- [x] **The app**, in `transport/`: writes as transfers, notifications reassembled
-      through `lib/gatt/pipe.dart`, and the trace path collapsed to "one transfer,
-      one `TraceChunk`". The request is a transfer too, and the app waits for the
-      device to acknowledge it (`xferTimeout`, three attempts) before it starts
-      counting the response: a write without a response reports nothing, so the
-      acknowledgement is the only evidence the request arrived. The ATT MTU is
-      asked for after connecting rather than assumed.
 - [ ] **A bench session** for what no host replaces: negotiation, subscription,
-      throughput, and whether the latency below is actually gone.
-- [x] `docs/APP_SYNC.md` describes the wire protocol, and moved with this: both
-      characteristics carry chunks and acknowledgements, and the trace section says
-      what one transfer is now.
+      throughput, and whether the trace latency below is actually gone.
 
 ### BLE link stability
 
-- [ ] **The link drops while idle, for no reason we can see.** Four drops in one
-      session, each preceded by nothing but the calibration message — still flowing
-      ~1.2 s before CoreBluetooth reported `The connection has timed out
-      unexpectedly`.
-
-      **The observation needs taking again**: that message was repeating at round-trip
-      rate rather than once a second — the acknowledgement of it was the trigger for the
-      next copy (`docs/GOTCHAS.md`, "An acknowledgement is also a request for the next
-      message") — so what the drops followed was a flood, and "idle" was not idle. The
-      levels are a **read** now, so the device pushes nothing while the app is idle: what
-      is left of that traffic is the app's own poll, a read a second, and the cadence is
-      the app's to change. Two experiments separate our flash traffic from the radio:
-      does the *device's* log show a `rep … stored` or `IMU calibration saved` beside a
-      drop, and does it still drop running **without** `--features fake-reps` (i.e. with
-      no periodic flash writes)?
-- [ ] **Trace latency: measure it now that the sizes are right.** Two causes were
-      found and fixed in one session (`6e28f16`, `919622c`) — a window of 127 that sent a
-      whole trace chunk as one blast, and framing from an ATT MTU of 23 (macOS never
-      sends the exchange) which made that chunk ~150 notifications of 14 bytes. A chunk
-      is now ~8 notifications of 244, paced by acknowledgements every 4 chunks, so a
-      ten-chunk trace should be ~80 notifications instead of ~1500. The bench session
-      above is where that gets measured; what to watch for is `sync … unanswered`
-      warnings (a dropped or too-large notification) and the app's `raw` line lengths.
-- [ ] `universal_ble`'s own command queue throws an **unhandled** `TimeoutException`
-      when a command is issued against a link that has already gone (our code logs its
-      side as `trace …: request failed: TimeoutException`). Nothing the caller can
-      catch; worth not making worse: don't issue commands on a link we know is down
-      (the `disconnect` in `_teardownConnection` is the remaining one).
-- [ ] Values that arrive **between a teardown and the next subscribe** are delivered by
-      the plugin and dropped by the transport: 507 of 2422 `raw` summary values in one
-      session. Harmless today (the summaries are re-streamed), but the `raw` line is
-      what makes it visible, and it is not obviously wrong to leave it. The pipe
-      changes the shape again — a dropped value is a *chunk* of a transfer, so it is
-      something the pipe notices and retries rather than a message that quietly never
-      arrives — which is one more reason to do the migration before tuning this.
+- [ ] **The link drops while idle.** Four drops in one session, each preceded by
+      nothing but the calibration message, ~1.2 s before CoreBluetooth reported
+      `The connection has timed out unexpectedly`. That message turned out to be
+      repeating at round-trip rate (see [docs/GOTCHAS.md](docs/GOTCHAS.md), "An
+      acknowledgement is also a request for the next message"), so the drops
+      actually followed a flood, and the levels are a read now — what is left is
+      the app's own poll, a read a second. Two experiments separate flash traffic
+      from the radio: does the device's log show a `rep … stored` beside a drop,
+      and does it still drop without `--features fake-reps`?
+- [ ] **Measure trace latency now that the sizes are right.** A window of 127 that
+      sent a whole trace chunk in one blast, and framing from an ATT MTU of 23
+      (macOS never sends the exchange), made a chunk ~150 notifications of 14
+      bytes. It is now ~8 notifications of 244, paced by acknowledgements every 4
+      chunks — a ten-chunk trace should be ~80 notifications instead of ~1500.
+      Watch for `sync … unanswered` warnings and the app's `raw` line lengths.
+- [ ] **`universal_ble` throws an unhandled `TimeoutException`** when a command is
+      issued against a link that has already gone (our code logs its side as
+      `trace …: request failed: TimeoutException`), and nothing the caller can
+      catch. Worth not making worse: do not issue commands on a link we know is
+      down.
+- [ ] **Values that arrive between a teardown and the next subscribe are dropped**
+      by the transport: 507 of 2422 `raw` summary values in one session. Harmless
+      today, because the summaries are re-streamed. The pipe changes the shape — a
+      dropped value becomes a chunk the pipe retries — which is one more reason to
+      do the bench session before tuning this.
 
 ### First real device capture
+
 - [ ] Run the app against the hardware and check in a capture as a fixture.
-      Hardware rep detection now works (a 4150 ms squat-shaped rep with 416 trace
-      points has been stored and read back), so this is about the *capture*, not the
-      plumbing: every fault found so far in the BLE pair was invisible from both ends
-      until two real devices described each other (see
-      [docs/GOTCHAS.md](docs/GOTCHAS.md)).
+      Hardware rep detection already works (a 4,150 ms squat-shaped rep with 416
+      trace points has been stored and read back), so what is missing is the
+      capture.
 - [ ] Settle **axis mapping** once a real squat exists: which of the device's
       world axes is "up"? Until then the plot draws the device frame as-is and
       labels axes generically.
-- [ ] Re-check that a stored rep's summary stats are sane on real motion. The bench
-      data is not: `mean_velocity` is the mean of the *raw* speed while
-      `peak_velocity` is the peak of the *detrended* one, so a mean above the peak is
-      a large DC component rather than a maths bug — worth either making the two
-      comparable or documenting the difference.
+- [ ] **Re-check the summary stats on real motion.** `mean_velocity` is the mean
+      of the *raw* speed while `peak_velocity` is the peak of the *detrended* one,
+      so a mean above the peak means a large DC component rather than a maths bug.
+      Either make the two comparable or document the difference.
 
-### BLE protocol
-- [ ] `SyncStatus` is defined in the proto and encodable in core, but the
-      firmware never sends it — so "this trace is no longer in the log" is
-      answered by the client timing out instead of by a message. Either wire it
-      up (`trace_unavailable`, rep counts) or drop it. **A request has no reply at
-      all**, which is the same gap seen from the other side: the app writes a
-      `SyncRequest` and, if the device will not serve it (not subscribed, rep
-      already gone, unknown request), the only thing that happens is a timeout —
-      the device logs it and says nothing. A reply that names what it answers
-      (a request id, or at least a status body) is what would close both.
+### Protocol gaps
+
+- [ ] **A request has no reply.** `SyncStatus` is defined and encodable in core,
+      but the firmware never sends it, so "this trace is no longer in the log" is
+      answered by the client timing out. A `SyncRequest` the device will not serve
+      (not subscribed, rep already gone, unknown request) is logged on the device
+      and silent to the app. Either reply with something that names what it
+      answers — a request id, or a status body — or drop `SyncStatus` and accept
+      the timeout.
+- [ ] **The firmware's own errors never reach the app.** A flash read that failed
+      mid-scan, an acknowledgement that did not go out, a trace that could not be
+      read back: each is a `warn!` in a log that is only on the wire if someone has
+      a serial console open, and the person who can act on it is holding the phone.
+      A reporting stream on the pipe — a `SyncMessage` body of its own, or the
+      `SyncStatus` above carrying a reason — would put them on screen.
 
 ### Firmware
-- [ ] **The firmware's own errors never reach the app.** Everything the device
-      cannot do — a flash read that failed mid-scan, an acknowledgement that did
-      not go out, a rep whose trace could not be read back — is a `warn!` in the
-      device's log, which is only on the wire if someone has a serial console
-      open. The failures that matter are exactly the ones the app should be able
-      to show, because the person holding the phone is the one who can act on
-      them. A reporting stream on the pipe — a `SyncMessage` body of its own, or
-      the `SyncStatus` above wired up to carry a reason — is what would put them
-      where they can be seen.
+
 - [ ] **OTA code updates** — the app partition is 1.5 MB with headroom; dual
       slots would mean shrinking the log partition.
 - [ ] On-device tests with [`embedded-test`](https://crates.io/crates/embedded-test):
       the flash partition layer first, then the radio path.
 - [ ] Tune the detector's thresholds against real reps (`calypso-core/src/rep.rs`);
-      they are currently fitted to synthetic motion.
-- [ ] Dependency hygiene: `esp-radio` is built with `coex` and `wifi`, and
+      they are fitted to synthetic motion.
+- [ ] **Dependency hygiene** — `esp-radio` is built with `coex` and `wifi`, and
       `smoltcp`/`embassy-net` are declared, while the firmware deliberately does
-      not initialise Wi-Fi. Decide whether to trim the features or to document
-      why they stay.
+      not initialise Wi-Fi. Trim the features or document why they stay.
 - [ ] **Trim the static heap region if the deepest stack figure ever asks for it.**
-      `heap_allocator!(size: 64 * 1024)` is what the linker stack competes with most
-      (74% of the DRAM below it), the 98,768 B reclaimed region is registered first
-      and filled first, and the boot log has ~22 KB of it free once the sync buffers
-      are built — so the surplus is stack the linker cannot use. Each byte trimmed
-      moves one-for-one into the stack and comes off the heap's margin under a
+      The 64 KB `heap_allocator!` region is what the linker stack competes with
+      most, and its surplus is stack the linker cannot use. Each byte trimmed moves
+      one-for-one into the stack and comes off the heap's margin under a
       connection, so the change wants the connection-time `heap free` in hand. See
       [docs/GOTCHAS.md](docs/GOTCHAS.md).
 
 ### Client
-- [ ] **A rep archived without its trace stays traceless for ever.** The trace fetch
-      failing (a dropped link, say) archives the summary anyway — right, it is real
-      data — but `contains()` then reports that we hold it, so the next sync skips it.
-      Re-requesting traces for archived-but-traceless reps on each sync would turn a
-      transient drop into a retry.
+
+- [ ] **A rep archived without its trace stays traceless for ever.** The trace
+      fetch failing (a dropped link, say) archives the summary anyway — right, it
+      is real data — but `contains()` then reports that we hold it, so the next
+      sync skips it. Re-requesting traces for archived-but-traceless reps on each
+      sync would turn a transient drop into a retry.
 - [ ] **Session grouping** — deliberately skipped for v1: the device log is
-      undifferentiated, and grouping reps into sets is a judgement better made
-      with real data on screen. The list is flat, newest first.
+      undifferentiated, and grouping reps into sets is a judgement better made with
+      real data on screen. The list is flat, newest first.
 - [ ] Fault detection / coaching hints on the traces (bar dip, forward lean).
-      The app plots today; the lifter interprets.
 - [ ] Real-device polish: reconnect UX, sync progress, permission prompts.
 - [ ] Install story: a free Apple ID gives 7-day builds; TestFlight and the App
       Store need a paid account.

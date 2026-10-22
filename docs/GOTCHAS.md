@@ -293,7 +293,7 @@ canonical text; in advertising data a 128-bit UUID goes on air least-significant
 byte first, so the same UUID must be *reversed* there. The firmware therefore
 stores **wire order in both places** and a client reverses both — `40 88 13 df …
 20 ca 00 00` is `0000ca20-b0cd-11ec-871f-d45ddf138840` to a client.
-The UUIDs are declared once, in text form, in `proto/calypso.proto`;
+The UUIDs are declared once, in text form, in `proto/calypso_gatt.proto`;
 `tools/gatt-gen`'s `uuid::to_wire_order` is the single place the reversal happens,
 and the generated `calypso_core::gatt::uuid` carries the wire bytes (for the GATT
 tree and for the advertisement, which wants the same array), the `Uuid` and the
@@ -322,7 +322,7 @@ four lines, with the device name at `&[CharacteristicProp::Read]` — because us
 the library's config would have made the table's tests unrunnable, which was worth
 more than those four lines.
 
-**Now.** The table is generated (`proto/calypso.proto` → `calypso_core::gatt`),
+**Now.** The table is generated (`proto/calypso_gatt.proto` → `calypso_core::gatt`),
 which uses `GapConfig` and `#[gatt_service]`, so this is the price rather than a
 choice: `tests/gatt.rs` is **one test** that builds the table once and runs its
 checks as functions, and nothing else in that process may build one.
@@ -738,5 +738,5 @@ reopened" has to `await tester.pumpWidget(const SizedBox.shrink())` first
 `trouble-host`'s table exposes a characteristic's value and type, not its properties, and
 `table.set` does not consult them either. So a host test cannot tell a read-only
 characteristic from a writable one: what keeps the declared properties honest is that
-they come from the schema (`proto/calypso.proto`), which the device and the app both
-generate from.
+they come from the schema (`proto/calypso_gatt.proto`), which the device and the app
+both generate from.

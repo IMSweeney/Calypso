@@ -3,7 +3,7 @@
 Chunked transfers over a pair of BLE GATT characteristics, for messages a single
 characteristic value cannot carry.
 
-The protocol is `SPEC.md` in `tools/gatt-gen`: a chunk is
+The protocol is [`tools/gatt-gen/SPEC.md`](../gatt-gen/SPEC.md) §7: a chunk is
 `| seq | flags | [total_len] | payload | crc16 |`, a transfer is one message, and
 the two ends acknowledge each other because notifications are not acknowledged by
 the link.

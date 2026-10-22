@@ -8,7 +8,7 @@ rather than a device that stays silent.
 
 - [`SPEC.md`](SPEC.md) — the design (handoff spec, revision 2).
 - [`PLAN.md`](PLAN.md) — the review of that spec against the pinned crates, the
-  decisions taken, and the order things are being built in.
+  decisions taken, what is still open, and the traps found on the way.
 
 ## Layout
 
@@ -64,29 +64,24 @@ mod gatt {
 }
 ```
 
-`examples/server` is the second shape, end to end. (Calypso does exactly this — see
-`calypso-core/tool/gen_gatt.sh` and `calypso-core/src/gatt.rs`. It also has
-`calypso-core/tests/gatt_generated.rs`, which fails if the committed file and the
-schema disagree.)
+`examples/server` is the second shape, end to end. Calypso does exactly this — see
+`calypso-core/tool/gen_gatt.sh` and `calypso-core/src/gatt.rs`, with
+`calypso-core/tests/gatt_generated.rs` failing if either end's committed file and
+the schema disagree.
 
-Because the output is committed, it is written **format-clean**, for the same
-reason: the file is an ordinary source file of the project that holds it, so the
-repo's own `cargo fmt --check` (Rust) and `dart format --set-exit-if-changed`
-(Dart) both cover it. Neither formatter skips a file that says `@generated` —
-that was measured, not assumed — so the emitters lay their output out the way the
-formatters leave it, rather than there being a formatting step in the generation
-path.
+Because the output is committed, it is written **format-clean**: the file is an
+ordinary source file of the project that holds it, so the repo's own `cargo fmt
+--check` (Rust) and `dart format --set-exit-if-changed` (Dart) both cover it.
+Neither formatter skips a file that says `@generated`.
 
 The Dart target talks to BLE through an interface it declares in its own output
 (`GattClientLink`), which the app implements over `universal_ble` and a test
-implements as a fake. That is what keeps a generated client testable without a
-radio; `universal_ble`'s static API is never called directly.
+implements as a fake. `universal_ble`'s static API is never called directly.
 
 A crate that takes the generated table needs `trouble-host` (with `gatt`),
 `micropb` (with a heapless container) and `heapless`, plus two the macros expand
 into: `static_cell` (each characteristic's storage) and `embassy-sync` (the
-attribute table's mutex). Found by compiling a generated table in a crate that
-had the first three.
+attribute table's mutex).
 
 The schema vocabulary ships with the crate: a consumer imports
 `gatt_options.proto` and the include path is added for it, so nothing has to be
@@ -108,14 +103,3 @@ std::fs::write(file.file_name, file.source)?;
 
 `cargo test` covers the schema half: one failing fixture per rule, the example
 schema parsed into the model it declares, and what `rust-trouble` emits.
-
-## Notes for whoever works on this next
-
-Two traps, both silent, both now covered by tests:
-
-- protoc has to be run with `--include_imports`, or `gatt_options.proto` is not
-  in the descriptor set, the extensions are not registered, and every option
-  decodes as empty.
-- Extension fields are **not** in `DynamicMessage::fields()`. An option that is
-  set looks like a message with no fields if it is read from there; the
-  extensions have to be read through `extensions()` or `get_extension()`.
