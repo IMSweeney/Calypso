@@ -37,7 +37,3 @@ libm = "0.2"
 # `tests/pipe.rs` drives the device's session against the pipe's own app-side
 # state machine, rather than against a radio.
 gatt-pipe = { path = "../tools/gatt-pipe" }
-# For `tests/gatt_generated.rs`, which regenerates the table in memory and
-# compares it with the committed `src/gatt.rs`. Published separately: this crate
-# consumes it, it does not own it.
-gatt-gen = { path = "../tools/gatt-gen" }

@@ -21,8 +21,8 @@ Where Calypso is and what is left. Feature documentation lives in
 - **A generated BLE interface** — `proto/calypso_gatt.proto` declares the service
   and its characteristics; `gatt-gen` writes the device's table
   (`calypso-core/src/gatt.rs`) and the app's typed client
-  (`calypso-app/lib/gatt/gatt_client.dart`), both committed, with
-  `calypso-core/tests/gatt_generated.rs` failing if either drifts from the schema.
+  (`calypso-app/lib/gatt/gatt_client.dart`), both committed and both naming the
+  command that regenerates them, since nothing checks them against the schema.
   **Not yet checked on hardware.**
 - **Client app** — sync, the archive of record, rep list, 3D bar-path plot,
   calibration hint, BLE transport, all testable without hardware.

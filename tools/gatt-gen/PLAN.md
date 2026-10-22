@@ -32,8 +32,9 @@ declares the sync service (separate from `proto/calypso.proto`, which holds the
 messages the app also generates from), `calypso-core/tool/gen_gatt.sh` runs
 `gatt-gen rust-trouble` to write `calypso-core/src/gatt.rs`, and the firmware builds
 that server (`calypso-esp32/src/bin/main.rs`). `calypso-core`'s host tests build the
-generated table and round-trip both messages through it, and
-`tests/gatt_generated.rs` fails if the committed table and the schema disagree.
+generated table and round-trip both messages through it. Nothing checks the
+committed files against the schema, so both `tool/gen_gatt.sh` scripts say in
+their own headers that they have to be re-run after a schema change.
 
 Checked-in output is the decision, not an accident: it keeps protoc and the tool
 out of the firmware build entirely, and it means a change to the interface is

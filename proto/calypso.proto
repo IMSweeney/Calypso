@@ -4,6 +4,7 @@
 // This file is the single source of truth for both sides. The device builds
 // Rust types from it with `micropb` (see `calypso-core/build.rs`); the app
 // generates its own classes from the same file.
+// The device's types are built from this file on every build, so they cannot go stale; the app's Dart classes are committed, so re-run `calypso-app/tool/gen_proto.sh` and commit them after changing this file.
 //
 // Fixed-point scales (see `calypso_core::sampler`):
 //   - accel: 0.01 m/s^2 per LSB (BNO055 native)

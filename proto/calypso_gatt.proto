@@ -7,6 +7,7 @@
 // format both sides encode, while this one is the device's table. The device
 // generates its attribute table from this file and the app its typed client, so
 // the UUIDs, the directions and the pipe's shape are declared once.
+// Both generated files are committed and nothing regenerates or checks them: run `calypso-core/tool/gen_gatt.sh` and `calypso-app/tool/gen_gatt.sh` after changing this file, and commit both results.
 
 syntax = "proto3";
 

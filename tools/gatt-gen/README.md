@@ -65,9 +65,11 @@ mod gatt {
 ```
 
 `examples/server` is the second shape, end to end. Calypso does exactly this — see
-`calypso-core/tool/gen_gatt.sh` and `calypso-core/src/gatt.rs`, with
-`calypso-core/tests/gatt_generated.rs` failing if either end's committed file and
-the schema disagree.
+`calypso-core/tool/gen_gatt.sh` and `calypso-core/src/gatt.rs`. Both of Calypso's
+generated files carry the command that regenerates them in their own header,
+because nothing else checks them: no build runs the generator, and a table left
+behind after a schema change is a device and an app disagreeing about the
+interface.
 
 Because the output is committed, it is written **format-clean**: the file is an
 ordinary source file of the project that holds it, so the repo's own `cargo fmt
