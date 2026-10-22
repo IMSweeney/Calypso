@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:calypso/gatt/gatt_client.dart';
 import 'package:calypso/gatt/pipe.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -20,6 +21,9 @@ void main() {
   }
 
   test('capacity keeps the frame inside the chunk buffer', () {
+    // Two files, one number: the runtime's default and the size the schema declares for the characteristic.
+    expect(defaultChunkMax, SyncPipe.chunkMax);
+
     // The same ceilings as the Rust reference: the link's, and the buffer's.
     expect(capacity(23, defaultChunkMax, 100), 15);
     expect(
