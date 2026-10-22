@@ -35,12 +35,8 @@ DumpReadResult readDump(Uint8List bytes) {
   return DumpReadResult(records, truncated: pos != bytes.length);
 }
 
-/// What a `SyncMessage` carries, for a log line: its body and what that body is
-/// about.
-///
-/// The bytes are logged at the plugin seam (`raw`), which is where "the value
-/// arrived at all" is answered. Above the seam this is the more useful half of
-/// the pair: what the transport actually handled, without re-reading hex.
+/// What a `SyncMessage` carries, for a log line: its body and what that body is about.
+/// The bytes themselves are logged at the plugin seam (`raw`), where "the value arrived at all" is answered; this is what the transport handled, without re-reading hex.
 String describeSyncMessage(SyncMessage message) {
   switch (message.whichBody()) {
     case SyncMessage_Body.summary:
@@ -57,10 +53,7 @@ String describeSyncMessage(SyncMessage message) {
 }
 
 /// What a calibration status says, for a log line.
-///
-/// The same words [`describeSyncMessage`] used when the levels rode a message body:
-/// they are a read now, and a log that says what arrived should not care which
-/// characteristic carried it.
+/// The same words [`describeSyncMessage`] used when the levels rode a message body: they are a read now, and a log should not care which characteristic carried them.
 String describeCalibrationStatus(CalibrationStatus status) =>
     'calibration sys=${status.sys} accel=${status.accel} '
     'gyro=${status.gyro} mag=${status.mag} ready=${status.ready}';
