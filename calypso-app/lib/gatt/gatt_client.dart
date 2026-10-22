@@ -38,10 +38,6 @@ abstract class GattClientLink {
 /// Subscribe before listening, and hold the stream only while the link is up:
 /// these are notifications, not a queue that survives a disconnect.
 class SyncClient {
-  SyncClient(this._link);
-
-  final GattClientLink _link;
-
   /// `calypso.Sync`.
   static const String serviceUuid = '0000ca20-b0cd-11ec-871f-d45ddf138840';
 

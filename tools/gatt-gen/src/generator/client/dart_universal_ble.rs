@@ -252,6 +252,16 @@ fn bare_helper(bare: Bare) -> Option<(usize, &'static str)> {
 /// One client class per service.
 fn emit_client(out: &mut String, service: &Service, config: &Config) {
     let class = format!("{}Client", pascal_case(service.short_name()));
+    // Only a characteristic outside a pipe has members, and only members need the
+    // link: a pipe's two halves are the runtime's (`lib/gatt/pipe.dart`), which
+    // talks to the link itself. A service of nothing but pipes is therefore a set
+    // of constants, with no field to hold — and a `_link` nobody reads is a
+    // warning in every app that runs the analyzer over generated code.
+    let members: Vec<&Characteristic> = service
+        .characteristics
+        .iter()
+        .filter(|characteristic| characteristic.pipe.is_none())
+        .collect();
     let _ = writeln!(
         out,
         "\n/// `{}`.\n\
@@ -259,13 +269,16 @@ fn emit_client(out: &mut String, service: &Service, config: &Config) {
          /// Subscribe before listening, and hold the stream only while the link is up:\n\
          /// these are notifications, not a queue that survives a disconnect.\n\
          class {class} {{\n\
-         \x20 {class}(this._link);\n\
-         \n\
-         \x20 final {LINK} _link;\n\
-         \n\
-         \x20 /// `{}`.\n\
+         {}\x20 /// `{}`.\n\
          \x20 static const String serviceUuid = '{}';",
-        service.proto_name, service.proto_name, service.uuid
+        service.proto_name,
+        if members.is_empty() {
+            String::new()
+        } else {
+            format!("\x20 {class}(this._link);\n\n\x20 final {LINK} _link;\n\n")
+        },
+        service.proto_name,
+        service.uuid
     );
 
     for characteristic in &service.characteristics {
@@ -284,10 +297,8 @@ fn emit_client(out: &mut String, service: &Service, config: &Config) {
         );
     }
 
-    for characteristic in &service.characteristics {
-        if characteristic.pipe.is_none() {
-            emit_members(out, characteristic, config);
-        }
+    for characteristic in members {
+        emit_members(out, characteristic, config);
     }
 
     out.push_str("}\n");
