@@ -1,20 +1,9 @@
 //! Dart for the app, over `universal_ble`.
 //!
-//! The generated file is a typed client for one schema: a class per proto
-//! service, with a method or a stream for each characteristic and only the
-//! properties the schema declares — `Stream<SyncMessage> get messagesUpdates` for
-//! a `NOTIFY` characteristic, `Future<void> writeRequests(SyncRequest)` for a
-//! written one, `Future<DeviceInfo> readInfo()` for a readable one.
+//! The generated file is a typed client for one schema: a class per proto service, with a method or a stream for each characteristic and only the properties the schema declares — `Stream<SyncMessage> get messagesUpdates` for a `NOTIFY` characteristic, `Future<void> writeRequests(SyncRequest)` for a written one, `Future<DeviceInfo> readInfo()` for a readable one.
 //!
-//! It reaches BLE through one narrow interface it declares itself
-//! (`GattClientLink` in the output), so an app implements it over `universal_ble`
-//! in a few lines and a test implements it without a radio. Everything above that
-//! interface — which UUID carries what, which way each message travels, how a bare
-//! value is encoded — comes from the schema.
-//!
-//! `universal_ble`'s own API is deliberately not called directly: a target is the
-//! schema plus a link, which is what keeps the generated client testable and the
-//! plugin swappable.
+//! It reaches BLE through one narrow interface it declares itself (`GattClientLink` in the output), so an app implements it over `universal_ble` in a few lines and a test implements it without a radio.
+//! Everything above that interface — which UUID carries what, which way each message travels, how a bare value is encoded — comes from the schema, and the plugin stays swappable because its API is never called directly.
 
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -429,13 +418,10 @@ fn encode_expression(characteristic: &Characteristic, _config: &Config, value: &
 /// `dart format`'s line length.
 const MAX_WIDTH: usize = 80;
 
-/// One class per pipe, holding what the pipe runtime reads: the pair of
-/// characteristics, the numbers it was configured with, and the two codecs.
+/// One class per pipe, holding what the pipe runtime reads: the pair of characteristics, the numbers it was configured with, and the two codecs.
 ///
-/// No members are generated for a pipe characteristic itself — a chunk is not a
-/// message, so a `Stream<SyncMessage>` over that characteristic would decode a
-/// fragment as a message. The runtime owns those two, and this is what it needs
-/// to: see `calypso-app/lib/gatt/pipe.dart` for the other half.
+/// No members are generated for a pipe characteristic itself: a chunk is not a message, so a `Stream<SyncMessage>` over that characteristic would decode a fragment as a message.
+/// The runtime owns those two, and `calypso-app/lib/gatt/pipe.dart` is the other half.
 fn emit_pipes(out: &mut String, gatt: &Gatt, config: &Config) {
     for pipe in gatt.pipes() {
         let class = format!("{}Pipe", pascal_case(pipe.name));
@@ -510,13 +496,10 @@ fn message_of(characteristic: &Characteristic, config: &Config) -> Option<String
     }
 }
 
-/// Encode and decode, per direction, so that the runtime never names a message
-/// class itself: a schema change then stops at the generated file.
+/// Encode and decode, per direction, so that the runtime never names a message class itself: a schema change then stops at the generated file.
 ///
-/// Each pair is a member of its own, laid out the way `dart format` leaves it: a
-/// blank line before it (the class's last constant is on the line above) and one
-/// between the pairs. Each direction gets a pair whether or not it carries a
-/// message — a bare-bytes end encodes to itself — so neither can be empty.
+/// Each pair is a member of its own, laid out the way `dart format` leaves it: a blank line before it and one between the pairs.
+/// Each direction gets a pair whether or not it carries a message — a bare-bytes end encodes to itself — so neither can be empty.
 fn dart_codecs(inbound: &Option<String>, outbound: &Option<String>, _config: &Config) -> String {
     let request = codec_pair("request", inbound.as_deref());
     let response = codec_pair("response", outbound.as_deref());

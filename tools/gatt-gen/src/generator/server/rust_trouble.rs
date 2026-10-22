@@ -1,20 +1,13 @@
-//! Rust for the device, over `trouble-host`: service declarations, the value
-//! types they store, and the typed decode of what a client wrote.
+//! Rust for the device, over `trouble-host`: service declarations, the value types they store, and the typed decode of what a client wrote.
 //!
-//! The generated code is deliberately thin. `trouble-host`'s `#[gatt_service]`
-//! macro already builds the attribute table and counts its attributes and CCCDs
-//! at compile time, so what is generated here is the declarations the schema
-//! implies and nothing else:
+//! The generated code is deliberately thin, because `#[gatt_service]` already builds the attribute table and counts attributes and CCCDs at compile time.
+//! What is generated is the declarations the schema implies and nothing else:
 //!
-//! - a value type per protobuf characteristic, implementing `AsGatt`/`FromGatt`
-//!   (bare values are already `u8`, `heapless::String<N>` and so on);
-//! - one `#[gatt_service]` struct per proto service, with the declared
-//!   properties on each characteristic and no others;
+//! - a value type per protobuf characteristic, implementing `AsGatt`/`FromGatt` (bare values are already `u8`, `heapless::String<N>` and so on);
+//! - one `#[gatt_service]` struct per proto service, with the declared properties on each characteristic and no others;
 //! - the `#[gatt_server]` struct, and the enum of decoded writes.
 //!
-//! Two things the attribute table cannot check are emitted as compile-time
-//! assertions instead: that a message's bounded encoding fits the characteristic
-//! it is stored in, and that a pipe's does not exceed `pipe_msg_max`.
+//! Two things the table cannot check are emitted as compile-time assertions: that a message's bounded encoding fits the characteristic it is stored in, and that a pipe's does not exceed `pipe_msg_max`.
 
 use std::fmt::Write;
 
@@ -567,14 +560,9 @@ fn emit_requests(out: &mut String, gatt: &Gatt, config: &Config) {
     out.push_str("        None\n    }\n}\n\n");
 }
 
-/// One module per pipe, holding what the pipe runtime reads: the sizes it was
-/// configured with, and the two message codecs.
+/// One module per pipe, holding what the pipe runtime reads: the sizes it was configured with, and the two message codecs.
 ///
-/// The runtime itself is hand-written — it owns tasks, buffers and timers, none of
-/// which belong in generated code (SPEC 8) — but it needs to know which
-/// characteristic carries which direction, how big a chunk and a message may be,
-/// and how to turn the bytes it has reassembled into a message. Those are facts
-/// about the schema, so they are generated.
+/// The runtime itself is hand-written — it owns tasks, buffers and timers, none of which belong in generated code (SPEC 8) — but which characteristic carries which direction, how big a chunk and a message may be, and how to turn bytes into a message are facts about the schema, so they are generated.
 fn emit_pipes(out: &mut String, gatt: &Gatt, config: &Config) {
     for pipe in gatt.pipes() {
         let name = snake_case(pipe.name);
@@ -658,15 +646,10 @@ fn codecs(inbound: &Option<String>, outbound: &Option<String>, _config: &Config)
     out
 }
 
-/// A pipe's message has to fit the buffer that reassembles it, and `micropb`
-/// knows the worst case for the type, so both ends are compile-time numbers here
-/// and a message that could not arrive is a build failure.
+/// A pipe's message has to fit the buffer that reassembles it, and `micropb` knows the worst case for the type, so both ends are compile-time numbers and a message that could not arrive is a build failure.
 ///
-/// Only pipes: for a single-shot characteristic the type's bound is a worst case
-/// the protocol never sends (Calypso's `SyncMessage` carries one 48-sample trace
-/// chunk at most, but the type allows any), so asserting it against `max_len`
-/// would reject a schema that works. That half is a runtime test instead: encode
-/// the largest message the device can build and check it fits.
+/// Only pipes: for a single-shot characteristic the type's bound is a worst case the protocol never sends, so asserting it against `max_len` would reject a schema that works.
+/// That half is a runtime test instead — encode the largest message the device can build and check it fits.
 fn emit_assertions(out: &mut String, gatt: &Gatt, config: &Config) {
     if config.pipe_msg_max == 0 {
         return;

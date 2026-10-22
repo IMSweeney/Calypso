@@ -251,6 +251,15 @@ device's typed request decode with it.
       (a request id, or at least a status body) is what would close both.
 
 ### Firmware
+- [ ] **The firmware's own errors never reach the app.** Everything the device
+      cannot do — a flash read that failed mid-scan, an acknowledgement that did
+      not go out, a rep whose trace could not be read back — is a `warn!` in the
+      device's log, which is only on the wire if someone has a serial console
+      open. The failures that matter are exactly the ones the app should be able
+      to show, because the person holding the phone is the one who can act on
+      them. A reporting stream on the pipe — a `SyncMessage` body of its own, or
+      the `SyncStatus` above wired up to carry a reason — is what would put them
+      where they can be seen.
 - [ ] **OTA code updates** — the app partition is 1.5 MB with headroom; dual
       slots would mean shrinking the log partition.
 - [ ] On-device tests with [`embedded-test`](https://crates.io/crates/embedded-test):

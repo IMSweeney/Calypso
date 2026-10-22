@@ -40,9 +40,8 @@ const Duration _defaultCalibrationPoll = Duration(seconds: 1);
 
 /// Reaching the device over the schema's interface: the UUIDs, the directions and the message types come from `proto/calypso_gatt.proto` (see `lib/gatt/gatt_client.dart`), so this file names none of them.
 ///
-/// The generated `SyncClient` is that schema's typed client, and it is what reads the
-/// **calibration status** — the characteristic that carries a value. The pipe's two halves are deliberately not reached through it: a notification there is a chunk of a transfer, not a message, so those bytes go to the runtime in `lib/gatt/pipe.dart`
-/// instead.
+/// The generated `SyncClient` reads the **calibration status**, the characteristic that carries a value.
+/// The pipe's two halves are deliberately not reached through it: a notification there is a chunk of a transfer, not a message, so those bytes go to the runtime in `lib/gatt/pipe.dart`.
 ///
 /// What stays here is what a schema cannot say: scanning, connecting, the trace reassembly and its timeouts, and what the archive is told.
 class BleTransport implements RepTransport {
@@ -350,7 +349,9 @@ class BleTransport implements RepTransport {
     if (deviceId != null) {
       try {
         await _link.disconnect(deviceId);
-      } catch (_) {}
+      } catch (e) {
+        bleLog.warning('disconnect failed for $deviceId: $e');
+      }
     }
   }
 

@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint;
+
 import '../protocol/calypso.pb.dart' as pb;
 import 'rep_archive.dart';
 
@@ -143,6 +145,8 @@ class HistoryStore implements RepArchive {
     };
     try {
       await files.receiptTimes.writeAsString(jsonEncode(json));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('calypso: receipt times not saved ($e)');
+    }
   }
 }

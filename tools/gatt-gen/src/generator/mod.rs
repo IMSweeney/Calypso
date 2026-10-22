@@ -1,6 +1,7 @@
 //! The back ends.
 //!
-//! One folder per side of the link — [`client`] for the app, [`server`] for the device — and one file inside each per language and BLE library. The schema is read once, in the shared front half of the crate; what differs between targets is only the code they emit, so a generator file is a function from a validated [`Gatt`] to text.
+//! One folder per side of the link — [`client`] for the app, [`server`] for the device — and one file inside each per language and BLE library.
+//! The schema is read once, in the shared front half of the crate; a generator file is a function from a validated [`Gatt`] to text.
 //!
 //! ```text
 //! proto -> descriptor -> model -> validate -+-> server/rust_trouble     -> gatt.rs

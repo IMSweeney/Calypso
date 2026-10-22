@@ -4,15 +4,14 @@ import 'dart:typed_data';
 
 /// The chunked pipe, for the app's side of a link whose characteristics are a pair.
 ///
-/// A mirror of `tools/gatt-pipe` (Rust), which is the reference: the frame, the sender and the receiver, with no buffers of their own and no clock — the caller brings both. Both implementations are checked against the same cases in `tools/gatt-pipe/tests/vectors/pipe.txt`, because two implementations of one protocol is how two implementations of one protocol drift apart.
-///
-/// The frame:
+/// A mirror of `tools/gatt-pipe` (Rust), which is the reference: the frame, the sender and the receiver, with no buffers of their own and no clock.
+/// Both are checked against the same cases in `tools/gatt-pipe/tests/vectors/pipe.txt`, because two implementations of one protocol drift apart.
 ///
 /// ```
 /// | seq u8 | flags u8 | [total_len varint, START only] | payload | crc16 LE |
 /// ```
 ///
-/// `seq` is the chunk's own number on data and *cumulative* — the next number its sender expects — on an acknowledgement, which is the decision the reference documents at length.
+/// `seq` is the chunk's own number on data and *cumulative* — the next number its sender expects — on an acknowledgement.
 class PipeFlags {
   static const int start = 0x01;
   static const int end = 0x02;

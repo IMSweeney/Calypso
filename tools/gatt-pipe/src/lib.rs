@@ -1,8 +1,7 @@
 //! The chunked pipe: the framing both ends of a BLE link share, and the two state machines that use it.
 //!
-//! What a BLE characteristic cannot carry in one value travels as a transfer: a message cut into chunks, each with a header and a CRC, reassembled at the other end. `SPEC.md` in `tools/gatt-gen` describes the protocol and why it acknowledges itself.
-//!
-//! The generator writes the parts only the schema knows — which characteristic carries which direction, how big a chunk and a message may be, how to turn bytes into a message — and this crate is the rest: no buffers of its own, no clock, no BLE, no embassy. Bytes in, decisions out, which is what makes the failure modes that matter (a chunk lost, duplicated, corrupted, an acknowledgement that never comes) testable on a host.
+//! What a BLE characteristic cannot carry in one value travels as a transfer: a message cut into chunks, each with a header and a CRC, reassembled at the other end.
+//! The generator writes what the schema knows — which characteristic carries which direction, how big a chunk and a message may be — and this crate is the rest: no buffers of its own, no clock, no BLE, so the failures that matter are testable on a host.
 //!
 //! # Frame
 //!
@@ -10,25 +9,22 @@
 //! | seq u8 | flags u8 | [total_len varint, START only] | payload | crc16 LE |
 //! ```
 //!
-//! `flags`: `START=0x01`, `END=0x02`, `ACK=0x04`, `NAK=0x08`. A chunk may be START and END at once, which is how a message that fits in one chunk travels — including an *empty* message (`total_len` 0 and no payload: a protobuf `Empty`
-//! encodes to nothing, and that is a message, not an aborted transfer).
-//!
-//! `crc16` is CRC-16/CCITT-FALSE over every preceding byte of the chunk. A chunk that does not check out is dropped rather than interpreted.
+//! `flags`: `START=0x01`, `END=0x02`, `ACK=0x04`, `NAK=0x08`. A chunk may be START and END at once, which is how a message that fits in one chunk travels — including an empty one (`total_len` 0 and no payload: a protobuf `Empty` encodes to nothing, and that is a message, not an aborted transfer).
+//! `crc16` is CRC-16/CCITT-FALSE over every preceding byte of the chunk, and a chunk that does not check out is dropped rather than interpreted.
 //!
 //! # What the spec left open, and what this decides
 //!
-//! - **`seq` has two roles, chosen by the flag.** On a data chunk it is that chunk's number, incremented per chunk and wrapping at 256. On an ACK or a NAK it is *cumulative*: the next in-order number its sender expects. One field rather than two because the role is unambiguous — an acknowledgement carries no payload — and it keeps two bytes off every chunk.
-//! - **The window is capped at [`MAX_WINDOW`].** A cumulative acknowledgement against a wrapping `u8` is only unambiguous while the unacknowledged window is under half the sequence space.
-//! - **A START during a transfer restarts it** rather than NAKing for ever: that is what a peer retrying after its own timeout looks like.
-//! - **A disconnect resets both ends** ([`Sender::reset`], [`Receiver::reset`]).
-//!   Whatever was in flight is gone, and half a message is not a message.
-//! - **Retrying resends the whole transfer.** There is no selective retransmit here; the caller decides whether to retry at all, and this counts the tries.
+//! - **`seq` has two roles, chosen by the flag.** On a data chunk it is that chunk's number, wrapping at 256; on an ACK or a NAK it is *cumulative* — the next in-order number its sender expects. One field rather than two because the role is unambiguous, and it keeps two bytes off every chunk.
+//! - **The window is capped at [`MAX_WINDOW`]** because a cumulative acknowledgement against a wrapping `u8` is only unambiguous while the unacknowledged window is under half the sequence space.
+//! - **A START during a transfer restarts it** rather than NAKing for ever, which is what a peer retrying after its own timeout looks like.
+//! - **A disconnect resets both ends** ([`Sender::reset`], [`Receiver::reset`]): whatever was in flight is gone, and half a message is not a message.
+//! - **Retrying resends the whole transfer** — there is no selective retransmit, the caller decides whether to retry at all, and this counts the tries.
 //!
 //! # Flow control
 //!
-//! Notifications are not acknowledged and the plugins serialise writes, so the pipe acknowledges itself: the sender keeps at most `window` chunks in flight, and the receiver acknowledges at least every `window / 2` chunks and always on END. Both directions use the same frame and the same rules, and an acknowledgement travels on the opposite characteristic from the data it is about.
+//! Notifications are not acknowledged and the plugins serialise writes, so the pipe acknowledges itself: the sender keeps at most `window` chunks in flight, and the receiver acknowledges at least every `window / 2` and always on END, on the opposite characteristic from the data it is about.
 //!
-//! `no_std`, and no dependency beyond `core`: half of it runs on a device with no allocator, and the other half in an app. The unit tests below are the exception, since the test harness itself needs `std` — hence `not(test)` rather than a bare `#![no_std]`, which is the same spelling `calypso-core` uses.
+//! `no_std`, and no dependency beyond `core` — except in the tests, whose harness needs `std`, hence `not(test)` rather than a bare `#![no_std]`.
 
 #![cfg_attr(not(test), no_std)]
 

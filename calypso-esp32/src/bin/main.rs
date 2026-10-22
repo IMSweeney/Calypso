@@ -423,7 +423,7 @@ async fn main(spawner: Spawner) -> ! {
                             // A write is a chunk of a request, or the app's acknowledgement of a message this end sent — the frame says which, and the session is the only place either is believed. Read it *after* the event is accepted: until the server has stored the value, the table still holds the one before it.
                             let is_write = matches!(event, GattEvent::Write(_));
                             if let Ok(reply) = event.accept() {
-                                let _ = reply.send().await;
+                                reply.send().await;
                             }
                             if is_write {
                                 let wrote = {
@@ -760,12 +760,9 @@ impl defmt::Format for FlashPhase {
 
 /// Read **the whole sector that failed**, in 64-byte raw reads, and say where it stops.
 ///
-/// Only after a failed log operation, because the useful detail is exactly what the vendor partition wrapper throws away: `PartitionEntry::as_embedded_storage` maps every storage failure to `partitions::Error::StorageError`. The raw `FlashStorage`
-/// does report the real `FlashStorageError`, and a read is safe to repeat.
+/// Only after a failed log operation: the vendor partition wrapper maps every storage failure to `partitions::Error::StorageError`, while the raw `FlashStorage` reports the real `FlashStorageError`, and a read is safe to repeat.
 ///
-/// The sector comes from the failure itself rather than from sector 0 — a probe that always looked at sector 0 reported "sector 0 reads fine" for a failure five sectors away. (It happened; that was the first version of this.)
-///
-/// Walking rather than sampling is the point: this runs from a *shallow* frame, after the failed read has unwound. So "sector N reads end to end" means the bytes are there and readable when nothing else is on the stack, and the failure is about the context the real read ran in — while "failed at +N" with the flash's own error name pins it to the flash or the driver. Those need different repairs, and nothing else distinguishes them.
+/// The sector comes from the failure rather than from sector 0, and walking rather than sampling is the point: it runs from a shallow frame after the failed read has unwound, so "sector N reads end to end" means the bytes are there and the failure is about the context the real read ran in.
 ///
 /// A write is deliberately not probed: repeating an erase to see whether it works is not a diagnostic, it is the bug.
 fn probe_log_partition(flash: &mut FlashDevice<'static>, partition_offset: u32, sector: u32) {
@@ -803,7 +800,7 @@ fn failing_sector(e: &flashlog::Error<partitions::Error>) -> u32 {
 
 /// Why a flash-log operation failed, named.
 ///
-/// Used for both the boot-time mount and a rep append, because an append *mounts the log itself* (see [`store_rep`]) and therefore fails for the same reasons — and because reporting them as two different-sounding sentences ("Rep log unusable" / "rep could not be stored") sends you looking for a second bug that is not there.
+/// Used for both the boot-time mount and a rep append: an append mounts the log itself (see [`store_rep`]), so it fails for the same reasons.
 ///
 /// The underlying errors travel through rather than being folded into a sentence:
 ///
@@ -1069,21 +1066,25 @@ fn collect_summaries(
 
     batch.clear();
     let mut seen = 0usize;
-    let _ = store::for_each_summary(&mut log, rec_buf, rec, |s| {
+    if let Err(e) = store::for_each_summary(&mut log, rec_buf, rec, |s| {
         if seen >= skip && batch.len() < batch.capacity() {
             batch.push(s.clone());
         }
         seen += 1;
-    });
+    }) {
+        // A short batch is worse than none: the cursor would advance past summaries that were never sent, and the app would never be offered them again.
+        warn!(
+            "sync: reading summaries failed: {}",
+            defmt::Debug2Format(&e)
+        );
+        return None;
+    }
     Some(seen)
 }
 
 /// Read a requested rep's trace out of the log into the session, and start streaming it: one `TraceChunk` per transfer, in chunk order.
 ///
-/// The transfers themselves are the tick's business, and each one is a round trip:
-/// this reads the trace into the session's storage and points the cursor at it, and the tick (or the next write, which is the app's acknowledgement) sends the next chunk. That is what the latency item in the roadmap was reaching for — nothing here waits behind a queue of notifications, and the connection's event loop keeps running to the acknowledgements that move it along.
-///
-/// This used to be the widest frame in the firmware, with an exemption for it: the chunk message was built here (a `SyncMessage` is 2 KB by value, one of its variants being a whole `TraceChunk`). It is built inside the session now — a plain method call, so the 2 KB is a stack frame that is gone before anything is awaited, rather than something a task's future holds — and this fits the lint's budget without help. The log work was already extracted (see [`read_trace_from_log`]).
+/// The transfers are the tick's business: this reads the trace into the session's storage and points the cursor at it, and the tick — or the app's acknowledgement — sends the next chunk.
 async fn stream_trace(
     store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
     rec_buf: &mut [u8],
@@ -1171,12 +1172,9 @@ impl defmt::Format for UuidShort<'_> {
     }
 }
 
-/// Append one rep (summary + trace chunks) to the flash log partition.
-///
-/// Returns the number of log records written. The log is mounted per append:
-/// mounting is a scan of the sector headers, and appends are rare (once per rep, at rest), so there's no need to keep it alive between reps.
-///
-/// **Which is why an append fails for the same reasons the boot-time mount does**, and reports them the same way: a mount that cannot run means no rep can be stored, and nothing retries, so a rep is lost when this returns an error.
+/// Append one rep (summary + trace chunks) to the flash log partition. Returns the number of records written.
+/// The log is mounted per append — a scan of the sector headers, and appends are rare (once per rep, at rest) — so nothing keeps it alive between reps.
+/// An append therefore fails for the same reasons the boot-time mount does, and a rep is lost when this returns an error.
 fn store_rep(
     store: &mut FlashStore,
     rec_buf: &mut [u8],
@@ -1385,11 +1383,9 @@ fn is_subscribed(
 
 /// Put the IMU's calibration state in the table, where a client reads it.
 ///
-/// The `Calibration` characteristic is a value rather than a pipe message — the app reads it when its UI wants the levels — so this end only keeps the table's copy current. Called when a connection is established and once a second after that:
-/// the levels come from the chip's own 1 Hz poll ([`CALIBRATION_BITS`]), so there is nothing fresher to serve.
+/// The characteristic is a value rather than a pipe message, so this end only keeps the table's copy current; called on connection and once a second after, the levels being the chip's own 1 Hz poll ([`CALIBRATION_BITS`]).
 ///
-/// A message too large for the characteristic's `max_len` is `None` rather than a truncation, and nothing this device holds can be (see `proto/calypso_gatt.proto`);
-/// the warn is there so that it would not be silent if it ever were.
+/// A message too large for the characteristic's `max_len` is `None` rather than a truncation, and nothing this device holds can be.
 fn publish_calibration(gatt: &CalypsoGatt<'_>) {
     let calibration = Calibration::from_bits(CALIBRATION_BITS.load(Ordering::Relaxed));
     let status = calypso_core::pb::calibration_message(&calibration);
@@ -1405,11 +1401,12 @@ fn publish_calibration(gatt: &CalypsoGatt<'_>) {
 
 /// Send everything the app is owed, in the order it is waiting for it.
 ///
-/// The whole send path, and the reason it is a call rather than a loop that runs to completion: the pipe carries one *message* at a time, and a message is finished by an acknowledgement that arrives as a write. So this is called whenever something might have freed the pipe — a tick, a write, a trace request — and does as little as it can get away with.
+/// A call rather than a loop that runs to completion: the pipe carries one *message* at a time, and a message is finished by an acknowledgement that arrives as a write.
+/// So this is called whenever something might have freed the pipe, and does as little as it can get away with.
 ///
 /// The order is the app's: a trace it asked for (and is timing out on), then the summaries, which are the bulk and can wait.
 ///
-/// The exemption is the composition: two awaited futures in one function is one future holding both, and the lint adds them up. It is the same stack the event loop held before the pipe — the trace and summary steps were awaited side by side in that block — and the alternative is writing this order down twice, once per call site, for the lint's benefit rather than the device's.
+/// The exemption is for the composition: two awaited futures in one function is one future holding both, and the lint adds them up.
 #[allow(
     clippy::large_stack_frames,
     reason = "the senders' futures, composed because the pipe carries one message at a time"
@@ -1440,8 +1437,8 @@ async fn keep_sending(
 ///
 /// In its own function, and never inlined, so the ~2 KB temporary that `Box::new` needs to build the value lives in *this* frame — which is gone by the time it returns — rather than in `main`'s, which is the bottom of the stack the whole BLE stack also runs on.
 ///
-/// `Box::new` really does build its argument on the stack first (clippy reports exactly that: 2152 bytes), and there is no way to allocate a `RepRecord`
-/// without one short of writing its fields through a `MaybeUninit` by hand. That would trade a bounded, known transient for `unsafe` in the decode path, so the transient stays — deliberately in a leaf called before the tasks start, which is what the exemption below records.
+/// `Box::new` does build its argument on the stack first (2152 bytes, per clippy), and there is no way to allocate a `RepRecord` without one short of writing its fields through a `MaybeUninit` by hand.
+/// That would trade a bounded, known transient for `unsafe` in the decode path, so the transient stays, in a leaf called before the tasks start.
 #[allow(
     clippy::large_stack_frames,
     reason = "2152 B: the `Box::new` temporary, isolated so it is not in main's frame"

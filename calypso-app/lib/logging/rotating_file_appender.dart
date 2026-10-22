@@ -53,10 +53,9 @@ class RotatingFileAppender {
     _closed = true;
     _schedule();
     await _tail;
-    try {
-      await _sink?.flush();
-      await _sink?.close();
-    } catch (_) {}
+    // Not caught here: a close that could not flush is the caller's to decide about, and it is the only one who knows whether that matters.
+    await _sink?.flush();
+    await _sink?.close();
     _sink = null;
   }
 
@@ -76,28 +75,45 @@ class RotatingFileAppender {
   void _schedule() {
     if (_drainQueued) return;
     _drainQueued = true;
-    _tail = _tail.then((_) {
-      _drainQueued = false;
-      return _drain();
-    });
+    _tail = _tail
+        .then((_) {
+          _drainQueued = false;
+          return _drain();
+        })
+        .catchError((Object e) {
+          // Handled, not swallowed: the lines are still queued, so the next record retries them.
+          // A logger that stops on the first transient failure is worse than one that says so and carries on.
+          // `_drainQueued` has to be cleared here too, or nothing would ever drain again.
+          _drainQueued = false;
+          debugPrint(
+            'calypso: a log write failed, and the lines stay queued ($e)',
+          );
+        });
   }
 
   Future<void> _drain() async {
-    try {
-      await _opening;
-      while (_queue.isNotEmpty) {
-        final line = _queue.removeAt(0);
-        if (_sink == null) continue;
-        final chunk = utf8.encode('$line\n');
-        if (_size + chunk.length > maxBytes) {
-          await _rotate();
-          if (_sink == null) continue;
-        }
-        _sink!.add(chunk);
-        _size += chunk.length;
+    await _opening;
+    var wrote = 0;
+    while (wrote < _queue.length) {
+      if (_sink == null) {
+        wrote++;
+        continue;
       }
-      await _sink?.flush();
-    } catch (_) {}
+      final chunk = utf8.encode('${_queue[wrote]}\n');
+      if (_size + chunk.length > maxBytes) {
+        await _rotate();
+        if (_sink == null) {
+          wrote++;
+          continue;
+        }
+      }
+      _sink!.add(chunk);
+      _size += chunk.length;
+      wrote++;
+    }
+    // The lines are dropped only once the flush has gone through, so a write that fails keeps them for the next drain to retry.
+    await _sink?.flush();
+    _queue.removeRange(0, wrote);
   }
 
   Future<void> _open() async {
@@ -134,15 +150,12 @@ class RotatingFileAppender {
   }
 
   Future<void> _rotate() async {
-    try {
-      await _sink?.flush();
-      await _sink?.close();
-      _sink = null;
-      await _shift();
-      await _openSink();
-    } catch (_) {
-      _sink = null;
-    }
+    // A rotation that fails is reported and retried like any other write: the lines are still queued, and the sink is left closed rather than half-rotated.
+    await _sink?.flush();
+    await _sink?.close();
+    _sink = null;
+    await _shift();
+    await _openSink();
   }
 
   File _path(int index) {
