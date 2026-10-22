@@ -1746,11 +1746,18 @@ async fn keep_sending(
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     cursor: &mut SummaryCursor,
 ) {
+    // **A message can be wider than the window.** The window is 8 chunks and a trace
+    // chunk is up to 10 frames, so a transfer is usually sent in waves — and the rest
+    // of the wave goes out here, when the acknowledgement that made room arrives.
+    // Returning early on a busy pipe leaves the message half-sent for ever: nothing
+    // else calls `flush`, and the app waits for a chunk that is sitting in the
+    // device's buffer (docs/GOTCHAS.md).
     if !sync.session.is_idle() {
+        sync.flush(conn).await;
         return;
     }
-    // A trace chunk, if one is being streamed. Asking for the next one *moves* the
-    // cursor, so this is only asked once the pipe is free.
+    // Otherwise: a trace chunk, if one is being streamed, and only then summaries —
+    // the app is waiting on its trace.
     if sync.session.streaming() && sync.send_trace_chunk(conn).await {
         return;
     }

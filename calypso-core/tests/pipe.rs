@@ -87,6 +87,29 @@ fn chunk() -> msg::SyncMessage {
     }
 }
 
+/// A chunk whose frames do not fit the window in one go — the shape that stalls a send
+/// path which only flushes a message when it *starts* one. Every field is as wide as
+/// the schema allows, so the message is ~3 KB and its frames are more than `window`.
+fn wide_chunk() -> msg::SyncMessage {
+    let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES)
+        .map(|i| TracePoint {
+            t_ms: u32::MAX - i as u32,
+            pos: [12345.678, -98765.43, 3.4028235e38],
+            accel: [-30000, 27000, -12345],
+            quat: [i16::MAX, i16::MIN, 12345, -12345],
+        })
+        .collect();
+    msg::SyncMessage {
+        body: Some(msg::SyncMessage_::Body::Trace(pb::chunk_message(
+            fixture_uuid(2),
+            0,
+            0,
+            TRACE_CHUNK_SAMPLES as u32,
+            &points,
+        ))),
+    }
+}
+
 /// Everything waiting on the wire, taken to the app. Returns the reps whose
 /// summaries arrived, which is what a caller advancing a cursor would count.
 fn receive(session: &mut Session<'_>, phone: &mut Phone, now: &mut u32) -> Vec<RepUuid> {
@@ -139,7 +162,9 @@ struct Phone {
 impl Phone {
     fn new() -> Self {
         Phone {
-            receiver: Receiver::new(gatt_pipe::MAX_WINDOW),
+            // The app's receiver is generated with the schema's window, so its
+            // acknowledgement cadence is `window / 2` — the same number the device sends by.
+            receiver: Receiver::new(pipe_sync::WINDOW),
             buffer: vec![0u8; MESSAGE_MAX],
         }
     }
@@ -378,6 +403,70 @@ fn a_single_frame_request_is_acknowledged_where_the_app_expects() {
         Acked::Complete,
         "the app sent seq 0 and reads the acknowledgement of {seq}: an acknowledgement \
          names the sequence the receiver wants *next*"
+    );
+}
+
+#[test]
+fn a_busy_pipe_does_not_consume_the_trace_cursor() {
+    let mut buffers = Buffers::new(TRACE_CHUNK_SAMPLES * 3);
+    let mut session = buffers.session();
+    session.start_trace(fixture_uuid(1), 0, TRACE_CHUNK_SAMPLES * 3, None);
+
+    assert!(session.send_next_trace_chunk(), "the first chunk starts");
+    assert!(
+        !session.send_next_trace_chunk(),
+        "the pipe is busy: saying so must not move the cursor on"
+    );
+
+    let mut phone = Phone::new();
+    let mut now = 0u32;
+    let mut indices = Vec::new();
+    for _ in 0..2 {
+        if !session.is_idle() {
+            for frame in drain(&mut session, MTU) {
+                now += 10;
+                if let Some(bytes) = phone.take(&mut session, &frame, now) {
+                    match pb::decode_sync(&bytes).expect("a message").body {
+                        Some(msg::SyncMessage_::Body::Trace(chunk)) => indices.push(chunk.index),
+                        other => panic!("expected a trace chunk, got {other:?}"),
+                    }
+                }
+            }
+        }
+        assert!(session.is_idle(), "the app acknowledged the transfer");
+        assert!(session.send_next_trace_chunk(), "the next chunk goes");
+    }
+    assert_eq!(indices, [0, 1], "in order, with nothing skipped");
+}
+
+/// A message wider than the window is sent in waves, each wave moved on by the
+/// acknowledgements it earns. This is the contract the firmware's `keep_sending` keeps:
+/// it flushes the message in flight rather than only ever starting one.
+#[test]
+fn a_message_wider_than_the_window_goes_in_waves() {
+    let mut buffers = Buffers::new(TRACE_CHUNK_SAMPLES);
+    let mut session = buffers.session();
+    assert!(session.send(Kind::Trace, &wide_chunk()));
+
+    let mut phone = Phone::new();
+    let mut now = 0u32;
+    let mut frames = 0;
+    let mut waves = 0;
+    while !session.is_idle() {
+        let wave = drain(&mut session, MTU);
+        assert!(!wave.is_empty(), "a wave that carries nothing is a stall");
+        waves += 1;
+        frames += wave.len();
+        for frame in &wave {
+            now += 10;
+            phone.take(&mut session, frame, now);
+        }
+    }
+
+    assert!(waves > 1, "the message needed more than one wave");
+    assert!(
+        frames > 8,
+        "and more frames than the window holds: {frames}"
     );
 }
 

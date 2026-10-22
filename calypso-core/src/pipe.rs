@@ -243,6 +243,14 @@ impl<'a> Session<'a> {
     /// `false` when the trace is finished (or was never started), which is also when
     /// the stream is forgotten.
     pub fn send_next_trace_chunk(&mut self) -> bool {
+        // **The cursor does not move when the pipe is busy.** A message is cut into
+        // chunks and the window is only so wide, so the frames of one transfer can
+        // outlast the window: whoever asks next has to flush the rest of the message
+        // before there is anything new to start. Advancing here would skip the chunk
+        // the unfinished transfer was carrying (`docs/GOTCHAS.md`).
+        if !self.sender.is_idle() {
+            return false;
+        }
         let Some(index) = self.take_trace_chunk() else {
             self.trace = None;
             return false;
