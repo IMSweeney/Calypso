@@ -6,13 +6,17 @@
 //! which is the price of letting the macro own the storage (see
 //! `tools/gatt-gen/PLAN.md`, errata E1).
 //!
-//! Both characteristics are halves of one pipe now, so what a client *writes* is a
-//! frame rather than a message: the table stores chunks, and the decode that turns
-//! them into a `SyncRequest` belongs to `crate::pipe` (see `tests/pipe.rs`). What
-//! is left to check here is the table itself — the UUIDs, the properties, and the
-//! size its storage will and will not take.
+//! Two of the three characteristics are halves of one pipe, so what a client
+//! *writes* is a frame rather than a message: the table stores chunks, and the decode
+//! that turns them into a `SyncRequest` belongs to `crate::pipe` (see `tests/pipe.rs`).
+//! The third is a value the client reads, and the table stores it whole. What is left
+//! to check here is the table itself — the UUIDs, the properties, and the size its
+//! storage will and will not take.
 
-use calypso_core::gatt::{uuid, CalypsoGatt, PIPE_CHUNK_MAX, PIPE_STORAGE_MAX, SCHEMA_HASH};
+use calypso_core::calibration::Calibration;
+use calypso_core::gatt::{
+    max_len, uuid, CalypsoGatt, SyncCalibrationValue, PIPE_CHUNK_MAX, PIPE_STORAGE_MAX, SCHEMA_HASH,
+};
 use calypso_core::pb::{self, msg};
 use calypso_core::pipe::{CHUNK_MAX, FRAME_MAX, MESSAGE_MAX, XFER_TIMEOUT_MS};
 use calypso_core::rep::TracePoint;
@@ -26,6 +30,7 @@ fn the_generated_table_is_the_interface_the_proto_declares() {
 
     checks_uuids_and_properties(gatt);
     a_frame_round_trips_through_the_table(gatt);
+    the_calibration_value_holds_the_widest_status_the_device_writes(gatt);
     the_sizes_come_from_the_schema();
 }
 
@@ -78,6 +83,10 @@ fn checks_uuids_and_properties(gatt: &CalypsoGatt<'_>) {
         uuid::SYNC_REQUESTS_TEXT,
         "0000ca22-b0cd-11ec-871f-d45ddf138840"
     );
+    assert_eq!(
+        uuid::SYNC_CALIBRATION_TEXT,
+        "0000ca24-b0cd-11ec-871f-d45ddf138840"
+    );
 
     // The generated constants agree with the table they describe.
     assert_eq!(canonical(&uuid::SYNC_SERVICE_UUID), uuid::SYNC_SERVICE_TEXT);
@@ -89,13 +98,37 @@ fn checks_uuids_and_properties(gatt: &CalypsoGatt<'_>) {
         canonical(&uuid::SYNC_REQUESTS_UUID),
         uuid::SYNC_REQUESTS_TEXT
     );
+    assert_eq!(
+        canonical(&uuid::SYNC_CALIBRATION_UUID),
+        uuid::SYNC_CALIBRATION_TEXT
+    );
     assert_ne!(gatt.sync.messages.handle, gatt.sync.requests.handle);
+    assert_ne!(gatt.sync.calibration.handle, gatt.sync.messages.handle);
 
     // NOTIFY is what gives a characteristic a CCCD: a subscriber needs one, and
-    // the written half must not have one. `WRITE_NO_RSP` only, since the pipe's
-    // own acknowledgement is what reports a request arriving.
+    // neither the written half nor the readable one has one. `WRITE_NO_RSP` only,
+    // since the pipe's own acknowledgement is what reports a request arriving.
     assert!(gatt.sync.messages.cccd_handle.is_some());
     assert!(gatt.sync.requests.cccd_handle.is_none());
+    assert!(gatt.sync.calibration.cccd_handle.is_none());
+}
+
+/// The readable value holds the largest status the device can build.
+///
+/// The generated table asserts `micropb`'s *bound* for a pipe's messages, because
+/// one that could not arrive is a transfer that stalls. A single-shot value has no
+/// such assertion (`tools/gatt-gen/src/generator/server/rust_trouble.rs` explains
+/// why), so the message the device actually writes is checked against `max_len`
+/// here — the levels are `u8`s out of CALIB_STAT, so this is as wide as it gets.
+fn the_calibration_value_holds_the_widest_status_the_device_writes(gatt: &CalypsoGatt<'_>) {
+    let widest = pb::calibration_message(&Calibration::new(u8::MAX, u8::MAX, u8::MAX, u8::MAX));
+    let value = SyncCalibrationValue::encode(&widest).expect("the widest status fits max_len");
+    assert!(value.as_bytes().len() <= max_len::SYNC_CALIBRATION);
+
+    gatt.set(&gatt.sync.calibration, &value)
+        .expect("the table takes it");
+    let stored: SyncCalibrationValue = gatt.get(&gatt.sync.calibration).expect("and hands it back");
+    assert_eq!(stored.decode().expect("it decodes"), widest);
 }
 
 /// What the app writes is a chunk, and the table stores it as one.

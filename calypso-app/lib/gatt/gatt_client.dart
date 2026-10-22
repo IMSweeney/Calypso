@@ -20,6 +20,9 @@ abstract class GattClientLink {
   /// The values arriving on a characteristic, in the order they arrive.
   Stream<Uint8List> values(String characteristicUuid);
 
+  /// Read a characteristic once.
+  Future<Uint8List> read(String serviceUuid, String characteristicUuid);
+
   /// Write a characteristic.
   ///
   /// `withResponse` is the write that reports failure, so it is the default;
@@ -38,14 +41,27 @@ abstract class GattClientLink {
 /// Subscribe before listening, and hold the stream only while the link is up:
 /// these are notifications, not a queue that survives a disconnect.
 class SyncClient {
+  SyncClient(this._link);
+
+  final GattClientLink _link;
+
   /// `calypso.Sync`.
   static const String serviceUuid = '0000ca20-b0cd-11ec-871f-d45ddf138840';
+
+  /// `calypso.Sync.Calibration` -- read, calypso.CalibrationStatus.
+  static const String calibrationUuid = '0000ca24-b0cd-11ec-871f-d45ddf138840';
 
   /// `calypso.Sync.Requests` -- write-without-response, calypso.SyncRequest.
   static const String requestsUuid = '0000ca22-b0cd-11ec-871f-d45ddf138840';
 
   /// `calypso.Sync.Messages` -- notify, calypso.SyncMessage.
   static const String messagesUuid = '0000ca21-b0cd-11ec-871f-d45ddf138840';
+
+  /// Read `Calibration` once.
+  Future<pb.CalibrationStatus> readCalibration() async {
+    final bytes = await _link.read(serviceUuid, calibrationUuid);
+    return pb.CalibrationStatus.fromBuffer(bytes);
+  }
 }
 
 /// Pipe `sync`: `pb.SyncRequest` in, `pb.SyncMessage` out.

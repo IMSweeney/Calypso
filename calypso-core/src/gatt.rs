@@ -13,7 +13,7 @@ use trouble_host::types::gatt_traits::FromGattError;
 /// A hash of the schema this was generated from: firmware and app built from
 /// the same schema agree, and anything else is caught before a typed value is
 /// believed. Protobuf would otherwise decode a mismatch silently.
-pub const SCHEMA_HASH: u64 = 0xbf459163d32876f6;
+pub const SCHEMA_HASH: u64 = 0x2a8eeee0411bfe49;
 
 /// Backing buffer for a pipe characteristic's chunk.
 pub const PIPE_CHUNK_MAX: usize = 244;
@@ -45,6 +45,14 @@ pub mod uuid {
     /// `calypso.Sync`, as a client prints it: the text the schema quotes.
     pub const SYNC_SERVICE_TEXT: &str = "0000ca20-b0cd-11ec-871f-d45ddf138840";
 
+    /// `calypso.Sync.Calibration`.
+    pub const SYNC_CALIBRATION_UUID: Uuid = Uuid::new_long([
+        0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x24, 0xca, 0x00,
+        0x00,
+    ]);
+    /// `calypso.Sync.Calibration`, as a client prints it.
+    pub const SYNC_CALIBRATION_TEXT: &str = "0000ca24-b0cd-11ec-871f-d45ddf138840";
+
     /// `calypso.Sync.Requests`.
     pub const SYNC_REQUESTS_UUID: Uuid = Uuid::new_long([
         0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x22, 0xca, 0x00,
@@ -62,9 +70,100 @@ pub mod uuid {
     pub const SYNC_MESSAGES_TEXT: &str = "0000ca21-b0cd-11ec-871f-d45ddf138840";
 }
 
+/// The `max_len` each sized characteristic declares. A buffer that holds one
+/// of these values is sized from here, so the schema stays the one place the
+/// number is written down.
+pub mod max_len {
+    /// `calypso.Sync.Calibration`.
+    pub const SYNC_CALIBRATION: usize = 20;
+}
+
+/// `calypso.CalibrationStatus` as one GATT attribute value: the message encoded whole, which is
+/// what a single-shot characteristic carries (`max_len` 20).
+///
+/// `encode` returns `None` only for a message that does not fit `max_len`,
+/// which a single-shot value has no assertion against (the tests check the
+/// largest message the device writes instead); `decode` returns `None` for
+/// bytes that are not this message at all.
+#[derive(Default)]
+pub struct SyncCalibrationValue {
+    bytes: Vec<u8, 20>,
+}
+
+impl SyncCalibrationValue {
+    /// Encode `message` into a value.
+    pub fn encode(message: &crate::pb::msg::CalibrationStatus) -> Option<Self> {
+        let mut bytes = Vec::new();
+        bytes.resize(20, 0).ok()?;
+        let mut writer: &mut [u8] = bytes.as_mut_slice();
+        {
+            let mut encoder = micropb::PbEncoder::new(&mut writer);
+            message.encode(&mut encoder).ok()?;
+        }
+        let written = 20 - writer.len();
+        bytes.truncate(written);
+        Some(SyncCalibrationValue { bytes })
+    }
+
+    /// Encode `message` into an existing value, reusing its buffer: for a
+    /// sender that notifies repeatedly and does not want a value per message.
+    /// Returns false if the message does not fit.
+    pub fn encode_into(&mut self, message: &crate::pb::msg::CalibrationStatus) -> bool {
+        self.bytes.clear();
+        if self.bytes.resize(20, 0).is_err() {
+            return false;
+        }
+        let mut writer: &mut [u8] = self.bytes.as_mut_slice();
+        {
+            let mut encoder = micropb::PbEncoder::new(&mut writer);
+            if message.encode(&mut encoder).is_err() {
+                self.bytes.clear();
+                return false;
+            }
+        }
+        let written = 20 - writer.len();
+        self.bytes.truncate(written);
+        true
+    }
+
+    /// Decode the value.
+    pub fn decode(&self) -> Option<crate::pb::msg::CalibrationStatus> {
+        let mut message = crate::pb::msg::CalibrationStatus::default();
+        message.decode_from_bytes(self.bytes.as_slice()).ok()?;
+        Some(message)
+    }
+
+    /// The value as it goes on the wire.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+}
+
+impl AsGatt for SyncCalibrationValue {
+    const MIN_SIZE: usize = 0;
+    const MAX_SIZE: usize = 20;
+
+    fn as_gatt(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+}
+
+impl FromGatt for SyncCalibrationValue {
+    fn from_gatt(data: &[u8]) -> Result<Self, FromGattError> {
+        let mut bytes = Vec::new();
+        bytes
+            .extend_from_slice(data)
+            .map_err(|_| FromGattError::InvalidLength)?;
+        Ok(SyncCalibrationValue { bytes })
+    }
+}
+
 /// `calypso.Sync`.
 #[gatt_service(uuid = "0000ca20-b0cd-11ec-871f-d45ddf138840")]
 pub struct SyncService {
+    /// `Calibration` (0000ca24-b0cd-11ec-871f-d45ddf138840), calypso.CalibrationStatus.
+    #[characteristic(uuid = "0000ca24-b0cd-11ec-871f-d45ddf138840", read)]
+    pub calibration: SyncCalibrationValue,
     /// `Requests` (0000ca22-b0cd-11ec-871f-d45ddf138840), calypso.SyncRequest.
     ///
     /// Pipe "sync": this value carries chunks and the pipe runtime owns it,

@@ -40,7 +40,7 @@ use bno055::Bno055;
 use bno055::{BNO055_CALIB_SIZE, BNO055Calibration, BNO055OperationMode};
 use calypso_core::calibration::Calibration;
 use calypso_core::flashlog::{self, FlashLog};
-use calypso_core::gatt::{CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH};
+use calypso_core::gatt::{CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncCalibrationValue};
 use calypso_core::pb::msg;
 use calypso_core::pipe::{self, Session, Stalled};
 use calypso_core::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, compute_rep};
@@ -76,9 +76,9 @@ const BNO055_CALIBRATION_ADDR: u32 = 0x00;
 const DEVICE_NAME: &str = "Calypso";
 
 /// The IMU's calibration levels (`Calibration::to_bits`), written by the 1 Hz
-/// poll in the sampler task and read by the BLE task to tell the app. Zero (every
-/// level 0) until the first poll, which reads as "not calibrated" — the safe
-/// thing to believe.
+/// poll in the sampler task and read by the BLE task to serve the app's read of
+/// the `Calibration` characteristic. Zero (every level 0) until the first poll,
+/// which reads as "not calibrated" — the safe thing to believe.
 static CALIBRATION_BITS: AtomicU32 = AtomicU32::new(0);
 
 /// Whether the calibration profile has been written to NVS this boot. Set once,
@@ -483,6 +483,9 @@ async fn main(spawner: Spawner) -> ! {
                     Err(_) => continue,
                 };
                 info!("BLE connection established (stack {})", Stack);
+                // A read returns the last value published, so it is published before
+                // a client can ask for it.
+                publish_calibration(&gatt);
 
                 // Sync state: how many summaries this subscriber has been sent,
                 // the batch they are read from, and the clock the pipe's timeouts
@@ -497,13 +500,14 @@ async fn main(spawner: Spawner) -> ! {
                 sync.session.reset();
 
                 loop {
-                    // Service GATT events; once a second, tell the app the IMU's
-                    // calibration levels (a no-op unless it subscribed, in which
-                    // case it is what turns the hint on screen into progress).
+                    // Service GATT events; once a second, keep the table's copy of
+                    // the IMU's calibration levels current, which is what the app
+                    // reads to turn its hint into progress.
                     let event = match select(conn.next(), Timer::after(Duration::from_secs(1))).await {
                         Either::First(event) => event,
                         Either::Second(()) => {
                             let now = now_ms(start);
+                            publish_calibration(&gatt);
                             // Who is listening, asked of the server rather than
                             // inferred from a notify result, because a notify result
                             // says nothing (see `is_subscribed`). Once a tick is
@@ -513,7 +517,7 @@ async fn main(spawner: Spawner) -> ! {
                             if listening != subscribed {
                                 subscribed = listening;
                                 if subscribed {
-                                    info!("app subscribed to sync notifications (calibration, summaries, traces)");
+                                    info!("app subscribed to sync notifications (summaries, traces)");
                                 } else {
                                     info!("app unsubscribed from sync notifications");
                                 }
@@ -1126,8 +1130,8 @@ type BleVec = heapless::Vec<u8, PIPE_STORAGE_MAX>;
 /// every message goes out on, and the buffer each frame is built in.
 ///
 /// One characteristic means one payload buffer, and the pipe means one *message* at a
-/// time: a summary, a trace chunk and a calibration status are all transfers, and
-/// only one of them can be in flight.
+/// time: a summary and a trace chunk are both transfers, and only one of them can be
+/// in flight. (Calibration is not one: it is a characteristic a client reads.)
 struct Sync<'a> {
     session: &'a mut Session<'static>,
     characteristic: &'a Characteristic<BleVec>,
@@ -1182,20 +1186,6 @@ impl Sync<'_> {
         conn: &GattConnection<'_, '_, DefaultPacketPool>,
     ) -> bool {
         if !self.session.send_summary(summary) {
-            return false;
-        }
-        self.flush(conn).await;
-        true
-    }
-
-    /// Send the IMU's calibration status, if the pipe is free and the app has not
-    /// already been told these levels ([`Session::send_calibration`]).
-    async fn send_calibration(
-        &mut self,
-        calibration: &Calibration,
-        conn: &GattConnection<'_, '_, DefaultPacketPool>,
-    ) -> bool {
-        if !self.session.send_calibration(calibration) {
             return false;
         }
         self.flush(conn).await;
@@ -1693,30 +1683,28 @@ fn is_subscribed(
         .unwrap_or(false)
 }
 
-/// Tell the app the IMU's calibration state, on the summary characteristic.
+/// Put the IMU's calibration state in the table, where a client reads it.
 ///
-/// Called on every tick and every write, because it is the cheapest way to have the
-/// status out as soon as the levels move; the session is what decides whether there
-/// is anything to say (an unchanged status is not sent, which is what keeps the
-/// acknowledgements from asking for it again for ever — `Session::send_calibration`).
+/// The `Calibration` characteristic is a value rather than a pipe message — the app
+/// reads it when its UI wants the levels — so this end only keeps the table's copy
+/// current. Called when a connection is established and once a second after that:
+/// the levels come from the chip's own 1 Hz poll ([`CALIBRATION_BITS`]), so there is
+/// nothing fresher to serve.
 ///
-/// The same characteristic summaries stream on: `SyncMessage` exists to
-/// multiplex device -> app messages, and the app is already subscribed to this
-/// one (see `proto/calypso.proto`). Best-effort, and note that a *successful*
-/// notification means nothing — see [`is_subscribed`], which is also where the
-/// "did anybody hear it" line is logged.
-async fn notify_calibration(sync: &mut Sync<'_>, conn: &GattConnection<'_, '_, DefaultPacketPool>) {
+/// A message too large for the characteristic's `max_len` is `None` rather than a
+/// truncation, and nothing this device holds can be (see `proto/calypso_gatt.proto`);
+/// the warn is there so that it would not be silent if it ever were.
+fn publish_calibration(gatt: &CalypsoGatt<'_>) {
     let calibration = Calibration::from_bits(CALIBRATION_BITS.load(Ordering::Relaxed));
-    // **No success line, and the reason is worth keeping here.** `notify` returns
-    // `Ok(())` even when nobody is subscribed — it checks the peer's CCCD table and
-    // returns early without sending — so its result cannot distinguish "sent" from
-    // "sent nowhere". This function used to log `calibration status delivered to the
-    // app` on success, once a second, and did exactly that for a device whose
-    // subscription could not be established at all (one CCCD slot, and the table's
-    // first CCCD was not ours — see `docs/GOTCHAS.md`). Whether anybody is
-    // listening is reported where it can be known: `is_subscribed`, once a tick, in
-    // the caller.
-    sync.send_calibration(&calibration, conn).await;
+    let status = calypso_core::pb::calibration_message(&calibration);
+    match SyncCalibrationValue::encode(&status) {
+        Some(value) => {
+            if gatt.set(&gatt.sync.calibration, &value).is_err() {
+                warn!("calibration: the table refused the status");
+            }
+        }
+        None => warn!("calibration: the status is larger than the characteristic"),
+    }
 }
 
 /// Send everything the app is owed, in the order it is waiting for it.
@@ -1728,17 +1716,16 @@ async fn notify_calibration(sync: &mut Sync<'_>, conn: &GattConnection<'_, '_, D
 /// as it can get away with.
 ///
 /// The order is the app's: a trace it asked for (and is timing out on), then the
-/// calibration status (which is what tells it whether to expect reps at all), then
-/// the summaries, which are the bulk and can wait.
+/// summaries, which are the bulk and can wait.
 ///
-/// The exemption is the composition: three awaited futures in one function is one
-/// future holding all three, and the lint adds them up. It is the same stack the
-/// event loop held before the pipe — the calibration and summary steps were awaited
-/// side by side in that block — and the alternative is writing this order down twice,
+/// The exemption is the composition: two awaited futures in one function is one
+/// future holding both, and the lint adds them up. It is the same stack the
+/// event loop held before the pipe — the trace and summary steps were awaited side
+/// by side in that block — and the alternative is writing this order down twice,
 /// once per call site, for the lint's benefit rather than the device's.
 #[allow(
     clippy::large_stack_frames,
-    reason = "1724 B: the three senders' futures, composed because the pipe carries one message at a time"
+    reason = "the senders' futures, composed because the pipe carries one message at a time"
 )]
 async fn keep_sending(
     store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
@@ -1757,7 +1744,6 @@ async fn keep_sending(
     if sync.session.streaming() && sync.send_trace_chunk(conn).await {
         return;
     }
-    notify_calibration(sync, conn).await;
     stream_new_summaries(store, rec_buf, rec, batch, sync, conn, cursor).await;
 }
 

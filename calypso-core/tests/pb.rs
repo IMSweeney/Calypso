@@ -1,3 +1,4 @@
+use calypso_core::calibration::Calibration;
 use calypso_core::pb::{self, msg, Record, TRACE_CHUNK_SAMPLES};
 use calypso_core::rep::TracePoint;
 use calypso_core::uuid::fixture_uuid;
@@ -174,6 +175,24 @@ fn sync_message_carries_a_summary() {
         Some(msg::SyncMessage_::Body::Summary(s)) => assert_eq!(s, summary),
         other => panic!("expected a summary, got {other:?}"),
     }
+}
+
+#[test]
+fn calibration_carries_every_sensor_and_one_verdict() {
+    let c = pb::calibration_message(&Calibration::new(3, 2, 1, 0));
+    assert_eq!((c.sys, c.accel, c.gyro, c.mag), (3, 2, 1, 0));
+    assert!(!c.ready, "gyro and accel are short of 3");
+
+    let c = pb::calibration_message(&Calibration::new(3, 3, 3, 0));
+    assert!(
+        c.ready,
+        "IMU mode: the magnetometer is not part of readiness"
+    );
+    assert_eq!(c.mag, 0);
+
+    let c = pb::calibration_message(&Calibration::new(0, 3, 3, 0));
+    assert!(c.ready, "accel and gyro are what readiness is");
+    assert_eq!(c.sys, 0, "reported, and zero");
 }
 
 #[test]

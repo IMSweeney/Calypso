@@ -1,16 +1,19 @@
 //! BLE sync: the messages the device pushes to the app.
 //!
-//! Both characteristics are halves of one pipe ([`crate::pipe`]), so nothing here
-//! is about *how* a message travels any more: a summary, a calibration status and
-//! a trace chunk are each one transfer, and their sizes are the pipe's business.
-//! What is left here is what the device says — the envelope it puts a summary or a
-//! calibration status in, and the request it will serve — plus the cursor that
-//! keeps track of how much of the log the app has been sent.
+//! Two characteristics are halves of one pipe ([`crate::pipe`]), so nothing here
+//! is about *how* a message travels any more: a summary and a trace chunk are each
+//! one transfer, and their sizes are the pipe's business. What is left here is what
+//! the device says — the envelope it puts a summary in, and the request it will
+//! serve — plus the cursor that keeps track of how much of the log the app has been
+//! sent.
+//!
+//! Calibration is not here: it is a state the app *reads* off its own
+//! characteristic (`proto/calypso_gatt.proto`), so nothing about it travels on the
+//! pipe.
 //!
 //! Platform-independent, so the whole flow is host-tested (see `tests/sync.rs`)
 //! without a radio.
 
-use crate::calibration::Calibration;
 use crate::pb::{self, msg};
 
 /// Summaries to send when the app subscribes.
@@ -57,15 +60,6 @@ impl SummaryCursor {
 pub fn summary_message(summary: msg::RepSummary) -> msg::SyncMessage {
     msg::SyncMessage {
         body: Some(msg::SyncMessage_::Body::Summary(summary)),
-    }
-}
-
-/// The IMU's calibration status as a `SyncMessage`.
-pub fn calibration_message(calibration: &Calibration) -> msg::SyncMessage {
-    msg::SyncMessage {
-        body: Some(msg::SyncMessage_::Body::Calibration(
-            pb::calibration_message(calibration),
-        )),
     }
 }
 

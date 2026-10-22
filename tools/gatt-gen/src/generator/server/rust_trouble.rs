@@ -326,8 +326,9 @@ fn emit_value_type(out: &mut String, characteristic: &Characteristic, config: &C
         "/// `{message}` as one GATT attribute value: the message encoded whole, which is\n\
          /// what a single-shot characteristic carries (`max_len` {capacity}).\n\
          ///\n\
-         /// `encode` returns `None` only for a message that does not fit, which the\n\
-         /// assertion at the end of this file rules out; `decode` returns `None` for\n\
+         /// `encode` returns `None` only for a message that does not fit `max_len`,\n\
+         /// which a single-shot value has no assertion against (the tests check the\n\
+         /// largest message the device writes instead); `decode` returns `None` for\n\
          /// bytes that are not this message at all.\n\
          #[derive(Default)]\n\
          pub struct {ty} {{\n\

@@ -107,18 +107,21 @@ message SyncRequest {
   }
 }
 
-// Everything sent device -> app on the sync service.
+// Everything sent device -> app on the sync service, on the pipe.
 //
 // A response and a push look alike here, and the client tells them apart by the
 // body: a `trace` belongs to the `TraceRequest` that asked for it (its chunks
-// carry the rep's UUID), while `summary` and `calibration` arrive because the
-// client subscribed, not because it asked.
+// carry the rep's UUID), while `summary` arrives because the client subscribed,
+// not because it asked.
+//
+// Calibration is **not** here: it is a state, and the app reads it off its own
+// characteristic (`proto/calypso_gatt.proto`) when its UI wants it, rather than
+// being sent it at the device's choice of moment.
 message SyncMessage {
   oneof body {
     RepSummary summary = 1;  // auto-streamed as reps are recorded
     TraceChunk trace = 2;    // on demand, in response to TraceRequest
     SyncStatus status = 3;
-    CalibrationStatus calibration = 4;  // IMU calibration, pushed as it changes
   }
 }
 
@@ -140,6 +143,10 @@ message SyncMessage {
 // magnetometer, which is unreliable next to a barbell), where the magnetometer
 // never calibrates, so it is never the thing being waited for and the app must
 // not send the user chasing it.
+//
+// Travels as the value of the `Calibration` characteristic
+// (`proto/calypso_gatt.proto`), which the client reads: how often the levels are
+// looked at is the app's UI's business, not the device's.
 message CalibrationStatus {
   uint32 sys = 1;    // 0..3, the aggregate the fusion uses (0 for ever in IMU mode)
   uint32 accel = 2;  // 0..3

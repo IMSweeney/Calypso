@@ -21,8 +21,8 @@ import "google/protobuf/empty.proto";
 // The generated Rust lands in `calypso_core::gatt`, the generated Dart in
 // `calypso-app/lib/gatt/gatt_client.dart`.
 //
-// Both characteristics belong to one **pipe** (`pipe: "sync"`): neither carries a
-// whole message in one value. A message is cut into chunks, each framed and
+// The two pipe characteristics belong to one **pipe** (`pipe: "sync"`): neither
+// carries a whole message in one value. A message is cut into chunks, each framed and
 // carried in one write or one notification, and reassembled at the other end —
 // `tools/gatt-gen/SPEC.md` §7 describes the protocol, and `tools/gatt-pipe` is the
 // runtime both ends drive it with. That is what a trace travels as: one `TraceChunk`
@@ -30,12 +30,35 @@ import "google/protobuf/empty.proto";
 // into three-point notifications. The size of a chunk and of a message are the
 // generator's (`tool/gen_gatt.sh`), not this file's: a pipe has no `max_len`,
 // because it sizes transfers rather than values.
+//
+// The third characteristic is **not** a pipe, and is the one thing on this service
+// that is a value: the IMU's calibration state, which the app reads when it wants it
+// (`max_len` is what a single read carries). A state has no event to be pushed on,
+// and a push would have to be sent whenever it might have changed — which on a pipe
+// that carries one message at a time means it competes with the summaries
+// (`docs/GOTCHAS.md`, "An acknowledgement is also a request for the next message").
 
 service Sync {
   option (gatt.service) = {
     uuid: "0000ca20-b0cd-11ec-871f-d45ddf138840"
     primary: true
   };
+
+  // The IMU's calibration state, read by whoever wants it.
+  //
+  // `max_len` 20 is the payload every stack guarantees, which is also room enough
+  // for anything this device can put here: the levels are `u8`s out of CALIB_STAT
+  // (0..3), so the widest encoding it can build is four two-byte varints with their
+  // tags and a bool — 14 bytes. A `CalibrationStatus` with larger levels would
+  // encode to more, and `SyncCalibrationValue::encode` returns `None` rather than put
+  // a value in the characteristic that a client might not be able to read whole.
+  rpc Calibration(google.protobuf.Empty) returns (CalibrationStatus) {
+    option (gatt.characteristic) = {
+      uuid: "0000ca24-b0cd-11ec-871f-d45ddf138840"
+      props: [READ]
+      max_len: 20
+    };
+  }
 
   // Everything the app sends: a `SyncRequest`, as chunks the pipe reassembles.
   //

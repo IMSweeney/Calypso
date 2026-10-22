@@ -78,8 +78,6 @@ pub enum Stalled {
 pub enum Kind {
     /// A rep summary the app has not seen.
     Summary,
-    /// The IMU's calibration state.
-    Calibration,
     /// One chunk of a rep's trace.
     Trace,
 }
@@ -89,7 +87,6 @@ impl Kind {
     pub fn name(self) -> &'static str {
         match self {
             Kind::Summary => "summary",
-            Kind::Calibration => "calibration",
             Kind::Trace => "trace chunk",
         }
     }
@@ -105,9 +102,6 @@ pub struct Session<'a> {
     outgoing_len: usize,
     /// What is being sent, for the log line when it is lost.
     kind: Kind,
-    /// The calibration levels the app has been told on this connection, so a status
-    /// that says the same thing is not sent again.
-    calibration_sent: Option<u32>,
     /// The message being received.
     incoming: &'a mut [u8],
     incoming_len: usize,
@@ -172,7 +166,6 @@ impl<'a> Session<'a> {
             outgoing,
             outgoing_len: 0,
             kind: Kind::Summary,
-            calibration_sent: None,
             incoming,
             incoming_len: 0,
             reply: None,
@@ -213,32 +206,6 @@ impl<'a> Session<'a> {
             Kind::Summary,
             &crate::sync::summary_message(summary.clone()),
         )
-    }
-
-    /// Send the IMU's calibration status, unless this connection has already sent a
-    /// status that says the same thing.
-    ///
-    /// A status is a *state*, not an event: the app draws one hint from it, and the
-    /// device's own 1 Hz poll is what changes it. An unchanged one is not merely
-    /// idle traffic — the app acknowledges every message it receives, an
-    /// acknowledgement is a write, and a write is where the send path is asked what
-    /// to send next, so "status, acknowledgement, status, acknowledgement" is a loop
-    /// the summaries and traces never get the pipe out of.
-    ///
-    /// `false` if it was not worth sending, or if a transfer is still in flight.
-    pub fn send_calibration(&mut self, calibration: &crate::calibration::Calibration) -> bool {
-        let levels = calibration.to_bits();
-        if self.calibration_sent == Some(levels) {
-            return false;
-        }
-        let sent = self.send(
-            Kind::Calibration,
-            &crate::sync::calibration_message(calibration),
-        );
-        if sent {
-            self.calibration_sent = Some(levels);
-        }
-        sent
     }
 
     /// Send the next chunk of the trace being streamed, if there is one: the cursor
@@ -427,11 +394,6 @@ impl<'a> Session<'a> {
             if self.kind == Kind::Trace {
                 self.trace = None;
             }
-            // A status the app never acknowledged is one it has not been told, so
-            // the next request for it goes out rather than being remembered as sent.
-            if self.kind == Kind::Calibration {
-                self.calibration_sent = None;
-            }
             return Stalled::Abandoned { attempt };
         }
         // A new attempt, which is what the limit above counts: `start` is where
@@ -454,7 +416,6 @@ impl<'a> Session<'a> {
         self.reply = None;
         self.incoming_len = 0;
         self.outgoing_len = 0;
-        self.calibration_sent = None;
         self.trace = None;
         self.points_len = 0;
     }

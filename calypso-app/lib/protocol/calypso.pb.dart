@@ -782,26 +782,28 @@ class SyncRequest extends $pb.GeneratedMessage {
   TraceRequest ensureTrace() => $_ensure(0);
 }
 
-enum SyncMessage_Body { summary, trace, status, calibration, notSet }
+enum SyncMessage_Body { summary, trace, status, notSet }
 
-/// Everything sent device -> app on the sync service.
+/// Everything sent device -> app on the sync service, on the pipe.
 ///
 /// A response and a push look alike here, and the client tells them apart by the
 /// body: a `trace` belongs to the `TraceRequest` that asked for it (its chunks
-/// carry the rep's UUID), while `summary` and `calibration` arrive because the
-/// client subscribed, not because it asked.
+/// carry the rep's UUID), while `summary` arrives because the client subscribed,
+/// not because it asked.
+///
+/// Calibration is **not** here: it is a state, and the app reads it off its own
+/// characteristic (`proto/calypso_gatt.proto`) when its UI wants it, rather than
+/// being sent it at the device's choice of moment.
 class SyncMessage extends $pb.GeneratedMessage {
   factory SyncMessage({
     RepSummary? summary,
     TraceChunk? trace,
     SyncStatus? status,
-    CalibrationStatus? calibration,
   }) {
     final result = SyncMessage._();
     if (summary != null) result.summary = summary;
     if (trace != null) result.trace = trace;
     if (status != null) result.status = status;
-    if (calibration != null) result.calibration = calibration;
     return result;
   }
 
@@ -818,22 +820,19 @@ class SyncMessage extends $pb.GeneratedMessage {
     1: SyncMessage_Body.summary,
     2: SyncMessage_Body.trace,
     3: SyncMessage_Body.status,
-    4: SyncMessage_Body.calibration,
     0: SyncMessage_Body.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SyncMessage',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
       createEmptyInstance: SyncMessage.$_createMessage)
-    ..oo(0, [1, 2, 3, 4])
+    ..oo(0, [1, 2, 3])
     ..aOM<RepSummary>(1, _omitFieldNames ? '' : 'summary',
         subBuilder: RepSummary.$_createMessage)
     ..aOM<TraceChunk>(2, _omitFieldNames ? '' : 'trace',
         subBuilder: TraceChunk.$_createMessage)
     ..aOM<SyncStatus>(3, _omitFieldNames ? '' : 'status',
         subBuilder: SyncStatus.$_createMessage)
-    ..aOM<CalibrationStatus>(4, _omitFieldNames ? '' : 'calibration',
-        subBuilder: CalibrationStatus.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -861,12 +860,10 @@ class SyncMessage extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
   @$pb.TagNumber(3)
-  @$pb.TagNumber(4)
   SyncMessage_Body whichBody() => _SyncMessage_BodyByTag[$_whichOneof(0)]!;
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
   @$pb.TagNumber(3)
-  @$pb.TagNumber(4)
   void clearBody() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
@@ -901,17 +898,6 @@ class SyncMessage extends $pb.GeneratedMessage {
   void clearStatus() => $_clearField(3);
   @$pb.TagNumber(3)
   SyncStatus ensureStatus() => $_ensure(2);
-
-  @$pb.TagNumber(4)
-  CalibrationStatus get calibration => $_getN(3);
-  @$pb.TagNumber(4)
-  set calibration(CalibrationStatus value) => $_setField(4, value);
-  @$pb.TagNumber(4)
-  $core.bool hasCalibration() => $_has(3);
-  @$pb.TagNumber(4)
-  void clearCalibration() => $_clearField(4);
-  @$pb.TagNumber(4)
-  CalibrationStatus ensureCalibration() => $_ensure(3);
 }
 
 /// The IMU's calibration state, as the BNO055 reports it in CALIB_STAT (0x35):
@@ -932,6 +918,10 @@ class SyncMessage extends $pb.GeneratedMessage {
 /// magnetometer, which is unreliable next to a barbell), where the magnetometer
 /// never calibrates, so it is never the thing being waited for and the app must
 /// not send the user chasing it.
+///
+/// Travels as the value of the `Calibration` characteristic
+/// (`proto/calypso_gatt.proto`), which the client reads: how often the levels are
+/// looked at is the app's UI's business, not the device's.
 class CalibrationStatus extends $pb.GeneratedMessage {
   factory CalibrationStatus({
     $core.int? sys,

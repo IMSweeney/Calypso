@@ -204,15 +204,6 @@ const SyncMessage$json = {
       '9': 0,
       '10': 'status'
     },
-    {
-      '1': 'calibration',
-      '3': 4,
-      '4': 1,
-      '5': 11,
-      '6': '.calypso.CalibrationStatus',
-      '9': 0,
-      '10': 'calibration'
-    },
   ],
   '8': [
     {'1': 'body'},
@@ -223,9 +214,7 @@ const SyncMessage$json = {
 final $typed_data.Uint8List syncMessageDescriptor = $convert.base64Decode(
     'CgtTeW5jTWVzc2FnZRIvCgdzdW1tYXJ5GAEgASgLMhMuY2FseXBzby5SZXBTdW1tYXJ5SABSB3'
     'N1bW1hcnkSKwoFdHJhY2UYAiABKAsyEy5jYWx5cHNvLlRyYWNlQ2h1bmtIAFIFdHJhY2USLQoG'
-    'c3RhdHVzGAMgASgLMhMuY2FseXBzby5TeW5jU3RhdHVzSABSBnN0YXR1cxI+CgtjYWxpYnJhdG'
-    'lvbhgEIAEoCzIaLmNhbHlwc28uQ2FsaWJyYXRpb25TdGF0dXNIAFILY2FsaWJyYXRpb25CBgoE'
-    'Ym9keQ==');
+    'c3RhdHVzGAMgASgLMhMuY2FseXBzby5TeW5jU3RhdHVzSABSBnN0YXR1c0IGCgRib2R5');
 
 @$core.Deprecated('Use calibrationStatusDescriptor instead')
 const CalibrationStatus$json = {

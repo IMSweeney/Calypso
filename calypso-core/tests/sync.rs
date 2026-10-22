@@ -6,11 +6,10 @@
 //! the device runs rather than by a number repeated in the test. How a message
 //! travels — chunks, acknowledgements, retries — belongs to `tests/pipe.rs`.
 
-use calypso_core::calibration::Calibration;
 use calypso_core::gatt::pipe_sync;
 use calypso_core::pb::{self, msg};
 use calypso_core::pipe::MESSAGE_MAX;
-use calypso_core::sync::{calibration_message, summary_message, trace_request, SummaryCursor};
+use calypso_core::sync::{summary_message, trace_request, SummaryCursor};
 use calypso_core::uuid::fixture_uuid;
 
 /// A message as the pipe carries it: the bytes the app reassembles, and their
@@ -60,7 +59,7 @@ fn worst_case_chunk_fits_a_transfer() {
 }
 
 #[test]
-fn worst_case_summary_and_calibration_fit_a_transfer() {
+fn worst_case_summary_fits_a_transfer() {
     let summary = msg::RepSummary {
         rep_uuid: pb::uuid_to_field(&fixture_uuid(3)),
         t_start_ms: u32::MAX,
@@ -80,9 +79,6 @@ fn worst_case_summary_and_calibration_fit_a_transfer() {
     };
     let (_, n) = wire(&summary_message(summary));
     assert!(n <= MESSAGE_MAX, "worst-case summary is {n} bytes");
-
-    let (_, n) = wire(&calibration_message(&Calibration::new(3, 3, 3, 0)));
-    assert!(n <= MESSAGE_MAX, "a calibration status is {n} bytes");
 }
 
 #[test]
@@ -109,41 +105,6 @@ fn summary_messages_and_cursor() {
     assert_eq!(cursor.next(), 1);
     cursor.clamp_to(9);
     assert_eq!(cursor.next(), 1);
-}
-
-#[test]
-fn calibration_status_carries_every_sensor() {
-    let calibration = Calibration::new(3, 2, 1, 0);
-    let (buf, n) = wire(&calibration_message(&calibration));
-
-    match pb::decode_sync(&buf[..n]).unwrap().body {
-        Some(msg::SyncMessage_::Body::Calibration(c)) => {
-            assert_eq!((c.sys, c.accel, c.gyro, c.mag), (3, 2, 1, 0));
-            assert!(!c.ready, "gyro and accel are short of 3");
-        }
-        other => panic!("expected a calibration status, got {other:?}"),
-    }
-
-    let (buf, n) = wire(&calibration_message(&Calibration::new(3, 3, 3, 0)));
-    match pb::decode_sync(&buf[..n]).unwrap().body {
-        Some(msg::SyncMessage_::Body::Calibration(c)) => {
-            assert!(
-                c.ready,
-                "IMU mode: the magnetometer is not part of readiness"
-            );
-            assert_eq!(c.mag, 0);
-        }
-        other => panic!("expected a calibration status, got {other:?}"),
-    }
-
-    let (buf, n) = wire(&calibration_message(&Calibration::new(0, 3, 3, 0)));
-    match pb::decode_sync(&buf[..n]).unwrap().body {
-        Some(msg::SyncMessage_::Body::Calibration(c)) => {
-            assert!(c.ready, "accel and gyro are what readiness is");
-            assert_eq!(c.sys, 0, "reported, and zero");
-        }
-        other => panic!("expected a calibration status, got {other:?}"),
-    }
 }
 
 #[test]
