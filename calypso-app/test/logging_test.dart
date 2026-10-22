@@ -10,6 +10,7 @@ import 'package:logging/logging.dart';
 
 import 'support/calibration.dart';
 import 'support/fake_ble_link.dart';
+import 'support/fake_device.dart';
 import 'support/logging.dart';
 import 'support/test_uuid.dart';
 
@@ -166,9 +167,11 @@ void main() {
     link.seeDevice('device-1', 'Calypso');
     await connecting;
 
+    final device = FakeDevice(link);
     final calibration = calibrationMessage(sys: 1, accel: 1, gyro: 2);
-    link.notify(SyncClient.messagesUuid, calibration);
-    link.notify(SyncClient.messagesUuid, Uint8List(0));
+    device.send(calibration);
+    // An empty message is a message: one frame, START and END at once, no body.
+    device.send(Uint8List(0));
     await pumpEventQueue();
 
     await expectLater(
@@ -204,8 +207,8 @@ void main() {
     );
     expect(
       messages.where((m) => m.startsWith('tx ${SyncClient.requestsUuid} ')),
-      hasLength(1),
-      reason: 'the request the app sent',
+      isNotEmpty,
+      reason: 'the request the app sent, and the frames it went out as',
     );
   });
 }

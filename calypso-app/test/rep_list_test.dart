@@ -17,6 +17,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'support/calibration.dart';
 import 'support/fake_ble_link.dart';
+import 'support/fake_device.dart';
 import 'support/test_uuid.dart';
 
 FixtureTransport fixtureTransport(String name) => FixtureTransport.fromBytes(
@@ -148,8 +149,9 @@ void main() {
 }
 
 void _calibrationHint() {
-  Future<FakeBleLink> pumpConnected(WidgetTester tester) async {
+  Future<(FakeBleLink, FakeDevice)> pumpConnected(WidgetTester tester) async {
     final link = FakeBleLink();
+    final device = FakeDevice(link);
     final ble = BleTransport(
       link,
       traceTimeout: const Duration(milliseconds: 50),
@@ -169,20 +171,17 @@ void _calibrationHint() {
       await tester.pump(const Duration(milliseconds: 10));
     }
     expect(find.text('Connected'), findsOneWidget);
-    return link;
+    return (link, device);
   }
 
   testWidgets('an uncalibrated device explains itself, then stops', (
     tester,
   ) async {
-    final link = await pumpConnected(tester);
+    final (_, device) = await pumpConnected(tester);
 
     expect(find.textContaining('IMU not calibrated'), findsNothing);
 
-    link.notify(
-      SyncClient.messagesUuid,
-      calibrationMessage(sys: 1, accel: 1, gyro: 2),
-    );
+    device.send(calibrationMessage(sys: 1, accel: 1, gyro: 2));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('IMU not calibrated'), findsOneWidget);
@@ -191,7 +190,7 @@ void _calibrationHint() {
     expect(find.textContaining('accel 1/3'), findsOneWidget);
     expect(find.textContaining('mag 0/3'), findsOneWidget);
 
-    link.notify(SyncClient.messagesUuid, calibrationMessage());
+    device.send(calibrationMessage());
     await tester.pumpAndSettle();
     expect(find.textContaining('IMU not calibrated'), findsNothing);
   });
@@ -199,12 +198,9 @@ void _calibrationHint() {
   testWidgets('a dropped connection takes a stale hint with it', (
     tester,
   ) async {
-    final link = await pumpConnected(tester);
+    final (link, device) = await pumpConnected(tester);
 
-    link.notify(
-      SyncClient.messagesUuid,
-      calibrationMessage(sys: 1, accel: 1, gyro: 1),
-    );
+    device.send(calibrationMessage(sys: 1, accel: 1, gyro: 1));
     await tester.pumpAndSettle();
     expect(find.textContaining('IMU not calibrated'), findsOneWidget);
 
@@ -237,6 +233,7 @@ void _liveSummaries() {
     'a rep that arrives while connected is written to the log and listed',
     (tester) async {
       final link = FakeBleLink();
+      final device = FakeDevice(link);
       final ble = BleTransport(
         link,
         traceTimeout: const Duration(milliseconds: 50),
@@ -259,7 +256,7 @@ void _liveSummaries() {
       }
       expect(find.text('Connected'), findsOneWidget);
 
-      link.notify(SyncClient.messagesUuid, summaryMessage(u(0)));
+      device.send(summaryMessage(u(0)));
       await tester.pumpAndSettle();
 
       expect(
@@ -269,7 +266,7 @@ void _liveSummaries() {
       );
       expect(archive.contains(u(0)), isTrue, reason: 'and the log has it');
 
-      link.notify(SyncClient.messagesUuid, summaryMessage(u(0)));
+      device.send(summaryMessage(u(0)));
       await tester.pumpAndSettle();
       expect(
         find.textContaining('Rep ${uuidShort(u(0))}'),

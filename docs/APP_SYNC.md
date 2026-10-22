@@ -12,20 +12,52 @@ Service `0000ca20-b0cd-11ec-871f-d45ddf138840` — advertised, so a scan can fil
 
 | UUID | Direction | Carries |
 |---|---|---|
-| `0000ca21-…` | notify | everything the device says: a `SyncMessage`, whatever its body |
-| `0000ca22-…` | write (+ write-without-response) | everything the app asks for: a `SyncRequest` |
+| `0000ca21-…` | notify | everything the device says: chunks of a `SyncMessage`, and the acknowledgements of what the app sent |
+| `0000ca22-…` | write-without-response | everything the app asks for: chunks of a `SyncRequest`, and the acknowledgements of what the device sent |
 
 **One characteristic each way, and that is the design.** The body of the message
 says what it is — a `summary`, a `trace` chunk, a `calibration` status — so nothing
 here distinguishes a response from a push, and a new kind of message is a new arm of
-the oneof rather than a new characteristic, a new UUID and a new subscription. The
-notify side is sized for the largest message (a trace chunk); the requests side is
-sized for a `TraceRequest` and its envelope.
+the oneof rather than a new characteristic, a new UUID and a new subscription.
 
 They were three characteristics once: summaries, trace chunks and a bare
 `TraceRequest` each had their own. Collapsing them removed the asymmetry between the
 two directions, the two subscriptions the app had to make, and a CCCD-slot count
 that could be got wrong in silence (`docs/GOTCHAS.md`).
+
+### The pipe
+
+Neither characteristic carries a whole message. A message is cut into chunks of at
+most 244 bytes, each framed and carried in one write or one notification, and
+reassembled at the other end — `tools/gatt-pipe` (Rust, the device) and
+`calypso-app/lib/gatt/pipe.dart` (Dart, the app) are the two implementations, checked
+against the same cases in `tools/gatt-pipe/tests/vectors/pipe.txt`. The frame:
+
+```text
+| seq u8 | flags u8 | [total_len varint, START only] | payload | crc16 LE |
+```
+
+`START` and `END` say where a chunk is in a message; `ACK` and `NAK` are the
+acknowledgements, and they travel on the *other* characteristic from the data they
+are about, which is why both directions can share two characteristics. What the pipe
+buys, and what it costs:
+
+- **A trace chunk is one transfer, not three points a notification.** A whole
+  `TraceChunk` (48 samples, ~2 KB) crosses as a few notifications, and
+  `total_chunks` still tells the app when it has the whole trace — that delimits a
+  *trace*, not a transfer.
+- **Nothing is lost quietly.** Writes have no response, and notifications have no
+  acknowledgement of their own: the count is the acknowledgement. A device that
+  hears nothing gives up on a message after three attempts (`XFER_TIMEOUT_MS`
+  apart), and the app does the same for a request.
+- **One message at a time.** A transfer is finished by its acknowledgement, so
+  neither end can start the next message until the one before it is done. The device
+  orders what it owes the app — the trace it asked for, then the calibration
+  status, then the summaries — and the app sends one request at a time.
+- **Chunks are sized from the link**, not assumed: the device reads its ATT MTU off
+  the connection, and the app asks for one after connecting (`requestMtu`). Both
+  clamp to the characteristic's own 244 bytes, so a phone that negotiates more than
+  the device can store gets what the device can store.
 
 GAP is the other service: `0x2A00` (the device name) and `0x2A01` (the
 appearance), both **read only**. The name is a compile-time constant in the
@@ -77,11 +109,12 @@ Two paths, one destination: the archive.
   only while one is up.
 - **Incremental, on the device's side.** The device keeps a cursor
   (`SummaryCursor`) of how far its subscriber has been brought up to date, so
-  re-subscribing sends only what is new, and it advances the cursor only on a
-  successful notify — where "successful" is checked properly, since
-  `Characteristic::notify` reports success whether or not anybody is subscribed
-  (see [`GOTCHAS.md`](GOTCHAS.md)). An app that is not subscribed means the next tick
-  retries from the same position.
+  re-subscribing sends only what is new, and it advances the cursor only for a
+  message the pipe took. Nothing goes out to a subscriber that is not there at all:
+  a transfer nobody acknowledges is abandoned after three attempts, so the firmware
+  checks the subscription itself (see [`GOTCHAS.md`](GOTCHAS.md)) rather than
+  inferring it from a notify that always reports success. What the batch does not
+  send this tick is still in the batch, and the cursor has not moved past it.
 - **Wrap-safe.** Old reps disappear from the device's ring but not from the
   client's archive. The cursor is clamped to the log's actual count, so a device
   that wrapped re-syncs from the oldest id it still has.
@@ -96,13 +129,20 @@ holds no rep state of its own.
 
 ## Trace sync
 
-The app writes a `TraceRequest { rep_uuid, all_chunks, chunk_index }` and the
-device streams `TraceChunk` notifications in response.
+The app writes a `TraceRequest { rep_uuid, all_chunks, chunk_index }` (as a
+transfer of its own) and the device streams `TraceChunk` messages in response, one
+per transfer.
 
-- **Re-chunked on the way out.** The log stores 48 points per record (sized to fit
-  a flash sector); BLE re-chunks to `sync::BLE_CHUNK_SAMPLES` = 3 points per notification, chosen for Apple's ~185-byte MTU. The client does not care how many points arrive per chunk.
+- **One transfer per stored chunk.** The log stores 48 points per record (sized to
+  fit a flash sector) and each record is one message: it crosses as a few
+  notifications of at most 244 bytes, against the three points a notification the
+  device used to cut for Apple's ~185-byte MTU. How many notifications a message
+  takes is the pipe's business, not the client's.
 - **End of stream.** Every streamed chunk carries `total_chunks`, the number of
-  chunks in that stream, so the client knows which is the last. It cannot be derived from the summary: the log's `chunk_count` counts 48-point records, while the stream is 3-point chunks. Stored records leave the field 0.
+  chunks in that stream, so the client knows which is the last. A streamed chunk is
+  a stored one now, so that number is also the summary's `chunk_count` — the field
+  stays because a *stream* is what the client is reassembling, and a record in the
+  log leaves it 0.
 - **Reassembly is tolerant.** `TraceAssembler` keys chunks by index, so
   out-of-order arrival works, a repeated index replaces the earlier one, and chunks for another rep are ignored. `missingIndices()` reports gaps so a single chunk can be re-requested.
 

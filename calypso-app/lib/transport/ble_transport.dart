@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../gatt/gatt_client.dart';
+import '../gatt/pipe.dart' as pipe;
 import '../logging/loggers.dart';
 import '../model/uuid.dart';
 import '../protocol/calypso.pb.dart' as pb;
@@ -14,10 +15,24 @@ import '../state/ble_status.dart';
 import '../state/calibration.dart';
 import '../sync/trace_reassembly.dart';
 import 'ble_link.dart';
-import 'gatt_link.dart';
 import 'transport.dart';
 
 enum _Direction { rx, tx }
+
+/// The ATT MTU every chunk is sized from until the link has been asked.
+///
+/// 23 is the one every link can carry (20 bytes of ATT payload), so a chunk built
+/// from it is a chunk any link takes: slow, and never truncated.
+const int _minimumMtu = 23;
+
+/// How long the device has to acknowledge a request before it is sent again —
+/// three attempts of this, and the request has failed.
+///
+/// One round trip is all it is: the device acknowledges the last chunk as soon as
+/// it has the request, so seconds mean a link that is there. It is deliberately
+/// *not* the response budget — how long the trace takes to arrive is
+/// `traceTimeout`, and that starts when the request lands.
+const Duration _defaultXferTimeout = Duration(seconds: 2);
 
 /// Reaching the device through the generated client: [SyncClient] and its
 /// `GattClientLink` come from `proto/calypso_gatt.proto` (see
@@ -31,18 +46,33 @@ class BleTransport implements RepTransport {
     this._link, {
     this.traceTimeout = const Duration(seconds: 30),
     this.chunkIdleTimeout = const Duration(milliseconds: 700),
-  });
+    Duration xferTimeout = _defaultXferTimeout,
+  }) : _xferTimeout = xferTimeout;
 
   final BleLink _link;
   final Duration traceTimeout;
   final Duration chunkIdleTimeout;
 
+  /// How long the device has to acknowledge a request, per attempt.
+  final Duration _xferTimeout;
+
   final BleStatusNotifier status = BleStatusNotifier();
   final CalibrationNotifier calibration = CalibrationNotifier();
 
   String? _deviceId;
-  SyncClient? _client;
-  StreamSubscription<pb.SyncMessage>? _messagesSub;
+  StreamSubscription<Uint8List>? _messagesSub;
+
+  /// The app's end of the pipe: one receiver for everything the device sends, and
+  /// one sender for everything the app asks with. Both directions are the same
+  /// frame on the same two characteristics, so what arrives has to be sorted by the
+  /// frame rather than by where it came from (`_onNotification`).
+  final pipe.Receiver _receiver = pipe.Receiver(SyncPipe.window);
+  final pipe.Sender _sender = pipe.Sender(SyncPipe.window);
+  final Uint8List _inbound = Uint8List(SyncPipe.messageMax);
+  Completer<void>? _acknowledged;
+
+  /// The ATT MTU the chunk size is computed from, read once per connection.
+  int _mtu = _minimumMtu;
   final StreamController<pb.RepSummary> _summaryCtrl =
       StreamController<pb.RepSummary>.broadcast();
 
@@ -129,8 +159,25 @@ class BleTransport implements RepTransport {
           '${SyncClient.serviceUuid} (${SyncClient.messagesUuid}, ${SyncClient.requestsUuid})',
         );
       }
-      _client = SyncClient(BleLinkGattClient(_link, deviceId));
-      await _client!.subscribeMessages();
+      // Ask for the most the pipe can use — a chunk's frame is what it is sized
+      // from — and take what the link gives rather than what was asked for.
+      try {
+        _mtu = await _link.requestMtu(deviceId, SyncPipe.chunkMax + 3);
+        bleLog.info('ATT MTU $_mtu');
+      } catch (e) {
+        // A link that will not say: the smallest MTU every stack guarantees is
+        // slower and never wrong.
+        _mtu = _minimumMtu;
+        bleLog.warning(
+          'could not negotiate an MTU ($e); sizing chunks for $_mtu',
+        );
+      }
+
+      await _link.subscribe(
+        deviceId,
+        SyncClient.serviceUuid,
+        SyncClient.messagesUuid,
+      );
       debugPrint(
         'calypso: notifications enabled for ${SyncClient.messagesUuid}',
       );
@@ -142,21 +189,23 @@ class BleTransport implements RepTransport {
     }
 
     _deviceId = deviceId;
+    _receiver.reset();
+    _sender.reset();
     _link.onConnectionChange((id, connected, error) {
       if (id != _deviceId) return;
       if (!connected) _onConnectionLost(error);
     });
     try {
-      // The client decodes, so a payload that will not decode arrives here as a
-      // stream error rather than as bytes the transport quietly drops. Say so and
-      // keep listening: the next notification may be fine, and the alternative is
-      // a session with nothing in it to read.
-      _messagesSub = _client!.messagesUpdates.listen(
-        _onMessage,
-        onError: (Object error) => bleLog.warning(
-          'undecodable message on ${SyncClient.messagesUuid}: $error',
-        ),
-      );
+      // Raw frames, not messages: a notification is a chunk of a transfer until
+      // the pipe has reassembled it, and the ones that are acknowledgements of the
+      // app's own transfer never become a message at all.
+      _messagesSub = _link
+          .valueStream(deviceId, SyncClient.messagesUuid)
+          .listen(
+            _onNotification,
+            onError: (Object error) =>
+                bleLog.warning('error on ${SyncClient.messagesUuid}: $error'),
+          );
     } catch (e) {
       bleLog.warning('could not listen to $deviceId: $e');
       status.set(BleStatus.failed, deviceId: deviceId, error: '$e');
@@ -208,7 +257,10 @@ class BleTransport implements RepTransport {
     calibration.clear();
     _messagesSub?.cancel();
     _messagesSub = null;
-    _client = null;
+    // Whatever was in flight went with the link: half a message is not a message.
+    _receiver.reset();
+    _sender.reset();
+    _acknowledged = null;
     final deviceId = _deviceId;
     _deviceId = null;
     if (deviceId != null) {
@@ -266,8 +318,12 @@ class BleTransport implements RepTransport {
     final completer = Completer<List<pb.TraceSample>>();
     _pending[uuid] = completer;
     final response = completer.future;
+    // The failure can arrive while the request is still going out — a dropped
+    // connection fails it there — and a completer nobody is listening to yet
+    // reports that as an unhandled error rather than to the caller that will
+    // await it below.
+    unawaited(response.then((_) {}, onError: (Object _) {}));
     _requestTimers.remove(uuid)?.cancel();
-    _requestTimers[uuid] = Timer(traceTimeout, () => _timeoutRequest(uuid));
 
     final request = pb.SyncRequest(
       trace: pb.TraceRequest(
@@ -275,22 +331,18 @@ class BleTransport implements RepTransport {
         allChunks: true,
       ),
     );
-    // The bytes the client is about to send are logged as they go out; the
-    // encode is the same one, done twice on a path that runs once a trace.
-    _logMessage(
-      _Direction.tx,
-      SyncClient.requestsUuid,
-      request.writeToBuffer(),
-    );
     try {
-      await _client!.writeRequests(request);
+      // The request itself is a transfer now, and it is acknowledged before the
+      // device answers: the response budget starts when it lands, not when it is
+      // sent, or a slow link would spend it on the request.
+      await _request(request);
     } catch (e) {
       _pending.remove(uuid);
       _assemblers.remove(uuid);
-      response.ignore();
       bleLog.warning('trace $uuid: request failed: $e');
       throw TraceUnavailableException(uuid, 'request failed: $e');
     }
+    _requestTimers[uuid] = Timer(traceTimeout, () => _timeoutRequest(uuid));
 
     try {
       final points = await response;
@@ -331,6 +383,146 @@ class BleTransport implements RepTransport {
     _completed.clear();
     await _summaryCtrl.close();
     status.set(BleStatus.idle);
+  }
+
+  /// Send one request to the device, as a transfer, and wait for the device to
+  /// acknowledge it.
+  ///
+  /// The wait is the point of the pipe: the written characteristic has no write
+  /// response, so a write reports nothing at all — the acknowledgement of the last
+  /// chunk, on the other characteristic, is the only evidence the device has the
+  /// request. No acknowledgement within `xferTimeout` sends the whole thing
+  /// again, from the start.
+  Future<void> _request(pb.SyncRequest request) async {
+    final bytes = SyncPipe.encodeRequest(request);
+    _logMessage(_Direction.tx, SyncClient.requestsUuid, bytes);
+
+    for (var attempt = 1; attempt <= pipe.maxAttempts; attempt++) {
+      // Whatever the attempt before this left in flight is gone: a transfer that
+      // was not acknowledged is a transfer to send again, from the start.
+      _sender.abort();
+      _sender.start(bytes.length, SyncPipe.messageMax);
+      _acknowledged = Completer<void>();
+      await _writeChunks(bytes);
+      try {
+        await _acknowledged!.future.timeout(_xferTimeout);
+        return;
+      } on TimeoutException {
+        bleLog.warning(
+          'sync: no acknowledgement of the request '
+          '(attempt $attempt of ${pipe.maxAttempts})',
+        );
+      }
+    }
+    _sender.abort();
+    throw StateError(
+      'the device did not answer: no acknowledgement of the request',
+    );
+  }
+
+  /// Write every chunk of one transfer, as far as the window allows.
+  Future<void> _writeChunks(Uint8List bytes) async {
+    final capacity = pipe.capacity(_mtu, SyncPipe.chunkMax, bytes.length);
+    if (capacity == null) {
+      throw StateError('a $_mtu-byte link cannot carry a chunk');
+    }
+    final frame = Uint8List(SyncPipe.chunkMax);
+    while (true) {
+      final send = _sender.next(bytes, capacity, frame);
+      if (send.state == pipe.SendState.done) return;
+      if (send.state == pipe.SendState.windowFull) {
+        // The window is 127 chunks and a request is tens of bytes: reaching this
+        // means a message that should not exist, so it is said rather than waited
+        // on.
+        throw StateError(
+          'the request did not fit one window (${bytes.length} bytes)',
+        );
+      }
+      await _writeFrame(Uint8List.sublistView(frame, 0, send.length));
+    }
+  }
+
+  /// Write one frame to the characteristic the app talks on.
+  Future<void> _writeFrame(Uint8List frame) async {
+    final deviceId = _deviceId;
+    if (deviceId == null) return;
+    bleLog.fine(
+      describeMessage(_Direction.tx.name, SyncClient.requestsUuid, frame),
+    );
+    try {
+      await _link.write(
+        deviceId,
+        SyncClient.serviceUuid,
+        SyncClient.requestsUuid,
+        frame,
+        withResponse: false,
+      );
+    } catch (e) {
+      // The device's retry is the recovery: it will not see the chunk.
+      bleLog.warning('could not write a chunk: $e');
+    }
+  }
+
+  /// One value from the device: a chunk of a transfer, or the acknowledgement of
+  /// the app's own.
+  void _onNotification(Uint8List value) {
+    bleLog.fine(
+      describeMessage(_Direction.rx.name, SyncClient.messagesUuid, value),
+    );
+    if (_closed || _deviceId == null) return;
+
+    final frame = pipe.decode(value);
+    if (frame == null) {
+      bleLog.warning(
+        'a frame on ${SyncClient.messagesUuid} does not check out',
+      );
+      return;
+    }
+    if (frame.header.isReply) {
+      if (frame.header.isNak) {
+        // The device refused the transfer: the whole thing goes again.
+        bleLog.warning('sync: the device refused a chunk (nak)');
+        _sender.onNak();
+        return;
+      }
+      final acked = _sender.onAck(frame.header.seq);
+      bleLog.fine('${_Direction.rx.name} ack seq=${frame.header.seq} $acked');
+      if (acked == pipe.Acked.complete) _acknowledged?.complete();
+      return;
+    }
+
+    final received = _receiver.onChunk(value, _inbound, SyncPipe.messageMax);
+    switch (received.kind) {
+      case pipe.ReceivedKind.ack:
+      case pipe.ReceivedKind.nak:
+        unawaited(_writeReply(_receiver.nextExpected));
+      case pipe.ReceivedKind.delivered:
+        // The end of a message is where an acknowledgement is owed, whatever the
+        // window's cadence says: the device's sender is waiting on it to start
+        // anything else.
+        unawaited(_writeReply(_receiver.nextExpected));
+        _onMessage(
+          SyncPipe.decodeResponse(
+            Uint8List.sublistView(_inbound, 0, received.length),
+          ),
+        );
+      case pipe.ReceivedKind.dropped:
+        bleLog.warning('sync: a frame on the pipe did not check out');
+      case pipe.ReceivedKind.carryOn:
+        break;
+    }
+  }
+
+  /// The one frame the app owes the device: an acknowledgement, on the
+  /// characteristic the device waits on.
+  Future<void> _writeReply(int nextExpected) async {
+    final frame = Uint8List(8);
+    final length = pipe.encode(
+      pipe.Header(nextExpected, pipe.PipeFlags.ack),
+      const <int>[],
+      frame,
+    );
+    await _writeFrame(Uint8List.sublistView(frame, 0, length));
   }
 
   void _onMessage(pb.SyncMessage message) {

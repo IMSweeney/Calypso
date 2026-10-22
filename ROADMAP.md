@@ -162,13 +162,18 @@ device's typed request decode with it.
       needed is three lines of ordering instead (`keep_sending`), because at
       `window = MAX_WINDOW` the pipe never fills: what gates a message now is the
       *acknowledgement* of the one before it, not the window.
-- [ ] **The app**, in `transport/`: writes as transfers, notifications reassembled
+- [x] **The app**, in `transport/`: writes as transfers, notifications reassembled
       through `lib/gatt/pipe.dart`, and the trace path collapsed to "one transfer,
-      one `TraceChunk`".
+      one `TraceChunk`". The request is a transfer too, and the app waits for the
+      device to acknowledge it (`xferTimeout`, three attempts) before it starts
+      counting the response: a write without a response reports nothing, so the
+      acknowledgement is the only evidence the request arrived. The ATT MTU is
+      asked for after connecting rather than assumed.
 - [ ] **A bench session** for what no host replaces: negotiation, subscription,
       throughput, and whether the latency below is actually gone.
-- [ ] `docs/APP_SYNC.md` describes the wire protocol as it is today, so it moves
-      with this.
+- [x] `docs/APP_SYNC.md` describes the wire protocol, and moved with this: both
+      characteristics carry chunks and acknowledgements, and the trace section says
+      what one transfer is now.
 
 ### BLE link stability
 

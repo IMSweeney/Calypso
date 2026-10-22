@@ -19,6 +19,15 @@ abstract class BleLink {
 
   Future<List<DiscoveredService>> discoverServices(String deviceId);
 
+  /// The ATT MTU to size a chunk from, after asking for [expected].
+  ///
+  /// The pipe sizes every frame from this, and a frame the link cannot carry is a
+  /// write that fails or a notification the stack truncates — so the number comes
+  /// from the link rather than from a constant. `universal_ble` answers with the
+  /// negotiated MTU on Android, and with the write length Apple allows plus the
+  /// ATT header on Apple platforms, which is the same number for our purposes.
+  Future<int> requestMtu(String deviceId, int expected);
+
   Future<void> disconnect(String deviceId);
 
   void onConnectionChange(
@@ -94,6 +103,10 @@ class UniversalBleLink implements BleLink {
   @override
   Future<void> connect(String deviceId, {bool autoConnect = false}) =>
       plugin.UniversalBle.connect(deviceId, autoConnect: autoConnect);
+
+  @override
+  Future<int> requestMtu(String deviceId, int expected) =>
+      plugin.UniversalBle.requestMtu(deviceId, expected);
 
   @override
   Future<List<DiscoveredService>> discoverServices(String deviceId) async {

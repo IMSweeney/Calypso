@@ -33,6 +33,9 @@ class FakeBleLink implements BleLink {
   /// Whether each write asked for a response, in the order they were issued.
   final List<bool> writeResponses = [];
 
+  /// Called as each write lands, for a fake device that answers as it happens.
+  void Function(String characteristicUuid, Uint8List value)? onWrite;
+
   void Function(String deviceId, String? name)? _onScanResult;
   void Function(String deviceId, bool connected, String? error)?
   _onConnectionChange;
@@ -60,6 +63,16 @@ class FakeBleLink implements BleLink {
     connected = true;
     connectedDeviceId = deviceId;
     _onConnectionChange?.call(deviceId, true, null);
+  }
+
+  /// What the link reports for an MTU, and what it was asked for.
+  int mtu = 247;
+  final List<int> mtuRequests = [];
+
+  @override
+  Future<int> requestMtu(String deviceId, int expected) async {
+    mtuRequests.add(expected);
+    return mtu;
   }
 
   @override
@@ -122,6 +135,7 @@ class FakeBleLink implements BleLink {
   }) async {
     writes.add((characteristicUuid, value));
     writeResponses.add(withResponse);
+    onWrite?.call(characteristicUuid, value);
   }
 
   void seeDevice(String deviceId, [String? name]) =>
@@ -147,4 +161,10 @@ class FakeBleLink implements BleLink {
       .$2;
 
   bool get hasWriteTo => writes.isNotEmpty;
+
+  /// Every write to [characteristicUuid], in order.
+  List<Uint8List> writesTo(String characteristicUuid) => [
+    for (final write in writes)
+      if (write.$1 == characteristicUuid) write.$2,
+  ];
 }

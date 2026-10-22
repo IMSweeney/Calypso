@@ -1,79 +1,64 @@
-import 'dart:typed_data';
-
 import 'package:calypso/gatt/gatt_client.dart';
+import 'package:calypso/gatt/pipe.dart' as pipe;
 import 'package:calypso/protocol/calypso.pb.dart' as pb;
-import 'package:calypso/transport/gatt_link.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/fake_ble_link.dart';
-
-/// The generated client over a fake link: what the schema says a client can do,
-/// done without a radio.
+/// The generated client, against the schema it came from.
+///
+/// Both characteristics belong to one pipe, so there is nothing here to do over a
+/// fake link any more: what the schema declares is the UUIDs, the pipe's numbers
+/// and the two directions' codecs, and what *drives* them is
+/// `lib/transport/ble_transport.dart` (its own tests) over `lib/gatt/pipe.dart`
+/// (the shared vectors). What is left to check is that the constants and the
+/// codecs are the schema's.
 void main() {
-  const deviceId = 'device-1';
-
-  late FakeBleLink link;
-  late SyncClient client;
-
-  setUp(() async {
-    link = FakeBleLink();
-    await link.connect(deviceId);
-    // The fake refuses a subscribe before discovery, as a stack does.
-    await link.discoverServices(deviceId);
-    client = SyncClient(BleLinkGattClient(link, deviceId));
-  });
-
   test('the UUIDs are the ones the schema declares', () {
     expect(SyncClient.serviceUuid, '0000ca20-b0cd-11ec-871f-d45ddf138840');
     expect(SyncClient.messagesUuid, '0000ca21-b0cd-11ec-871f-d45ddf138840');
     expect(SyncClient.requestsUuid, '0000ca22-b0cd-11ec-871f-d45ddf138840');
+    expect(SyncPipe.serviceUuid, SyncClient.serviceUuid);
+    expect(SyncPipe.upUuid, SyncClient.messagesUuid);
+    expect(SyncPipe.downUuid, SyncClient.requestsUuid);
   });
 
-  test(
-    'subscribing goes to the messages characteristic of the service',
-    () async {
-      await client.subscribeMessages();
+  test('the pipe is sized from the schema, and the runtime agrees', () {
+    expect(SyncPipe.chunkMax, 244);
+    expect(SyncPipe.messageMax, 4096);
+    expect(SyncPipe.window, 127);
+    expect(SyncPipe.xferTimeoutMs, 5000);
 
-      expect(link.subscribed, [SyncClient.messagesUuid]);
-      expect(link.calls, contains('subscribe:${SyncClient.messagesUuid}'));
-    },
-  );
-
-  test('a notification arrives decoded', () async {
-    final updates = client.messagesUpdates;
-    final next = updates.first;
-
-    link.notify(
-      SyncClient.messagesUuid,
-      pb.SyncMessage(
-        calibration: pb.CalibrationStatus(accel: 3, gyro: 3, ready: true),
-      ).writeToBuffer(),
+    // One frame is what a characteristic holds, so the payload a chunk may carry
+    // is the frame less its own overhead — the same sum the runtime takes.
+    final capacity = pipe.capacity(247, SyncPipe.chunkMax, 1000);
+    expect(capacity, SyncPipe.chunkMax - pipe.overhead(1000));
+    expect(
+      capacity! + pipe.overhead(1000),
+      SyncPipe.chunkMax,
+      reason: 'the frame fills the characteristic exactly',
     );
-
-    final message = await next;
-    expect(message.whichBody(), pb.SyncMessage_Body.calibration);
-    expect(message.calibration.ready, isTrue);
   });
 
-  test('a write carries the encoding of the message it was given', () async {
+  test('a request encodes and decodes as the schema says', () {
     final request = pb.SyncRequest(
-      trace: pb.TraceRequest(
-        repUuid: Uint8List.fromList(List.filled(16, 7)),
-        allChunks: true,
-      ),
+      trace: pb.TraceRequest(repUuid: List<int>.filled(16, 7), allChunks: true),
     );
+    final bytes = SyncPipe.encodeRequest(request);
+    expect(SyncPipe.decodeRequest(bytes).trace.allChunks, isTrue);
+    expect(
+      SyncPipe.decodeRequest(bytes).trace.repUuid,
+      List<int>.filled(16, 7),
+    );
+  });
 
-    await client.writeRequests(request);
-
-    expect(link.writes, hasLength(1));
-    final (uuid, bytes) = link.writes.single;
-    expect(uuid, SyncClient.requestsUuid);
-    // The device reads this: a `SyncRequest` with the rep the app asked for.
-    final decoded = pb.SyncRequest.fromBuffer(bytes);
-    expect(decoded.trace.repUuid, request.trace.repUuid);
-    expect(decoded.trace.allChunks, isTrue);
-    // The schema declares WRITE as well as WRITE_NO_RSP, and the write that
-    // reports failure is the one it asks for.
-    expect(link.writeResponses, [true]);
+  test('a message encodes and decodes as the schema says', () {
+    final message = pb.SyncMessage(
+      calibration: pb.CalibrationStatus(accel: 3, gyro: 3, ready: true),
+    );
+    final bytes = SyncPipe.encodeResponse(message);
+    expect(
+      SyncPipe.decodeResponse(bytes).whichBody(),
+      pb.SyncMessage_Body.calibration,
+    );
+    expect(SyncPipe.decodeResponse(bytes).calibration.ready, isTrue);
   });
 }

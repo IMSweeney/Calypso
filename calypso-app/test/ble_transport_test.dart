@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:calypso/model/uuid.dart';
@@ -7,6 +6,7 @@ import 'package:calypso/state/ble_status.dart';
 import 'package:calypso/store/memory_archive.dart';
 import 'package:calypso/store/archive_sync.dart';
 import 'package:calypso/gatt/gatt_client.dart';
+import 'package:calypso/gatt/pipe.dart' as pipe;
 import 'package:calypso/transport/ble_link.dart';
 import 'package:calypso/transport/ble_transport.dart';
 import 'package:calypso/model/calibration.dart';
@@ -16,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'support/calibration.dart';
 import 'support/fake_ble_link.dart';
+import 'support/fake_device.dart';
 import 'support/test_uuid.dart';
 
 pb.RepSummary summaryProto(String uuid, {int traceLen = 7}) => pb.RepSummary(
@@ -35,9 +36,21 @@ pb.RepSummary summaryProto(String uuid, {int traceLen = 7}) => pb.RepSummary(
   chunkCount: (traceLen / 3).ceil(),
 );
 
+/// A `SyncMessage`, encoded: what one transfer carries.
 Uint8List summaryMessage(String uuid, {int traceLen = 7}) => pb.SyncMessage(
   summary: summaryProto(uuid, traceLen: traceLen),
 ).writeToBuffer();
+
+/// An acknowledgement, as the app would write it back to the device.
+Uint8List ackFrame(int seq) {
+  final out = Uint8List(8);
+  final length = pipe.encode(
+    pipe.Header(seq, pipe.PipeFlags.ack),
+    const <int>[],
+    out,
+  );
+  return Uint8List.sublistView(out, 0, length);
+}
 
 Uint8List chunkMessage(
   String uuid,
@@ -77,11 +90,13 @@ Uint8List chunkMessage(
 Future<BleTransport> connectedTransport(
   FakeBleLink link, {
   Duration? traceTimeout,
+  Duration xferTimeout = const Duration(milliseconds: 50),
 }) async {
   final transport = BleTransport(
     link,
     traceTimeout: traceTimeout ?? const Duration(milliseconds: 200),
     chunkIdleTimeout: const Duration(milliseconds: 50),
+    xferTimeout: xferTimeout,
   );
   final connecting = transport.connect();
   await pumpEventQueue();
@@ -95,6 +110,7 @@ void main() {
     'connect scans for the service, subscribes, and reports connected',
     () async {
       final link = FakeBleLink();
+
       final transport = await connectedTransport(link);
 
       expect(link.scans.single, [SyncClient.serviceUuid]);
@@ -111,6 +127,7 @@ void main() {
 
   test('discovery happens between connecting and subscribing', () async {
     final link = FakeBleLink();
+
     final transport = await connectedTransport(link);
 
     expect(link.calls, [
@@ -199,13 +216,14 @@ void main() {
     'summaries arrive from notifications and are emitted once each',
     () async {
       final link = FakeBleLink();
+      final device = FakeDevice(link);
       final transport = await connectedTransport(link);
       final seen = <String>[];
       final sub = transport.watchSummaries().listen((s) => seen.add(s.uuid!));
 
-      link.notify(SyncClient.messagesUuid, summaryMessage(u(1)));
-      link.notify(SyncClient.messagesUuid, summaryMessage(u(2)));
-      link.notify(SyncClient.messagesUuid, summaryMessage(u(2)));
+      device.send(summaryMessage(u(1)));
+      device.send(summaryMessage(u(2)));
+      device.send(summaryMessage(u(2)));
       await pumpEventQueue();
 
       expect(seen, [u(1), u(2)]);
@@ -222,26 +240,22 @@ void main() {
     'a trace request is written to the request characteristic and reassembled',
     () async {
       final link = FakeBleLink();
+      final device = FakeDevice(link);
       final transport = await connectedTransport(link);
-      link.notify(SyncClient.messagesUuid, summaryMessage(u(1), traceLen: 7));
+      device.send(summaryMessage(u(1), traceLen: 7));
       await pumpEventQueue();
 
       final pending = transport.trace(u(1));
       await pumpEventQueue();
 
-      final request = pb.SyncRequest.fromBuffer(
-        link.lastWriteTo(SyncClient.requestsUuid),
-      ).trace;
+      final request = pb.SyncRequest.fromBuffer(device.requests.single).trace;
       expect(uuidFromBytes(request.repUuid), u(1));
       expect(request.allChunks, isTrue);
 
-      link.notify(
-        SyncClient.messagesUuid,
-        chunkMessage(u(1), 2, 3, points: 1, from: 6),
-      );
-      link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 0, 3, from: 0));
-      link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 0, 3, from: 0));
-      link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 1, 3, from: 3));
+      device.send(chunkMessage(u(1), 2, 3, points: 1, from: 6));
+      device.send(chunkMessage(u(1), 0, 3, from: 0));
+      device.send(chunkMessage(u(1), 0, 3, from: 0));
+      device.send(chunkMessage(u(1), 1, 3, from: 3));
       await pumpEventQueue();
 
       final trace = await pending;
@@ -255,12 +269,13 @@ void main() {
 
   test('a chunk for another rep is ignored', () async {
     final link = FakeBleLink();
+    final device = FakeDevice(link);
     final transport = await connectedTransport(link);
     final pending = transport.trace(u(1));
     await pumpEventQueue();
 
-    link.notify(SyncClient.messagesUuid, chunkMessage(u(99), 0, 1, from: 0));
-    link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 0, 1, from: 0));
+    device.send(chunkMessage(u(99), 0, 1, from: 0));
+    device.send(chunkMessage(u(1), 0, 1, from: 0));
     await pumpEventQueue();
 
     expect((await pending).length, 3);
@@ -269,18 +284,62 @@ void main() {
 
   test('without totalChunks, a quiet stream counts as complete', () async {
     final link = FakeBleLink();
+    final device = FakeDevice(link);
     final transport = await connectedTransport(link);
     final pending = transport.trace(u(1));
     await pumpEventQueue();
 
-    link.notify(
-      SyncClient.messagesUuid,
-      chunkMessage(u(1), 0, 0, totalOverride: 0),
-    );
+    device.send(chunkMessage(u(1), 0, 0, totalOverride: 0));
     await pumpEventQueue();
 
     final trace = await pending;
     expect(trace.length, 3, reason: 'the idle timeout closed the stream');
+    await transport.close();
+  });
+
+  test('the ATT MTU the link gives sizes the chunks', () async {
+    final link = FakeBleLink()..mtu = 23;
+    final device = FakeDevice(link, mtu: 23);
+    final transport = await connectedTransport(link);
+
+    expect(link.mtuRequests, [
+      SyncPipe.chunkMax + 3,
+    ], reason: 'the most the pipe can use, and not a byte more');
+
+    // A summary does not fit 20 bytes of ATT payload: it travels as several
+    // frames, and the app reassembles it.
+    device.send(summaryMessage(u(1)));
+    await pumpEventQueue();
+    expect(device.notified.length, greaterThan(1), reason: 'several chunks');
+    expect(
+      (await transport.summaries()).single.uuid,
+      u(1),
+      reason: 'reassembled from them',
+    );
+    await transport.close();
+  });
+
+  test('a request nobody acknowledges is sent again, then gives up', () async {
+    final link = FakeBleLink();
+    final transport = await connectedTransport(
+      link,
+      xferTimeout: const Duration(milliseconds: 20),
+    );
+
+    await expectLater(
+      transport.trace(u(1)),
+      throwsA(
+        isA<TraceUnavailableException>().having(
+          (e) => e.reason,
+          'reason',
+          contains('did not answer'),
+        ),
+      ),
+    );
+
+    // One frame a request at this MTU, and three attempts of the whole transfer:
+    // the pipe has no selective retransmit, so a retry is the message again.
+    expect(link.writesTo(SyncClient.requestsUuid), hasLength(3));
     await transport.close();
   });
 
@@ -307,6 +366,7 @@ void main() {
 
   test('a partial stream that stops times out with what it got', () async {
     final link = FakeBleLink();
+    final device = FakeDevice(link);
     final transport = await connectedTransport(
       link,
       traceTimeout: const Duration(milliseconds: 40),
@@ -314,8 +374,8 @@ void main() {
     final pending = transport.trace(u(3));
     await pumpEventQueue();
 
-    link.notify(SyncClient.messagesUuid, chunkMessage(u(3), 0, 5, from: 0));
-    link.notify(SyncClient.messagesUuid, chunkMessage(u(3), 1, 5, from: 3));
+    device.send(chunkMessage(u(3), 0, 5, from: 0));
+    device.send(chunkMessage(u(3), 1, 5, from: 3));
     await pumpEventQueue();
 
     await expectLater(
@@ -355,10 +415,11 @@ void main() {
 
   test('a trace already received is not re-fetched', () async {
     final link = FakeBleLink();
+    final device = FakeDevice(link);
     final transport = await connectedTransport(link);
     final first = transport.trace(u(1));
     await pumpEventQueue();
-    link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 0, 1, from: 0));
+    device.send(chunkMessage(u(1), 0, 1, from: 0));
     await first;
 
     final writesBefore = link.writes.length;
@@ -372,6 +433,7 @@ void main() {
     'a chunk restarts the trace timeout, so a slow stream still lands',
     () async {
       final link = FakeBleLink();
+      final device = FakeDevice(link);
       final transport = await connectedTransport(
         link,
         traceTimeout: const Duration(milliseconds: 120),
@@ -379,9 +441,9 @@ void main() {
 
       final pending = transport.trace(u(1));
       await pumpEventQueue();
-      link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 0, 2));
+      device.send(chunkMessage(u(1), 0, 2));
       await Future<void>.delayed(const Duration(milliseconds: 90));
-      link.notify(SyncClient.messagesUuid, chunkMessage(u(1), 1, 2));
+      device.send(chunkMessage(u(1), 1, 2));
       await Future<void>.delayed(const Duration(milliseconds: 90));
 
       expect((await pending).length, 6, reason: 'two 3-point chunks');
@@ -393,14 +455,12 @@ void main() {
     'calibration arrives from the device and leaves with the connection',
     () async {
       final link = FakeBleLink();
+      final device = FakeDevice(link);
       final transport = await connectedTransport(link);
 
       expect(transport.calibration.latest, isNull);
 
-      link.notify(
-        SyncClient.messagesUuid,
-        calibrationMessage(sys: 1, accel: 1, gyro: 2),
-      );
+      device.send(calibrationMessage(sys: 1, accel: 1, gyro: 2));
       await pumpEventQueue();
 
       final latest = transport.calibration.latest!;
@@ -411,14 +471,11 @@ void main() {
 
       var notifications = 0;
       transport.calibration.addListener(() => notifications++);
-      link.notify(
-        SyncClient.messagesUuid,
-        calibrationMessage(sys: 1, accel: 1, gyro: 2),
-      );
+      device.send(calibrationMessage(sys: 1, accel: 1, gyro: 2));
       await pumpEventQueue();
       expect(notifications, 0);
 
-      link.notify(SyncClient.messagesUuid, calibrationMessage());
+      device.send(calibrationMessage());
       await pumpEventQueue();
       expect(notifications, 1);
       expect(transport.calibration.isReady, isTrue);
@@ -432,13 +489,11 @@ void main() {
 
   test('malformed notifications are ignored, not fatal', () async {
     final link = FakeBleLink();
+    final device = FakeDevice(link);
     final transport = await connectedTransport(link);
 
-    link.notify(
-      SyncClient.messagesUuid,
-      Uint8List.fromList([0xFF, 0xFF, 0xFF, 0xFF]),
-    );
-    link.notify(SyncClient.messagesUuid, Uint8List.fromList([0x00]));
+    device.sendGarbage();
+    device.sendGarbage();
     await pumpEventQueue();
 
     expect(await transport.summaries(), isEmpty);
@@ -448,7 +503,7 @@ void main() {
       reason: 'still connected',
     );
 
-    link.notify(SyncClient.messagesUuid, summaryMessage(u(4)));
+    device.send(summaryMessage(u(4)));
     await pumpEventQueue();
     expect((await transport.summaries()).single.uuid, u(4));
     await transport.close();
@@ -458,35 +513,31 @@ void main() {
     'device to plot: a synced trace lands in the archive and reads back',
     () async {
       final link = FakeBleLink();
+      final device = FakeDevice(link);
       final transport = await connectedTransport(link);
-      link.notify(SyncClient.messagesUuid, summaryMessage(u(1), traceLen: 7));
-      link.notify(SyncClient.messagesUuid, summaryMessage(u(2), traceLen: 7));
+      device.send(summaryMessage(u(1), traceLen: 7));
+      device.send(summaryMessage(u(2), traceLen: 7));
       await pumpEventQueue();
 
       transport.watchSummaries().listen((_) {});
-      unawaited(() async {
-        while (transport.status.isConnected) {
-          await Future<void>.delayed(const Duration(milliseconds: 5));
-          if (link.writes.isEmpty) continue;
-          final request = pb.SyncRequest.fromBuffer(
-            link.lastWriteTo(SyncClient.requestsUuid),
-          ).trace;
-          final requested = uuidFromBytes(request.repUuid);
-          if (requested == null) continue;
-          for (var index = 0; index < 3; index++) {
-            link.notify(
-              SyncClient.messagesUuid,
-              chunkMessage(
-                requested,
-                index,
-                3,
-                points: index == 2 ? 1 : 3,
-                from: index * 3,
-              ),
-            );
-          }
+      // Answer each request with the rep's three chunks, as the device would.
+      device.onRequest = (message) {
+        final requested = uuidFromBytes(
+          pb.SyncRequest.fromBuffer(message).trace.repUuid,
+        );
+        if (requested == null) return;
+        for (var index = 0; index < 3; index++) {
+          device.send(
+            chunkMessage(
+              requested,
+              index,
+              3,
+              points: index == 2 ? 1 : 3,
+              from: index * 3,
+            ),
+          );
         }
-      }());
+      };
 
       final archive = MemoryArchive();
       final added = await archiveFromTransport(archive, transport);
