@@ -86,7 +86,7 @@ class SyncPipe {
   static const int messageMax = 4096;
 
   /// Chunks in flight at most, before the sender waits.
-  static const int window = 127;
+  static const int window = 8;
 
   /// No-progress timeout for one transfer, in milliseconds.
   static const int xferTimeoutMs = 5000;

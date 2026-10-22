@@ -23,7 +23,7 @@ cargo run --quiet --manifest-path tools/gatt-gen/Cargo.toml -- \
   --dart-prefix pb \
   --chunk-max 244 \
   --pipe-msg-max 4096 \
-  --window 127 \
+  --window 8 \
   --xfer-timeout 5000 \
   --regenerate-with calypso-app/tool/gen_gatt.sh \
   proto/calypso_gatt.proto

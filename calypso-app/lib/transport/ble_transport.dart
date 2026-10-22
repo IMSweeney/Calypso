@@ -83,6 +83,9 @@ class BleTransport implements RepTransport {
 
   Timer? _calibrationTimer;
 
+  /// Whether a calibration read is already on its way.
+  bool _calibrationReadInFlight = false;
+
   final BleStatusNotifier status = BleStatusNotifier();
   final CalibrationNotifier calibration = CalibrationNotifier();
 
@@ -274,9 +277,16 @@ class BleTransport implements RepTransport {
   /// is [`calibrationPoll`]. A read that fails is a warning and nothing more — the
   /// levels are a hint, and a link that answers a read with an error is not a link to
   /// tear down over it.
+  ///
+  /// **One read at a time, whatever the poll says.** A read is an ATT round trip on a
+  /// queue the pipe's writes share: on a link that is answering slowly (or not at all)
+  /// a poll that ignored the last read would stack them up, and the acknowledgements
+  /// the device is waiting for would end up behind them. A poll that misses its turn is
+  /// no loss — the next one is a second away, and the levels change slower than that.
   Future<void> refreshCalibration() async {
     final client = _client;
-    if (client == null) return;
+    if (client == null || _calibrationReadInFlight) return;
+    _calibrationReadInFlight = true;
     try {
       final status = await client.readCalibration();
       bleLog.fine(
@@ -285,6 +295,8 @@ class BleTransport implements RepTransport {
       calibration.set(status);
     } catch (e) {
       bleLog.warning('could not read the calibration status: $e');
+    } finally {
+      _calibrationReadInFlight = false;
     }
   }
 
@@ -352,6 +364,7 @@ class BleTransport implements RepTransport {
     _calibrationTimer?.cancel();
     _calibrationTimer = null;
     _client = null;
+    _calibrationReadInFlight = false;
   }
 
   Future<void> _teardownConnection() async {

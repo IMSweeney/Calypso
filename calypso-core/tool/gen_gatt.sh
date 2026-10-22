@@ -13,11 +13,16 @@
 set -e
 cd "$(dirname "$0")/../.."
 
-# The pipe's numbers, which both ends have to agree on. `--window` is the one
-# that decides how the device sends: no message this device sends can exceed it,
-# so the send path never waits for an acknowledgement to make progress (see
-# ROADMAP.md, "Sync over the pipe").
+# The pipe's numbers, which both ends have to agree on.
 #
+#   --window 8           chunks in flight before the sender waits, and the
+#                        receiver acknowledges every window / 2. **This is the
+#                        flow control.** 127 was not one: a whole trace chunk
+#                        left as a single blast of ~150 notifications at an
+#                        18-byte frame, and the phone's own writes -- including
+#                        the acknowledgements the device was waiting for --
+#                        queued behind it for seconds (docs/GOTCHAS.md, "A
+#                        window of 127 is not flow control").
 #   --chunk-max 244      the pipe characteristic's backing buffer: one
 #                        notification's worth at a 247-byte MTU.
 #   --pipe-msg-max 4096  a whole `TraceChunk` (48 samples, 2459 bytes worst
@@ -31,7 +36,7 @@ cargo run --quiet --manifest-path tools/gatt-gen/Cargo.toml -- \
   --server CalypsoGatt \
   --chunk-max 244 \
   --pipe-msg-max 4096 \
-  --window 127 \
+  --window 8 \
   --xfer-timeout 5000 \
   --regenerate-with calypso-core/tool/gen_gatt.sh \
   proto/calypso_gatt.proto

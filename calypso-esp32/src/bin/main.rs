@@ -483,6 +483,12 @@ async fn main(spawner: Spawner) -> ! {
                     Err(_) => continue,
                 };
                 info!("BLE connection established (stack {})", Stack);
+                // **The one number that decides how a message travels.** Every chunk
+                // is framed to fit the link, so a central that leaves the ATT default
+                // of 23 in place gets 14 bytes of payload per notification and a
+                // trace chunk arrives as ~150 of them (docs/GOTCHAS.md, "A window of
+                // 127 is not flow control").
+                info!("ATT MTU {}", conn.raw().att_mtu());
                 // A read returns the last value published, so it is published before
                 // a client can ask for it.
                 publish_calibration(&gatt);

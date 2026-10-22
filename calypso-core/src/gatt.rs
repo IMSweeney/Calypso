@@ -204,7 +204,7 @@ pub mod pipe_sync {
     /// Largest message a transfer may carry, both ways.
     pub const MESSAGE_MAX: usize = 4096;
     /// Chunks in flight at most, before the sender waits.
-    pub const WINDOW: u8 = 127;
+    pub const WINDOW: u8 = 8;
     /// No-progress timeout for one transfer, in milliseconds.
     pub const XFER_TIMEOUT_MS: u32 = 5000;
 

@@ -49,7 +49,7 @@ fn the_committed_table_is_what_the_tool_generates() {
             // The pipe's numbers, as `tool/gen_gatt.sh` passes them.
             pipe_chunk_max: 244,
             pipe_msg_max: 4096,
-            window: 127,
+            window: 8,
             xfer_timeout_ms: 5000,
             regenerate_with: Some(RUST_SCRIPT.to_string()),
         },
@@ -75,7 +75,7 @@ fn the_committed_client_is_what_the_tool_generates() {
                 // The pipe's numbers, as the app's `tool/gen_gatt.sh` passes them.
                 pipe_chunk_max: 244,
                 pipe_msg_max: 4096,
-                window: 127,
+                window: 8,
                 xfer_timeout_ms: 5000,
                 regenerate_with: Some(DART_SCRIPT.to_string()),
             }),

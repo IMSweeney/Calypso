@@ -25,7 +25,7 @@ void main() {
   test('the pipe is sized from the schema, and the runtime agrees', () {
     expect(SyncPipe.chunkMax, 244);
     expect(SyncPipe.messageMax, 4096);
-    expect(SyncPipe.window, 127);
+    expect(SyncPipe.window, 8, reason: 'the flow control: chunks in flight');
     expect(SyncPipe.xferTimeoutMs, 5000);
 
     // One frame is what a characteristic holds, so the payload a chunk may carry
