@@ -71,10 +71,15 @@ buys, and what it costs:
   cost). (Nothing may be sent unconditionally here either: the app acknowledges every
   message, an acknowledgement is a write, and a write is where the device asks itself
   what to send next.)
-- **Chunks are sized from the link**, not assumed: the device reads its ATT MTU off
-  the connection, and the app asks for one after connecting (`requestMtu`). Both
-  clamp to the characteristic's own 244 bytes, so a phone that negotiates more than
-  the device can store gets what the device can store.
+- **Chunks are sized from the link, or from the characteristic when the link says
+  nothing.** The device reads the ATT MTU off the connection and frames each chunk to
+  fit it — but `23` is the spec's default and what a central reports when it never sent
+  the Exchange MTU Request (**macOS never does**), so a connection reporting 23 is
+  framed at the characteristic's 244 bytes instead: a peer that did not say is not a peer
+  that can only take 20. A peer that *did* negotiate something smaller gets frames that
+  fit it. The app asks its own stack for an MTU after connecting (`requestMtu`) and
+  clamps to the same ceiling, so neither end ever sends a frame bigger than the
+  characteristic holds.
 
 GAP is the other service: `0x2A00` (the device name) and `0x2A01` (the
 appearance), both **read only**. The name is a compile-time constant in the

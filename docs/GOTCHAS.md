@@ -507,25 +507,42 @@ unanswered after 7 attempts, dropped` on the device, and on the app
 already answered. The app *is* receiving messages — summaries arrive and are logged — so
 both ends look half-alive.
 
-**Cause.** The pipe's window is how many chunks a sender may have in flight, and the
-device took the 127 it was generated with as licence to put a whole message on the air
-without waiting for anything. At the MTU this link has — **23**, the ATT default, which
-is 14 bytes of payload in an 18-byte frame — a 2 KB trace chunk is ~150 notifications,
-and they left as one blast. The phone's writes queue behind that blast, including the
-acknowledgements the device was waiting for. Thirty-five seconds of retries later the
-device gave up on the chunk; the app's own request had timed out twice in the same
-window; and the archive sync that request belonged to stopped where it was. Summaries
-are *one* frame, which is why they kept arriving and made the app look healthy.
+**Cause.** Two sizes in the send path, both wrong in the same direction — more traffic
+than the link needed to see.
+
+*The window.* It is how many chunks a sender may have in flight, and the device took the
+127 it was generated with as licence to put a whole message on the air without waiting
+for anything.
+
+*The frame.* Each chunk was sized from `conn.raw().att_mtu()`, and this link reports
+**23** — the spec's default, which trouble-host keeps until an Exchange MTU Request
+arrives, and **macOS never sends one** (`connection_manager.rs`:
+`storage.att_mtu = 23` when a connection is set up). Fourteen bytes of payload per
+notification is what that number means, so a 2 KB trace chunk was ~150 notifications.
+
+The two together sent those 150 as one blast. The phone's writes queue behind it,
+including the acknowledgements the device was waiting for: thirty-five seconds of
+retries later the device gave up on the chunk, the app's own request had timed out twice
+in the same window, and the archive sync that request belonged to stopped where it was.
+Summaries are *one* frame, which is why they kept arriving and made the app look
+healthy.
 
 **How to see it.** The app's log carries the frame size of everything the client
-received: `raw 0000ca21-… 18B 55 00 …` is an 18-byte frame, and 18 bytes means an MTU
-of 23 — a frame is what is left of the ATT payload after the pipe's own overhead.
-Nothing else said so: the app's `ATT MTU 515` is Apple's *write* limit, not the link's,
-and the firmware logged nothing at all about it. It logs `ATT MTU N` at connect now.
+received: `raw 0000ca21-… 18B 55 00 …` is an 18-byte frame, and 18 bytes is what an MTU
+of 23 leaves after the pipe's own overhead. Nothing else said so: the app's
+`ATT MTU 515` is Apple's *write* limit, not the link's. The firmware logs both halves
+now — `ATT MTU 23: notifications up to 244 bytes`.
 
-**Fix.** `--window 8`: the sender stops after 8 chunks in flight and the receiver
-acknowledges every `window / 2`, so the acknowledgement *paces* the transfer instead of
-trailing behind it — which is the whole point of the mechanism, and what 127 defeated.
+**Fix.** Two, one per size.
+
+- `--window 8`: the sender stops after 8 chunks in flight and the receiver acknowledges
+every `window / 2`, so the acknowledgement *paces* the transfer instead of trailing
+behind it — which is the whole point of the mechanism, and what 127 defeated.
+- **The characteristic is the ceiling and the ATT MTU only lowers it** (`pipe::frame_mtu`).
+  A peer that has not said is not a peer that can only take 20 bytes: this device
+  notified 193-byte payloads to this same client for as long as traces have existed, and
+  the app's own 244-byte writes arrive whole. A peer that *did* negotiate a small MTU
+  still gets frames that fit what it asked for.
 
 **Corollary: a poll is traffic too.** The app's calibration read is once a second and
 invisible next to that blast, but six of them were completing in the same millisecond —
