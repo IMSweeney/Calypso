@@ -25,14 +25,19 @@ enum _Direction { rx, tx }
 /// from it is a chunk any link takes: slow, and never truncated.
 const int _minimumMtu = 23;
 
-/// How long the device has to acknowledge a request before it is sent again —
-/// three attempts of this, and the request has failed.
+/// How long the device has to acknowledge a request before it is sent again — three
+/// attempts of this, and the request has failed.
 ///
-/// One round trip is all it is: the device acknowledges the last chunk as soon as
-/// it has the request, so seconds mean a link that is there. It is deliberately
-/// *not* the response budget — how long the trace takes to arrive is
-/// `traceTimeout`, and that starts when the request lands.
-const Duration _defaultXferTimeout = Duration(seconds: 2);
+/// **The schema's number** (`xferTimeoutMs`), which is also the device's own patience
+/// for a transfer that stops moving: a budget shorter than that re-sends a request the
+/// device is still working on, and every re-send restarts the trace it is streaming.
+/// Two seconds was short enough to do exactly that — a request's acknowledgement
+/// queues behind the trace notifications already on the link and took ~3 s — so the
+/// rep arrived with no trace, twice over. It is deliberately *not* the response budget:
+/// how long a trace takes is `traceTimeout`, which starts when the request lands.
+const Duration _defaultXferTimeout = Duration(
+  milliseconds: SyncPipe.xferTimeoutMs,
+);
 
 /// How often the app reads the IMU's calibration levels by default, while connected.
 ///

@@ -10,6 +10,7 @@
 //! reproducible here: a chunk lost, an acknowledgement swallowed, a transfer that
 //! stalls until it is given up on.
 
+use calypso_core::gatt::pipe_sync;
 use calypso_core::pb::{self, msg, TRACE_CHUNK_SAMPLES};
 use calypso_core::pipe::{
     Kind, Session, Stalled, ATT_MTU_DEFAULT, FRAME_MAX, MESSAGE_MAX, XFER_TIMEOUT_MS,
@@ -17,7 +18,7 @@ use calypso_core::pipe::{
 use calypso_core::rep::TracePoint;
 use calypso_core::sync::{self, SummaryCursor};
 use calypso_core::uuid::{fixture_uuid, RepUuid};
-use gatt_pipe::{flags, Header, Received, Receiver, Send, Sender, MAX_ATTEMPTS};
+use gatt_pipe::{flags, Acked, Header, Received, Receiver, Send, Sender, MAX_ATTEMPTS};
 use micropb::MessageEncode;
 
 /// The MTU a phone negotiates when it asks for the most it can carry, which is
@@ -326,6 +327,58 @@ fn a_link_that_never_negotiated_is_framed_at_the_characteristic() {
         calypso_core::pipe::frame_ceiling(SMALL_MTU)
     );
     assert!(negotiated[0].len() < unattended[0].len());
+}
+
+/// The acknowledgement this device sends must be the number the *app's* sender expects:
+/// the next in-order sequence, not the one it just received. An off-by-one here is
+/// invisible to both ends' own tests — each is self-consistent — and looks like a
+/// request that is never acknowledged (`Acked.ignored` in the app's log).
+#[test]
+fn a_single_frame_request_is_acknowledged_where_the_app_expects() {
+    let mut buffers = Buffers::new(4);
+    let mut session = buffers.session();
+
+    // The app's side of a write: a `SyncRequest` as the schema encodes it, sent as one
+    // frame (START and END together, which is what a request is).
+    let mut request = [0u8; MESSAGE_MAX];
+    let request_len = pipe_sync::encode_request(
+        &msg::SyncRequest {
+            body: Some(msg::SyncRequest_::Body::Trace(msg::TraceRequest {
+                rep_uuid: pb::uuid_to_field(&fixture_uuid(3)),
+                chunk_index: 0,
+                all_chunks: true,
+            })),
+        },
+        &mut request,
+    )
+    .expect("the request encodes into a transfer");
+    let capacity =
+        gatt_pipe::capacity(MTU, FRAME_MAX, request_len as u32).expect("the link carries a frame");
+    let mut sender = Sender::new(pipe_sync::WINDOW);
+    sender.start(request_len, MESSAGE_MAX);
+    let mut frame = [0u8; FRAME_MAX];
+    let len = match sender.next(&request[..request_len], capacity, &mut frame) {
+        Ok(Send::Chunk(len)) => len,
+        other => panic!("one frame was expected: {other:?}"),
+    };
+
+    // The device takes it, and answers what it owes.
+    assert!(session.written(&frame[..len], 0).reply, "a reply is owed");
+    let mut reply = [0u8; FRAME_MAX];
+    let reply_len = session
+        .reply(&mut reply)
+        .expect("the device owes an acknowledgement");
+    let seq = gatt_pipe::decode(&reply[..reply_len])
+        .expect("a frame")
+        .0
+        .seq;
+
+    assert_eq!(
+        sender.on_ack(seq),
+        Acked::Complete,
+        "the app sent seq 0 and reads the acknowledgement of {seq}: an acknowledgement \
+         names the sequence the receiver wants *next*"
+    );
 }
 
 #[test]
