@@ -572,6 +572,14 @@ of 11, then thirty seconds of silence and a rep with no trace), and the trace cu
 advanced before it knew whether the send could even start, so a chunk asked for while
 busy was *skipped*. Whoever flushes a message has to be callable while it is in flight,
 and nothing may move a cursor until the send it is for has begun.
+
+**And it now says so.** `sync trace chunk: 8 frame(s) of a 2477 B message out, window
+full at 8 — the rest goes when the acknowledgement lands` is the device's own view of a
+wave that stopped short; read beside the app's `raw 0000ca21-… 242B` lines, the two ends
+describe the same transfer. Nothing is logged when the window is not what stopped it — a
+summary is one frame and always the whole message — so the line appears once per wave that
+matters. (`Sender::awaiting_ack` is the flag behind it; a wave that never appears at all is
+a transfer that never started.)
 - **The characteristic is the ceiling and the ATT MTU only lowers it** (`pipe::frame_mtu`).
   A peer that has not said is not a peer that can only take 20 bytes: this device
   notified 193-byte payloads to this same client for as long as traces have existed, and
