@@ -60,7 +60,9 @@ buys, and what it costs:
 - **Nothing is lost quietly.** Writes have no response, and notifications have no
   acknowledgement of their own: the count is the acknowledgement. A device that
   hears nothing gives up on a message after three attempts (`XFER_TIMEOUT_MS`
-  apart), and the app does the same for a request.
+  apart), and the app gives up on a request on the *same* clock — the schema's
+  `--xfer-timeout`, which both ends are generated with, because a shorter budget
+  re-sends a request into work that is still happening (`GOTCHAS.md`).
 - **One message at a time, and at most eight chunks of it on the wire.** A transfer is
   finished by its acknowledgement, so neither end can start the next message until the
   one before it is done: the device orders what it owes the app — the trace it asked

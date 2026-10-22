@@ -499,6 +499,31 @@ budget restarts, and a whole-stream one would have given up on a healthy device.
 `chunkIdleTimeout` (700 ms) is what closes it — that is what ends a stream from firmware
 that never set `total_chunks`.
 
+### A request budget shorter than the peer's patience
+
+**Symptom.** The app reports `trace …: request failed: Bad state: the device did not
+answer: no acknowledgement of the request`, and the device logs the *same* rep requested
+two or three times and then `sync trace chunk: unanswered after N attempts, dropped`. The
+rep lands in the archive with no trace.
+
+**Cause.** Two ends with different patience, and re-sends that are not free. The app
+waited 2 s for a request's acknowledgement — a number its transport file had made up —
+while the device waits `XFER_TIMEOUT_MS` (5 s) before it retries anything. Under a trace
+stream the acknowledgement is queued behind the notifications already on the link: the
+app's log has it landing ~3 s after the write, so every attempt timed out just before its
+own ack arrived, and each re-send made the device *restart* the trace it was streaming.
+The acks the app did receive read as `Acked.ignored`, because by then it had aborted the
+transfer they were about.
+
+**Fix.** The schema's number on both sides — `SyncPipe.xferTimeoutMs`, the same
+`--xfer-timeout` the device was generated with. A budget shorter than the peer's patience
+is a request re-sent into work that is still happening; longer is only slower.
+
+**Related.** This is the same shape of bug as the window (127) and the frame size (23): a
+number written by hand in one end that the schema already declares for both. When a
+transfer misbehaves, check the numbers each end *thinks* it is using before reading the
+protocol.
+
 ### A window of 127 is not flow control
 
 **Symptom.** The device streams a trace and the app never moves: `sync trace chunk:
