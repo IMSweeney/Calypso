@@ -139,7 +139,7 @@ class BleTransport implements RepTransport {
         'calypso: device offers ${_describe(services)}; '
         'want ${SyncClient.serviceUuid}[${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}]',
       );
-      if (!_offersSync(services)) {
+      if (!_offersSync(services) || _strangersIn(services).isNotEmpty) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
         services = await _link.discoverServices(deviceId);
       }
@@ -157,6 +157,18 @@ class BleTransport implements RepTransport {
         throw StateError(
           'device offers ${_describe(services)}, not both characteristics of '
           '${SyncClient.serviceUuid} (${SyncClient.messagesUuid}, ${SyncClient.requestsUuid})',
+        );
+      }
+      final strangers = _strangersIn(services);
+      if (strangers.isNotEmpty) {
+        throw StateError(
+          'the sync service also offers ${strangers.join(', ')}, which this build\'s '
+          'schema does not describe. Either the device is running firmware from another '
+          'schema (reflash it, and rebuild the app from the same one), or this client '
+          'has a cached GATT database from an older build — CoreBluetooth caches one per '
+          'peripheral address and the plugin prefers it, so every handle past the extra '
+          'characteristic is not this table\'s and a subscription on one fails as '
+          '"attribute not found". Try turning Bluetooth off and on.',
         );
       }
       // Ask for the most the pipe can use — a chunk's frame is what it is sized
@@ -227,6 +239,21 @@ class BleTransport implements RepTransport {
           (c) => _sameUuid(c, SyncClient.requestsUuid),
         ),
   );
+
+  /// The sync service's characteristics that the schema does not declare.
+  ///
+  /// The device's table is generated from the schema, so one here is a tree that is
+  /// not this firmware's: a cached database from an older build, or firmware this app
+  /// predates. The attributes after it belong to that other table, which is what makes
+  /// them worth refusing (docs/GOTCHAS.md).
+  static List<String> _strangersIn(List<DiscoveredService> services) => [
+    for (final service in services)
+      if (_sameUuid(service.uuid, SyncClient.serviceUuid))
+        for (final characteristic in service.characteristics)
+          if (!_sameUuid(characteristic, SyncClient.messagesUuid) &&
+              !_sameUuid(characteristic, SyncClient.requestsUuid))
+            characteristic,
+  ];
 
   static bool _sameUuid(String a, String b) =>
       a.toLowerCase() == b.toLowerCase();

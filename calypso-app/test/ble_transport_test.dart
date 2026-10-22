@@ -168,6 +168,35 @@ void main() {
     },
   );
 
+  test(
+    'a characteristic the schema does not declare is refused, named',
+    () async {
+      final link = FakeBleLink()
+        ..services = const [
+          DiscoveredService('0000ca20-b0cd-11ec-871f-d45ddf138840', [
+            '0000ca21-b0cd-11ec-871f-d45ddf138840',
+            '0000ca22-b0cd-11ec-871f-d45ddf138840',
+            '0000ca23-b0cd-11ec-871f-d45ddf138840',
+          ]),
+        ];
+
+      final transport = await connectedTransport(link);
+
+      expect(transport.status.status, BleStatus.failed);
+      expect(link.subscribed, isEmpty, reason: 'nothing was subscribed to');
+      expect(
+        transport.status.error,
+        contains('0000ca23-b0cd-11ec-871f-d45ddf138840'),
+        reason: 'the stranger is in the message',
+      );
+      expect(
+        transport.status.error,
+        contains('cached GATT database'),
+        reason: 'and the cause a reflash does not fix',
+      );
+    },
+  );
+
   test('a reversed GATT tree names both causes', () async {
     final link = FakeBleLink()
       ..services = const [

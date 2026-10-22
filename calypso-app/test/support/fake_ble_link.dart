@@ -20,11 +20,12 @@ class FakeBleLink implements BleLink {
 
   final List<String> discovered = [];
 
+  /// What the device serves: the schema's tree, and nothing the schema does not
+  /// declare (`proto/calypso_gatt.proto`).
   List<DiscoveredService> services = const [
     DiscoveredService('0000ca20-b0cd-11ec-871f-d45ddf138840', [
       '0000ca21-b0cd-11ec-871f-d45ddf138840',
       '0000ca22-b0cd-11ec-871f-d45ddf138840',
-      '0000ca23-b0cd-11ec-871f-d45ddf138840',
     ]),
   ];
 
