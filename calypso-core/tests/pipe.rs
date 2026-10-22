@@ -10,6 +10,7 @@
 //! reproducible here: a chunk lost, an acknowledgement swallowed, a transfer that
 //! stalls until it is given up on.
 
+use calypso_core::calibration::Calibration;
 use calypso_core::pb::{self, msg, TRACE_CHUNK_SAMPLES};
 use calypso_core::pipe::{Kind, Session, Stalled, FRAME_MAX, MESSAGE_MAX, XFER_TIMEOUT_MS};
 use calypso_core::rep::TracePoint;
@@ -272,6 +273,85 @@ fn the_send_path_stops_at_one_transfer_until_it_is_acknowledged() {
     }
     assert!(session.is_idle(), "and now the pipe is free");
     assert!(session.send(Kind::Calibration, &summary(2)));
+}
+
+#[test]
+fn a_calibration_status_that_says_the_same_thing_is_not_sent_again() {
+    let mut buffers = Buffers::new(4);
+    let mut session = buffers.session();
+    let mut phone = Phone::new();
+    let ready = Calibration::new(3, 3, 3, 3);
+
+    assert!(
+        session.send_calibration(&ready),
+        "the first status goes out"
+    );
+    let mut now = 0u32;
+    let mut arrived = None;
+    for frame in drain(&mut session, MTU) {
+        now += 10;
+        if let Some(bytes) = phone.take(&mut session, &frame, now) {
+            arrived = Some(bytes);
+        }
+    }
+    assert!(session.is_idle(), "and the app acknowledged it");
+    assert_eq!(
+        pb::decode_sync(&arrived.expect("the status arrived")).unwrap(),
+        sync::calibration_message(&ready)
+    );
+
+    // The tick asks every second and every write asks again, and every message the
+    // app takes is acknowledged — which is another write. Unchanged levels are not
+    // news, and saying so again is what the round trip repeats for ever.
+    assert!(
+        !session.send_calibration(&ready),
+        "the same levels go nowhere"
+    );
+    assert!(session.is_idle(), "and the pipe is left free");
+    assert!(
+        session.send_calibration(&Calibration::new(2, 3, 3, 3)),
+        "a level that moved does go out"
+    );
+}
+
+#[test]
+fn a_new_connection_is_told_the_calibration_status_again() {
+    let mut buffers = Buffers::new(4);
+    let mut session = buffers.session();
+    let ready = Calibration::new(3, 3, 3, 3);
+
+    assert!(session.send_calibration(&ready));
+    session.reset();
+
+    assert!(
+        session.send_calibration(&ready),
+        "the app that just connected has been told nothing"
+    );
+}
+
+#[test]
+fn a_calibration_status_nobody_acknowledged_goes_again() {
+    let mut buffers = Buffers::new(4);
+    let mut session = buffers.session();
+    let ready = Calibration::new(3, 3, 3, 3);
+    assert!(session.send_calibration(&ready));
+
+    // Nobody acknowledges: three attempts, and then the pipe gives up on it.
+    let mut now = 0u32;
+    let mut abandoned = false;
+    for _ in 0..1000 {
+        now += XFER_TIMEOUT_MS / 4;
+        if let Stalled::Abandoned { .. } = session.tick(now) {
+            abandoned = true;
+            break;
+        }
+    }
+
+    assert!(abandoned, "the transfer was given up on");
+    assert!(
+        session.send_calibration(&ready),
+        "the app was never told, so the same levels go out again"
+    );
 }
 
 #[test]

@@ -1188,7 +1188,8 @@ impl Sync<'_> {
         true
     }
 
-    /// Send the IMU's calibration status, if the pipe is free.
+    /// Send the IMU's calibration status, if the pipe is free and the app has not
+    /// already been told these levels ([`Session::send_calibration`]).
     async fn send_calibration(
         &mut self,
         calibration: &Calibration,
@@ -1693,6 +1694,11 @@ fn is_subscribed(
 }
 
 /// Tell the app the IMU's calibration state, on the summary characteristic.
+///
+/// Called on every tick and every write, because it is the cheapest way to have the
+/// status out as soon as the levels move; the session is what decides whether there
+/// is anything to say (an unchanged status is not sent, which is what keeps the
+/// acknowledgements from asking for it again for ever — `Session::send_calibration`).
 ///
 /// The same characteristic summaries stream on: `SyncMessage` exists to
 /// multiplex device -> app messages, and the app is already subscribed to this
