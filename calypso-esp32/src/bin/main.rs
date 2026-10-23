@@ -58,6 +58,16 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     }
 }
 
+/// A millisecond timestamp on every line, counted from boot: `esp-println`'s `timestamp` feature calls this for each one.
+///
+/// A dropped link is a duration — the phone's `The connection has timed out unexpectedly` is the link-layer supervision timer running out — so lining a drop up against what the firmware was doing needs one clock across both tasks, and this is it. `esp-hal`'s counter, which is up before the first line of `main`.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn _esp_println_timestamp() -> u64 {
+    esp_hal::time::Instant::now()
+        .duration_since_epoch()
+        .as_millis()
+}
+
 extern crate alloc;
 
 const CONNECTIONS_MAX: usize = 1;
@@ -415,10 +425,22 @@ async fn main(spawner: Spawner) -> ! {
                         }
                     };
                     match event {
-                        GattConnectionEvent::Disconnected { .. } => {
-                            info!("BLE disconnected");
+                        GattConnectionEvent::Disconnected { reason } => {
+                            // The device's own view of why, where the phone has only a string: `Err(Connection Timeout)` is the link's supervision timer running out with nothing heard from the peer — a starved radio — and `Err(Remote User Terminated Connection)` is the peer letting go.
+                            info!("BLE disconnected: {}", defmt::Debug2Format(&reason));
                             break;
                         }
+                        // How long the link tolerates hearing nothing: the number a flash window has to be read against.
+                        GattConnectionEvent::ConnectionParamsUpdated {
+                            conn_interval,
+                            peripheral_latency,
+                            supervision_timeout,
+                        } => info!(
+                            "connection parameters: interval {} ms, peripheral latency {}, supervision timeout {} ms",
+                            conn_interval.as_millis() as u32,
+                            peripheral_latency,
+                            supervision_timeout.as_millis() as u32
+                        ),
                         GattConnectionEvent::Gatt { event } => {
                             // A write is a chunk of a request, or the app's acknowledgement of a message this end sent — the frame says which, and the session is the only place either is believed. Read it *after* the event is accepted: until the server has stored the value, the table still holds the one before it.
                             let is_write = matches!(event, GattEvent::Write(_));
@@ -592,7 +614,9 @@ async fn main(spawner: Spawner) -> ! {
                         // Persist the rep (summary + trace chunks). This happens right after the rest debounce, i.e. while the sensor is at rest, so the tens of ms an erase takes here can't land in the middle of a rep.
                         let stored = {
                             let mut guard = store.lock().await;
-                            store_rep(&mut guard, rec_buf, &mut sum, &rep_trace)
+                            flash_window("rep append", || {
+                                store_rep(&mut guard, rec_buf, &mut sum, &rep_trace)
+                            })
                         };
                         match stored {
                             Ok(n) => info!(
@@ -1172,6 +1196,21 @@ impl defmt::Format for UuidShort<'_> {
     }
 }
 
+/// Run one flash erase or write with both ends of it on the log, and how long it took.
+///
+/// Flash and the radio share the chip, and an erase or write parks the other core and runs with the cache off: a window the controller can miss a connection event in, and a dropped link is that window plus the supervision timeout it takes to give up. Both ends on the clock is what makes the two readable against each other.
+fn flash_window<T>(what: &'static str, op: impl FnOnce() -> T) -> T {
+    let started = Instant::now();
+    info!("flash {}: starting", what);
+    let out = op();
+    info!(
+        "flash {}: done after {} ms",
+        what,
+        started.elapsed().as_millis() as u32
+    );
+    out
+}
+
 /// Append one rep (summary + trace chunks) to the flash log partition. Returns the number of records written.
 /// The log is mounted per append — a scan of the sector headers, and appends are rare (once per rep, at rest) — so nothing keeps it alive between reps.
 /// An append therefore fails for the same reasons the boot-time mount does, and a rep is lost when this returns an error.
@@ -1301,15 +1340,21 @@ fn save_calibration(store: &mut FlashStore, profile: &BNO055Calibration) -> bool
     let mut nvs_partition = nvs.as_embedded_storage(flash);
 
     // Each error named: `OtherCoreRunning` here means the flash refused because the other core was up, and the erase-then-write below is why that matters — an erase that succeeds and a write that does not leaves no profile at all, so which of the two failed decides whether there is anything left to recover.
-    if let Err(e) = nvs_partition.erase(BNO055_CALIBRATION_ADDR, BNO055_CALIBRATION_ADDR + 0x1000) {
+    let erased = flash_window("NVS calibration erase", || {
+        nvs_partition.erase(BNO055_CALIBRATION_ADDR, BNO055_CALIBRATION_ADDR + 0x1000)
+    });
+    if let Err(e) = erased {
         warn!("NVS: calibration erase failed: {}", e);
         return false;
     }
-    if let Err(e) = Storage::write(
-        &mut nvs_partition,
-        BNO055_CALIBRATION_ADDR,
-        profile.as_bytes(),
-    ) {
+    let written = flash_window("NVS calibration write", || {
+        Storage::write(
+            &mut nvs_partition,
+            BNO055_CALIBRATION_ADDR,
+            profile.as_bytes(),
+        )
+    });
+    if let Err(e) = written {
         warn!("NVS: calibration write failed: {}", e);
         return false;
     }

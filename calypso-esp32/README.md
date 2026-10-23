@@ -80,3 +80,11 @@ automatically.
 device: heap at each setup stage, the stack figures, and the 1 Hz sampler line.
 [`docs/GOTCHAS.md`](../docs/GOTCHAS.md) says what the numbers should be and what
 each failure mode looks like.
+
+Every line is stamped with milliseconds since boot, and the link events carry what
+they are worth reading against: `connection parameters` gives the supervision
+timeout the controller will let pass in silence, each flash erase and write is
+bracketed with its duration (flash and the radio share the chip), and a
+`BLE disconnected` line names the reason the link ended. A drop on the phone side
+— `The connection has timed out unexpectedly` — is one of those durations, which is
+what the stamp is for.

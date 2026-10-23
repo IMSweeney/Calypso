@@ -73,9 +73,13 @@ Where Calypso is and what is left. Feature documentation lives in
       repeating at round-trip rate (see [docs/GOTCHAS.md](docs/GOTCHAS.md), "An
       acknowledgement is also a request for the next message"), so the drops
       actually followed a flood, and the levels are a read now — what is left is
-      the app's own poll, a read a second. Two experiments separate flash traffic
-      from the radio: does the device's log show a `rep … stored` beside a drop,
-      and does it still drop without `--features fake-reps`?
+      the app's own poll, a read a second. The flash experiment is readable from
+      the device's log alone now: a millisecond stamp on every line, both ends and
+      the duration of every erase and write, and the reason a disconnect gives —
+      `Connection Timeout` is the supervision timer expiring over a radio that
+      heard nothing, which is a flash window being felt, while `Remote User
+      Terminated Connection` is the app letting go. What is left is the other one:
+      does it still drop without `--features fake-reps`?
 - [ ] **Measure trace latency now that the sizes are right.** A window of 127 that
       sent a whole trace chunk in one blast, and framing from an ATT MTU of 23
       (macOS never sends the exchange), made a chunk ~150 notifications of 14
