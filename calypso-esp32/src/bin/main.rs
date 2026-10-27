@@ -38,11 +38,15 @@ use alloc::boxed::Box;
 use bno055::Bno055;
 use bno055::{BNO055_CALIB_SIZE, BNO055Calibration, BNO055OperationMode};
 use calypso_core::calibration::Calibration;
+use calypso_core::clock::{self, Boots};
 use calypso_core::flashlog::{self, FlashLog};
-use calypso_core::gatt::{CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncCalibrationValue};
+use calypso_core::gatt::{
+    CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncCalibrationValue, SyncReportsValue,
+};
 use calypso_core::pb::msg;
 use calypso_core::pipe::{self, Session, Stalled};
 use calypso_core::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, compute_rep};
+use calypso_core::report::Latch;
 use calypso_core::sampler::{QUAT_SCALE, SAMPLE_RATE_HZ, Sample, SampleRing, quantize};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::sync::{SummaryCursor, trace_request};
@@ -86,13 +90,32 @@ static CALIBRATION_BITS: AtomicU32 = AtomicU32::new(0);
 /// Whether the calibration profile has been written to NVS this boot, so the save (a flash erase and write) does not repeat on every poll.
 static CALIBRATION_SAVED: AtomicBool = AtomicBool::new(false);
 
+/// The wall clock the client last set: unix seconds at this boot's uptime zero, or 0 while nothing has set one.
+///
+/// RAM only, and thrown away at the next boot: the log's `BootClock` records are what outlive the boot (`calypso_core::clock`), and the client writes this one again every time it connects.
+static CLOCK_EPOCH_S: AtomicU32 = AtomicU32::new(0);
+
+/// The id this boot's first record got, which is where this boot's reps start — the one thing that tells them from the boot before (`calypso_core::clock`).
+///
+/// 0 when it could not be written: the log then cannot say which boot a rep came from, so nothing in it is dated, rather than a boot's reps being dated by its neighbour's clock.
+static BOOT_FROM_ID: AtomicU32 = AtomicU32::new(0);
+
+/// The device's own faults, raised and not yet sent to a client (`calypso_core::report`).
+///
+/// A critical-section mutex rather than an atomic, because a fault is a kind plus the time it went out and taking one and marking it sent is a single step. A `RefCell` and not a `Cell`: `Cell::get` hands back a copy, so the "mark it sent" half would land on the copy and the latch would never clear. Written from both tasks (the sampler's I2C and flash failures, the BLE task's own) and taken only by [`push_report`]; the lock lasts a few instructions.
+static REPORTS: critical_section::Mutex<RefCell<Latch>> =
+    critical_section::Mutex::new(RefCell::new(Latch::new()));
+
+/// Room for one `BootClock` record: a varint field, its tag, and the record envelope (`proto/calypso.proto`).
+const CLOCK_RECORD_BYTES: usize = 16;
+
 /// Bench mode: store a synthetic "rep" every this many seconds instead of detecting real ones (`--features fake-reps`).
 /// A build flag rather than a runtime setting, so the device is not one accidental setting away from recording fiction as a measurement.
 const FAKE_REPS: bool = cfg!(feature = "fake-reps");
 
 /// Bench mode's period, and how much of the ring each synthetic rep covers, which has to leave room for the ZUPT margins inside `REP_WINDOW_SAMPLES` (9 s).
-const FAKE_REP_PERIOD_S: u32 = 10;
-const FAKE_REP_MS: u32 = 8_000;
+const FAKE_REP_PERIOD_S: u32 = 30;
+const FAKE_REP_MS: u32 = 6_000;
 
 /// Ring-buffer window: how much history the detector can be asked for, plus headroom.
 ///
@@ -224,7 +247,10 @@ async fn main(spawner: Spawner) -> ! {
     match mount_rep_log(&mut store) {
         Ok(sectors) => info!("Rep log mounted: {} sectors", sectors),
         // The reason *named*, not just "unusable": whether the flashed table has the log partition at all, and which flash error it was.
-        Err(reason) => warn!("Rep log unusable: {}", reason),
+        Err(reason) => {
+            warn!("Rep log unusable: {}", reason);
+            report(msg::ReportKind::LogUnusable);
+        }
     }
 
     // The sample ring, on the heap and alive for the program's lifetime.
@@ -309,12 +335,18 @@ async fn main(spawner: Spawner) -> ! {
     info!("Starting BLE stack");
     // What the setup above is holding before the tasks start: the total moves whenever a static does, so measure rather than assume.
     info!("Stack before the tasks: {}", Stack);
+
+    // The boot's clock, shared by both tasks: the sampler times its samples from it, and the client's epoch is
+    // read against it, so a rep's uptime and the wall time attributed to it are the same frame
+    // (`calypso_core::clock`).
+    let boot = Instant::now();
     join3(
         // HCI runner: must run forever alongside any other BLE tasks.
         async {
             loop {
                 if runner.run().await.is_err() {
                     warn!("BLE runner error");
+                    report(msg::ReportKind::RadioFailed);
                 }
             }
         },
@@ -326,6 +358,7 @@ async fn main(spawner: Spawner) -> ! {
                 if advertising.adv_len == 0 {
                     // An empty advertisement is invisible to every client, so it is worth saying out loud rather than debugging on the phone.
                     warn!("no advertising data to send");
+                    report(msg::ReportKind::RadioFailed);
                 }
 
                 let advertiser = match peripheral
@@ -341,6 +374,7 @@ async fn main(spawner: Spawner) -> ! {
                     Ok(advertiser) => advertiser,
                     Err(_) => {
                         warn!("failed to start advertising");
+                        report(msg::ReportKind::RadioFailed);
                         Timer::after(Duration::from_millis(500)).await;
                         continue;
                     }
@@ -369,6 +403,8 @@ async fn main(spawner: Spawner) -> ! {
                 // A fresh session per connection: whatever was in flight is gone with the link, and half a message is not a message.
                 let mut cursor = SummaryCursor::new();
                 let mut subscribed = false;
+                // Said once per connection, so a session where nothing goes out explains itself in the log.
+                let mut said_no_clock = false;
                 let start = Instant::now();
                 batch.reset();
                 sync.session.reset();
@@ -401,15 +437,26 @@ async fn main(spawner: Spawner) -> ! {
                                     sync.session.kind().name(),
                                     attempt
                                 ),
-                                Stalled::Abandoned { attempt } => warn!(
-                                    "sync {}: unanswered after {} attempts, dropped",
-                                    sync.session.kind().name(),
-                                    attempt
-                                ),
+                                Stalled::Abandoned { attempt } => {
+                                    warn!(
+                                        "sync {}: unanswered after {} attempts, dropped",
+                                        sync.session.kind().name(),
+                                        attempt
+                                    );
+                                    report(msg::ReportKind::TransferAbandoned);
+                                }
                             }
                             if subscribed {
                                 // Nothing goes out to nobody: a transfer nobody acknowledges stalls, retries and is abandoned, and it would hold the pipe for the whole 15 s.
                                 // Auto-sync, and the trace the app is waiting on: the cursor advances one per message the pipe took, and a transfer to nobody is abandoned, so streaming with no subscriber would walk the whole log into the void and the app would never see it on that connection.
+                                //
+                                // Until the client sets the clock, this boot's summaries are held rather than sent (`collect_summaries`), so say that once rather than leaving an app that never sends one with nothing on screen and nothing in the log either.
+                                if !said_no_clock && CLOCK_EPOCH_S.load(Ordering::Relaxed) == 0 {
+                                    said_no_clock = true;
+                                    warn!(
+                                        "sync: no clock this boot, so no summary goes out until the app sets one"
+                                    );
+                                }
                                 keep_sending(
                                     store,
                                     sync_rec_buf,
@@ -421,6 +468,9 @@ async fn main(spawner: Spawner) -> ! {
                                 )
                                 .await;
                             }
+                            // Beside the pipe's own sending, and outside its `subscribed`: a fault is
+                            // owed to whoever subscribed to `Reports`, not to the summaries' subscriber.
+                            push_report(&gatt, &conn, now).await;
                             continue;
                         }
                     };
@@ -442,12 +492,28 @@ async fn main(spawner: Spawner) -> ! {
                             supervision_timeout.as_millis() as u32
                         ),
                         GattConnectionEvent::Gatt { event } => {
-                            // A write is a chunk of a request, or the app's acknowledgement of a message this end sent — the frame says which, and the session is the only place either is believed. Read it *after* the event is accepted: until the server has stored the value, the table still holds the one before it.
-                            let is_write = matches!(event, GattEvent::Write(_));
+                            // Which characteristic a write was for, decided before it is accepted — accepting consumes
+                            // the event, and until it has run the table still holds the value before this write.
+                            let written = match &event {
+                                GattEvent::Write(write) => Some(write.handle()),
+                                _ => None,
+                            };
                             if let Ok(reply) = event.accept() {
                                 reply.send().await;
                             }
-                            if is_write {
+                            // The clock: a value, so it is read out of the table rather than reassembled.
+                            if written == Some(gatt.sync.time.handle) {
+                                match gatt.get(&gatt.sync.time) {
+                                    Ok(now_s) => {
+                                        set_clock(store, sync_rec_buf, now_s, now_ms(boot)).await
+                                    }
+                                    Err(_) => warn!("clock: a write with no stored value"),
+                                }
+                                continue;
+                            }
+                            // Everything else the app writes is a chunk of a request on the pipe — which is also
+                            // where it acknowledges a message this end sent, and the frame says which.
+                            if written == Some(gatt.sync.requests.handle) {
                                 let wrote = {
                                     let Ok(value) = gatt.get(&gatt.sync.requests) else {
                                         warn!("sync: a write with no stored value");
@@ -465,10 +531,12 @@ async fn main(spawner: Spawner) -> ! {
                                 if wrote.message {
                                     let Some(request) = sync.session.request() else {
                                         warn!("sync: a reassembled request that does not decode");
+                                        report(msg::ReportKind::RequestRefused);
                                         continue;
                                     };
                                     let Some(request) = trace_request(&request) else {
                                         warn!("sync: a request this device will not serve");
+                                        report(msg::ReportKind::RequestRefused);
                                         continue;
                                     };
                                     let wanted =
@@ -487,6 +555,7 @@ async fn main(spawner: Spawner) -> ! {
                                     } else {
                                         // A transfer nobody acknowledges would stall and be abandoned, and the app would wait for a trace that is not coming.
                                         warn!("trace request ignored: notifications are not subscribed");
+                                        report(msg::ReportKind::RequestRefused);
                                     }
                                 }
 
@@ -503,6 +572,7 @@ async fn main(spawner: Spawner) -> ! {
                                     )
                                     .await;
                                 }
+                                push_report(&gatt, &conn, now_ms(start)).await;
                             }
                         }
                         _ => {}
@@ -512,7 +582,6 @@ async fn main(spawner: Spawner) -> ! {
         },
         // Sampler loop: 100 Hz IMU samples into the RAM ring buffer.
         async {
-            let start = Instant::now();
             // Rep identities come from the hardware RNG: the device has no RTC and its uptime resets on every boot, so a counter or a timestamp could not be unique across boots.
             let rng = Rng::new();
             let mut ticker = Ticker::every(Duration::from_hz(SAMPLE_RATE_HZ as u64));
@@ -530,7 +599,7 @@ async fn main(spawner: Spawner) -> ! {
             let mut delay = Delay;
             loop {
                 ticker.next().await;
-                let t_ms = start.elapsed().as_millis() as u32;
+                let t_ms = boot.elapsed().as_millis() as u32;
 
                 // 1 Hz: read the calibration levels, publish them for the BLE task, and save the profile the first time they are good enough.
                 //
@@ -547,10 +616,12 @@ async fn main(spawner: Spawner) -> ! {
 
                 let Ok(accel) = bno055.linear_acceleration_fixed() else {
                     warn!("BNO055 linear accel read error");
+                    report(msg::ReportKind::ImuReadFailed);
                     continue;
                 };
                 let Ok(q) = bno055.quaternion() else {
                     warn!("BNO055 quaternion read error");
+                    report(msg::ReportKind::ImuReadFailed);
                     continue;
                 };
                 let sample = Sample {
@@ -576,6 +647,11 @@ async fn main(spawner: Spawner) -> ! {
                             "fake-reps: storing a synthetic rep every {} s, not detecting real ones",
                             FAKE_REP_PERIOD_S
                         );
+                        // One synthetic fault as well, raised before any client can have subscribed: what the
+                        // app shows is then the latch being handed over, which is the half of this path a
+                        // bench session with a real fault could not easily reach.
+                        warn!("fake-reps: raising a synthetic report (REP_NOT_STORED)");
+                        report(msg::ReportKind::RepNotStored);
                     }
                     if n.is_multiple_of(SAMPLE_RATE_HZ * FAKE_REP_PERIOD_S)
                         && t_ms >= FAKE_REP_MS
@@ -602,6 +678,7 @@ async fn main(spawner: Spawner) -> ! {
                     );
                     if copied == 0 {
                         warn!("rep window unavailable (ring too short)");
+                        report(msg::ReportKind::RepWindowUnavailable);
                     } else {
                         reps += 1;
                         let rep_uuid = {
@@ -624,11 +701,14 @@ async fn main(spawner: Spawner) -> ! {
                                 UuidShort(Some(&rep_uuid)),
                                 n
                             ),
-                            Err(e) => warn!(
-                                "rep {} could not be stored: {}",
-                                UuidShort(Some(&rep_uuid)),
-                                e
-                            ),
+                            Err(e) => {
+                                warn!(
+                                    "rep {} could not be stored: {}",
+                                    UuidShort(Some(&rep_uuid)),
+                                    e
+                                );
+                                report(msg::ReportKind::RepNotStored);
+                            }
                         }
                         info!(
                             "rep {}: {}..{} ms ({} ms), {} trace pts{}, rom {=f32} m, peak v {=f32} m/s, mean v {=f32} m/s, peak a {=f32} m/s^2, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
@@ -663,7 +743,10 @@ async fn main(spawner: Spawner) -> ! {
                                 info!("Sensor is level on the X axis (X-grav={=f32})", x)
                             }
                             Some((x, false)) => warn!("Sensor is not level, X-grav={=f32}", x),
-                            None => warn!("BNO055 gravity read error"),
+                            None => {
+                                warn!("BNO055 gravity read error");
+                                report(msg::ReportKind::ImuReadFailed);
+                            }
                         }
                     }
 
@@ -714,7 +797,7 @@ async fn main(spawner: Spawner) -> ! {
     }
 }
 
-/// Mount the rep-record flash log on the `log` data partition (subtype `undefined`, see partitions.csv). Returns the number of sectors in the ring. Mounting here formats the partition on first boot; individual reps are written later by [`store_rep`].
+/// Mount the rep-record flash log on the `log` data partition (subtype `undefined`, see partitions.csv), and open this boot's clock record. Returns the number of sectors in the ring. Mounting here formats the partition on first boot; individual reps are written later by [`store_rep`].
 fn mount_rep_log(store: &mut FlashStore) -> Result<u32, LogError> {
     let (flash, pt_mem) = store.split();
     let pt = partitions::read_partition_table(flash, pt_mem).map_err(LogError::Table)?;
@@ -729,11 +812,31 @@ fn mount_rep_log(store: &mut FlashStore) -> Result<u32, LogError> {
         return Err(LogError::NoPartition);
     };
     // Scoped so the region's borrow of `flash` ends before the probe below.
-    let mounted = {
+    let opened: Result<u32, flashlog::Error<partitions::Error>> = {
         let mut region = log_part.as_embedded_storage(flash);
-        FlashLog::mount(&mut region).map(|log| log.sectors())
+        match FlashLog::mount(&mut region) {
+            Err(e) => Err(e),
+            Ok(mut log) => {
+                let sectors = log.sectors();
+                // Every boot opens with its own clock record, before any rep it will contain
+                // (`calypso_core::clock`): it is what stops this boot's reps being dated by the boot before it,
+                // and what the client's write replaces later in this boot. Its id is where this boot's reps start.
+                let from_record_id = log.next_id();
+                let mut buf = [0u8; CLOCK_RECORD_BYTES];
+                match store::append_clock(&mut log, &mut buf, 0) {
+                    Ok(_) => {
+                        BOOT_FROM_ID.store(from_record_id, Ordering::Relaxed);
+                        Ok(sectors)
+                    }
+                    // Without that record nothing in the log can be told apart by age, so it is unusable for
+                    // this boot: the same answer as a mount that failed, and the same log line.
+                    Err(store::Error::Log(e)) => Err(e),
+                    Err(store::Error::Encode(e)) => return Err(LogError::Encode(e)),
+                }
+            }
+        }
     };
-    match mounted {
+    match opened {
         Ok(sectors) => Ok(sectors),
         Err(e) => {
             probe_log_partition(flash, log_part.offset(), failing_sector(&e));
@@ -952,6 +1055,7 @@ impl Sync<'_> {
             // A notification to nobody reports success (see `is_subscribed`), so this result is ever only a radio failure.
             if characteristic.notify(conn, payload).await.is_err() {
                 warn!("sync: notify failed");
+                report(msg::ReportKind::NotifyFailed);
                 return;
             }
         }
@@ -1048,7 +1152,7 @@ async fn stream_new_summaries(
         }
         let total = {
             let mut guard = store.lock().await;
-            collect_summaries(&mut guard, rec_buf, rec, cursor.next(), batch.messages)
+            collect_summaries(&mut guard, rec_buf, rec, cursor, batch.messages)
         };
         let Some(total) = total else {
             return;
@@ -1069,13 +1173,16 @@ async fn stream_new_summaries(
 
 /// Fill `batch` with the next summaries the subscriber hasn't seen, returning how many summaries the log holds (or `None` if the log couldn't be read).
 ///
+/// **Everything that goes out carries a time** (`calypso_core::clock`), and the two kinds of untimed summary are handled differently:
+/// one from a boot that never had a clock can never gain one, so it is stepped over for good; one from *this* boot is only waiting for the client to set the clock, so the batch holds there rather than sending a rep the app cannot place in time.
+///
 /// Sync on purpose. Everything inlined into an async fn becomes part of its future, and a future lives on the task's stack for as long as it is suspended:
 /// the flash log is a deep call graph (mount, sector scan, CRC, decode), none of which needs to be in a task's state while it waits for a notification. Keeping it behind this boundary is what holds both of those frames to one buffer apiece.
 fn collect_summaries(
     store: &mut FlashStore,
     rec_buf: &mut [u8],
     rec: &mut msg::RepRecord,
-    skip: usize,
+    cursor: &mut SummaryCursor,
     batch: &mut AllocVec<msg::RepSummary>,
 ) -> Option<usize> {
     let (flash, pt_mem) = store.split();
@@ -1088,22 +1195,56 @@ fn collect_summaries(
     let mut region = partition.as_embedded_storage(flash);
     let mut log = FlashLog::mount(&mut region).ok()?;
 
+    // This boot as the log sees it: the id its first record got, and the epoch in RAM. 0 for the id means the
+    // mount could not write that record, which leaves the log unable to say which boot a rep came from — so
+    // `Boots` dates none of them, rather than dating them by the boot before.
+    let our_from_record_id = match BOOT_FROM_ID.load(Ordering::Relaxed) {
+        0 => None,
+        id => Some(id),
+    };
+    let mut boots = Boots::new(our_from_record_id, CLOCK_EPOCH_S.load(Ordering::Relaxed));
+
     batch.clear();
-    let mut seen = 0usize;
-    if let Err(e) = store::for_each_summary(&mut log, rec_buf, rec, |s| {
-        if seen >= skip && batch.len() < batch.capacity() {
-            batch.push(s.clone());
+    let skip = cursor.next();
+    let mut summaries = 0usize;
+    let mut holding = false;
+    if let Err(e) = store::for_each_record(&mut log, rec_buf, rec, |id, record| {
+        match &record.body {
+            Some(msg::RepRecord_::Body::Clock(clock)) => boots.on_clock(clock),
+            Some(msg::RepRecord_::Body::Summary(s)) => {
+                // 1-based here, and `skip` counts the summaries already behind the cursor.
+                summaries += 1;
+                if summaries <= skip || holding || batch.len() >= batch.capacity() {
+                    return;
+                }
+                let Some(t_unix_ms) = boots.boot_of(id).rep_time_ms(s.t_start_ms) else {
+                    if boots.is_ours(id) {
+                        // The client has not set this boot's clock yet. Everything after this record is this
+                        // boot's too, and one write dates it all, so the batch waits for it.
+                        holding = true;
+                    } else {
+                        // A boot that never had a clock never will, so this rep is never sent: step over it, or
+                        // every batch from here on would read it again.
+                        cursor.advance(1);
+                    }
+                    return;
+                };
+                let mut summary = s.clone();
+                summary.t_unix_ms = t_unix_ms;
+                batch.push(summary);
+            }
+            _ => {}
         }
-        seen += 1;
     }) {
         // A short batch is worse than none: the cursor would advance past summaries that were never sent, and the app would never be offered them again.
         warn!(
             "sync: reading summaries failed: {}",
             defmt::Debug2Format(&e)
         );
+        report(msg::ReportKind::LogUnusable);
         return None;
     }
-    Some(seen)
+    Some(summaries)
 }
 
 /// Read a requested rep's trace out of the log into the session, and start streaming it: one `TraceChunk` per transfer, in chunk order.
@@ -1119,6 +1260,7 @@ async fn stream_trace(
 ) {
     let Some(rep_uuid) = calypso_core::pb::uuid_from_field(&request.rep_uuid) else {
         warn!("trace request with a malformed uuid");
+        report(msg::ReportKind::RequestRefused);
         return;
     };
 
@@ -1133,6 +1275,7 @@ async fn stream_trace(
                     "trace for rep {} is no longer in the log",
                     UuidShort(Some(&rep_uuid))
                 );
+                report(msg::ReportKind::TraceUnreadable);
                 return;
             }
         }
@@ -1211,6 +1354,67 @@ fn flash_window<T>(what: &'static str, op: impl FnOnce() -> T) -> T {
     out
 }
 
+/// The client set the clock: keep it in RAM if it is a time at all, and write it into the log so the reps this
+/// boot has already stored are dated by it too (`calypso_core::clock`).
+///
+/// A time the device will not believe is refused rather than stored: dating real reps with a plausible lie is the
+/// one outcome nothing downstream can detect.
+async fn set_clock(
+    store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
+    rec_buf: &mut [u8],
+    now_s: u32,
+    uptime_ms: u32,
+) {
+    let Some(epoch_s) = clock::epoch_from(now_s, uptime_ms) else {
+        warn!(
+            "clock: {} s is not a time this device will believe, ignored (uptime {} ms)",
+            now_s, uptime_ms
+        );
+        return;
+    };
+    CLOCK_EPOCH_S.store(epoch_s, Ordering::Relaxed);
+
+    let written = {
+        let mut guard = store.lock().await;
+        write_clock_record(&mut guard, rec_buf, epoch_s)
+    };
+    match written {
+        Ok(id) => info!(
+            "clock: epoch {} s (uptime {} ms), log record {}",
+            epoch_s, uptime_ms, id
+        ),
+        // The RAM epoch still dates this boot; the record is what dates it after a restart.
+        Err(e) => {
+            warn!("clock: epoch {} s kept in RAM, not written: {}", epoch_s, e);
+            report(msg::ReportKind::ClockNotPersisted);
+        }
+    }
+}
+
+/// Write a clock record into the log. Sync, for the same reason as [`collect_summaries`].
+fn write_clock_record(
+    store: &mut FlashStore,
+    rec_buf: &mut [u8],
+    epoch_s: u32,
+) -> Result<u32, LogError> {
+    let (flash, pt_mem) = store.split();
+    let pt = partitions::read_partition_table(flash, pt_mem).map_err(LogError::Table)?;
+    let Some(log_partition) = pt
+        .find_partition(partitions::PartitionType::Data(
+            partitions::DataPartitionSubType::Undefined,
+        ))
+        .map_err(LogError::Table)?
+    else {
+        return Err(LogError::NoPartition);
+    };
+    let mut region = log_partition.as_embedded_storage(flash);
+    let mut log = FlashLog::mount(&mut region).map_err(map_log_error)?;
+    store::append_clock(&mut log, rec_buf, epoch_s).map_err(|e| match e {
+        store::Error::Log(e) => map_log_error(e),
+        store::Error::Encode(e) => LogError::Encode(e),
+    })
+}
+
 /// Append one rep (summary + trace chunks) to the flash log partition. Returns the number of records written.
 /// The log is mounted per append — a scan of the sector headers, and appends are rare (once per rep, at rest) — so nothing keeps it alive between reps.
 /// An append therefore fails for the same reasons the boot-time mount does, and a rep is lost when this returns an error.
@@ -1263,6 +1467,7 @@ fn load_calibration(bno055: &mut Bno055<I2c<'_, Blocking>>, store: &mut FlashSto
     let mut delay = Delay;
     if bno055.set_calibration_profile(profile, &mut delay).is_err() {
         warn!("BNO055 rejected the stored calibration profile");
+        report(msg::ReportKind::CalibrationProfile);
         return;
     }
 
@@ -1274,11 +1479,17 @@ fn load_calibration(bno055: &mut Bno055<I2c<'_, Blocking>>, store: &mut FlashSto
         Ok(after) if after == profile => {
             info!("Stored IMU calibration applied, and reads back byte for byte")
         }
-        Ok(after) => warn!(
-            "Stored IMU calibration applied, but the chip reads back {=[u8]:02x}",
-            after.as_bytes()
-        ),
-        Err(_) => warn!("Stored IMU calibration applied, but could not be read back"),
+        Ok(after) => {
+            warn!(
+                "Stored IMU calibration applied, but the chip reads back {=[u8]:02x}",
+                after.as_bytes()
+            );
+            report(msg::ReportKind::CalibrationProfile);
+        }
+        Err(_) => {
+            warn!("Stored IMU calibration applied, but could not be read back");
+            report(msg::ReportKind::CalibrationProfile);
+        }
     }
 }
 
@@ -1345,6 +1556,7 @@ fn save_calibration(store: &mut FlashStore, profile: &BNO055Calibration) -> bool
     });
     if let Err(e) = erased {
         warn!("NVS: calibration erase failed: {}", e);
+        report(msg::ReportKind::CalibrationProfile);
         return false;
     }
     let written = flash_window("NVS calibration write", || {
@@ -1356,6 +1568,7 @@ fn save_calibration(store: &mut FlashStore, profile: &BNO055Calibration) -> bool
     });
     if let Err(e) = written {
         warn!("NVS: calibration write failed: {}", e);
+        report(msg::ReportKind::CalibrationProfile);
         return false;
     }
     true
@@ -1424,6 +1637,42 @@ fn is_subscribed(
                 .map(|(_, cccd)| cccd.should_notify())
         })
         .unwrap_or(false)
+}
+
+/// Note a fault for the app. One line beside the `warn!` that says the same thing to a console.
+///
+/// Cheap and infallible on purpose: it is called from the 100 Hz sampling path and from the arms that are already handling a failure, so it may not block, allocate or fail. Nothing leaves the device from here — [`push_report`] does that, from the two places something might have freed the link.
+///
+/// A fault raised while no client is subscribed stays latched: that is how a log that would not mount reaches the phone of the person who turns up afterwards.
+fn report(kind: msg::ReportKind) {
+    critical_section::with(|cs| REPORTS.borrow(cs).borrow_mut().raise(kind));
+}
+
+/// Send the fault the app is owed, if there is one and it is listening.
+///
+/// Called beside `keep_sending`, which is the funnel for "something may have freed the link": a fault raised while a transfer was in flight goes out when that transfer moves. The subscription is asked of the server rather than taken from a notify result, for the reason [`is_subscribed`] exists — a notification to nobody reports success.
+///
+/// Nothing is retried: `take_due` marks the kind sent as it hands it over (`calypso_core::report`), because a fault the link would not carry now is not one the next attempt says better.
+async fn push_report(
+    gatt: &CalypsoGatt<'_>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
+    now_ms: u32,
+) {
+    if !is_subscribed(gatt, conn, gatt.sync.reports.cccd_handle) {
+        return;
+    }
+    let Some(kind) = critical_section::with(|cs| REPORTS.borrow(cs).borrow_mut().take_due(now_ms))
+    else {
+        return;
+    };
+    // A `Report` is one enum field in a characteristic that holds 20 bytes, which is asserted
+    // where the schema is (`calypso_core::report`), so this is not a case that can happen.
+    let Some(value) = SyncReportsValue::encode(&msg::Report { kind }) else {
+        return;
+    };
+    if gatt.sync.reports.notify(conn, &value).await.is_err() {
+        warn!("reports: notify failed on the link");
+    }
 }
 
 /// Put the IMU's calibration state in the table, where a client reads it.

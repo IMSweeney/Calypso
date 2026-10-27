@@ -70,12 +70,23 @@ class FakeDevice {
     }
   }
 
+  /// The clock the app has set, in unix seconds: the device's own copy of it, and what it dates its reps by.
+  final List<int> clocks = [];
+
   /// Put `status` in the table's calibration characteristic.
   ///
   /// That is the whole of the device's side of it: the app reads the value whenever its own clock says to, and the device's 1 Hz poll of the chip is what changes it.
   void servesCalibration(pb.CalibrationStatus status) {
     link.readValues[SyncClient.calibrationUuid] = status.writeToBuffer();
   }
+
+  /// Put a fault on the `Reports` characteristic, which is how the device says something went wrong.
+  ///
+  /// One kind and no state behind it (`proto/calypso.proto`): the device sends it when it happens, so this is the whole of the device's side.
+  void sendReport(pb.ReportKind kind) => link.notify(
+    SyncClient.reportsUuid,
+    pb.Report(kind: kind).writeToBuffer(),
+  );
 
   /// A notification that acknowledges nothing: a frame whose CRC does not check out, which the app is expected to drop rather than half-believe.
   void sendGarbage() => link.notify(
@@ -84,6 +95,11 @@ class FakeDevice {
   );
 
   void _onWrite(String characteristicUuid, Uint8List value) {
+    // The clock is a value, not a chunk: four raw bytes, little endian (`proto/calypso_gatt.proto`).
+    if (characteristicUuid == SyncClient.timeUuid) {
+      clocks.add(ByteData.sublistView(value).getUint32(0, Endian.little));
+      return;
+    }
     if (characteristicUuid != SyncClient.requestsUuid) return;
     final frame = decode(value);
     if (frame == null) return;

@@ -86,6 +86,57 @@ fn the_write_flavour_follows_the_declared_properties() {
 }
 
 #[test]
+fn a_bare_codec_is_emitted_for_the_direction_the_schema_uses_it_in() {
+    let (gatt, _) = load("valid/bare_codecs.proto").unwrap();
+    let config = Config {
+        messages_import: "../protocol/bare.pb.dart".to_string(),
+        ..Config::default()
+    };
+    let source = dart_universal_ble::generate(&gatt, &config).unwrap().source;
+
+    // Read and written: both halves.
+    assert!(source.contains("_encodeU16"), "{source}");
+    assert!(source.contains("_decodeU16"), "{source}");
+    // Written only: the encoder, and nothing that decodes it.
+    assert!(source.contains("_encodeI16"), "{source}");
+    assert!(!source.contains("_decodeI16"), "{source}");
+    // Read only: the other way round.
+    assert!(source.contains("_decodeF32"), "{source}");
+    assert!(!source.contains("_encodeF32"), "{source}");
+}
+
+#[test]
+fn a_write_method_is_laid_out_the_way_dart_format_leaves_it() {
+    // The generated file is committed as `dart format` leaves it, so the emitter has to pick the
+    // formatter's shape itself: the call on the `=>` line when it fits, on the line after when only
+    // that fits, and one argument per line when neither does. The app's format check is what enforces
+    // it; this says which of the three a characteristic is meant to get.
+    let (gatt, _) = load("valid/bare_codecs.proto").unwrap();
+    let config = Config {
+        messages_import: "../protocol/bare.pb.dart".to_string(),
+        ..Config::default()
+    };
+    let source = dart_universal_ble::generate(&gatt, &config).unwrap().source;
+
+    let call = |name: &str| {
+        source
+            .lines()
+            .find(|line| line.contains(&format!("Future<void> write{name}(")))
+            .unwrap_or_else(|| panic!("no write{name} in {source}"))
+            .trim()
+            .to_string()
+    };
+
+    // Exactly at the width: the call goes on the next line, which is what fits.
+    assert_eq!(call("Tap"), "Future<void> writeTap(int value) =>");
+    // A character wider, and it does not fit there either: one argument per line.
+    assert_eq!(
+        call("Gain"),
+        "Future<void> writeGain(int value) => _link.write("
+    );
+}
+
+#[test]
 fn a_pipe_gets_the_glue_its_runtime_reads() {
     let (gatt, _) = load("valid/device.proto").unwrap();
     let config = Config {

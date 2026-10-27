@@ -1,7 +1,9 @@
 name: calypso
 description: Calypso client — sync reps from the device, list summaries, plot a rep in 3D.
 publish_to: none
-version: 0.1.0
+# `+N` is the build number, and it is what has to change for every upload to
+# TestFlight: the store refuses a build number it has already seen for a version.
+version: 0.1.0+1
 
 environment:
   sdk: ^3.10.0
@@ -11,6 +13,10 @@ dependencies:
     sdk: flutter
   # Wire format, generated from proto/calypso.proto (see tool/gen_proto.sh).
   protobuf: ^6.1.0
+  # The generated classes use a fixed-width Int64 for `RepSummary.t_unix_ms`,
+  # which protoc's Dart output imports directly. Dart team; already in the lock
+  # as a transitive dependency of protobuf, so declaring it costs nothing.
+  fixnum: ^1.1.1
   # BLE: BSD-3 (Navideck), one API across Android/iOS/macOS/Windows/Linux/Web.
   # Chosen over flutter_reactive_ble (Android/iOS only) so the BLE path can be
   # developed on the Mac, where CoreBluetooth exists. (flutter_blue_plus is

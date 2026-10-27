@@ -39,6 +39,7 @@ pub enum Error {
 pub enum Record {
     Summary(msg::RepSummary),
     Trace(msg::TraceChunk),
+    Clock(msg::BootClock),
 }
 
 pub fn chunk_count_for(trace_len: usize) -> u32 {
@@ -159,6 +160,24 @@ pub fn encode_trace_chunk(
     )
 }
 
+/// Encode a boot's clock as a log record. Returns the encoded length.
+///
+/// Written once per boot at mount (`epoch_s` 0, so the boot before it is not read as this one) and once when the client sets the clock (`crate::clock`).
+pub fn encode_clock(epoch_s: u32, out: &mut [u8]) -> Result<usize, Error> {
+    record(
+        msg::RepRecord_::Body::Clock(msg::BootClock { epoch_s }),
+        out,
+    )
+}
+
+/// The clock a record carries, if it is one.
+pub fn record_clock(rec: &msg::RepRecord) -> Option<&msg::BootClock> {
+    match &rec.body {
+        Some(msg::RepRecord_::Body::Clock(clock)) => Some(clock),
+        _ => None,
+    }
+}
+
 /// Encode a sync message (device -> app).
 pub fn encode_sync(body: msg::SyncMessage_::Body, out: &mut [u8]) -> Result<usize, Error> {
     let message = msg::SyncMessage { body: Some(body) };
@@ -189,6 +208,7 @@ pub fn decode_record(bytes: &[u8]) -> Result<Record, Error> {
     match message.body {
         Some(msg::RepRecord_::Body::Summary(s)) => Ok(Record::Summary(s)),
         Some(msg::RepRecord_::Body::Trace(t)) => Ok(Record::Trace(t)),
+        Some(msg::RepRecord_::Body::Clock(c)) => Ok(Record::Clock(c)),
         None => Err(Error::Empty),
     }
 }

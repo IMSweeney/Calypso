@@ -66,8 +66,38 @@ fn decode_or_panic(rec: &mut pb::msg::RepRecord, id: u32, payload: &[u8]) {
     }
 }
 
+/// Append a boot's clock record, returning its id.
+///
+/// This only writes it: *when* it is written is the caller's, and the rule for reading it back is `crate::clock`'s.
+pub fn append_clock<'a, N: NorFlash>(
+    log: &mut FlashLog<'a, N>,
+    buf: &mut [u8],
+    epoch_s: u32,
+) -> Result<u32, Error<N::Error>> {
+    let n = pb::encode_clock(epoch_s, buf)?;
+    Ok(log.append(&buf[..n])?)
+}
+
+/// Visit every record in the log, oldest first, with the id the log gave it.
+/// `buf` must be large enough for the record being looked for (larger records are skipped by the log itself).
+///
+/// The id is what dates a record: a boot's clock is written *after* the reps it applies to, and the clock record names the id its boot started at (`crate::clock`).
+///
+/// The record is borrowed from `rec`, so it is only valid for the duration of the call.
+pub fn for_each_record<'a, N: NorFlash>(
+    log: &mut FlashLog<'a, N>,
+    buf: &mut [u8],
+    rec: &mut pb::msg::RepRecord,
+    mut f: impl FnMut(u32, &pb::msg::RepRecord),
+) -> Result<(), Error<N::Error>> {
+    log.for_each(buf, |id, payload| {
+        decode_or_panic(rec, id, payload);
+        f(id, rec);
+    })?;
+    Ok(())
+}
+
 /// Visit every rep summary in the log, oldest first.
-/// `buf` must be large enough for a summary record (a few hundred bytes); larger records are skipped by the log itself.
 ///
 /// The summary is borrowed from `rec`, so it is only valid for the duration of the call.
 pub fn for_each_summary<'a, N: NorFlash>(
@@ -76,13 +106,11 @@ pub fn for_each_summary<'a, N: NorFlash>(
     rec: &mut pb::msg::RepRecord,
     mut f: impl FnMut(&pb::msg::RepSummary),
 ) -> Result<(), Error<N::Error>> {
-    log.for_each(buf, |id, payload| {
-        decode_or_panic(rec, id, payload);
-        if let Some(pb::msg::RepRecord_::Body::Summary(s)) = &rec.body {
+    for_each_record(log, buf, rec, |_, record| {
+        if let Some(pb::msg::RepRecord_::Body::Summary(s)) = &record.body {
             f(s);
         }
-    })?;
-    Ok(())
+    })
 }
 
 /// Read one rep's trace back into `out`, in chunk order, oldest point first.

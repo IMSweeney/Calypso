@@ -13,7 +13,7 @@ use trouble_host::types::gatt_traits::FromGattError;
 /// A hash of the schema this was generated from: firmware and app built from
 /// the same schema agree, and anything else is caught before a typed value is
 /// believed. Protobuf would otherwise decode a mismatch silently.
-pub const SCHEMA_HASH: u64 = 0x2a8eeee0411bfe49;
+pub const SCHEMA_HASH: u64 = 0x63fb6f086618f95d;
 
 /// Backing buffer for a pipe characteristic's chunk.
 pub const PIPE_CHUNK_MAX: usize = 244;
@@ -42,6 +42,22 @@ pub mod uuid {
     /// `calypso.Sync.Calibration`, as a client prints it.
     pub const SYNC_CALIBRATION_TEXT: &str = "0000ca24-b0cd-11ec-871f-d45ddf138840";
 
+    /// `calypso.Sync.Reports`.
+    pub const SYNC_REPORTS_UUID: Uuid = Uuid::new_long([
+        0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x25, 0xca, 0x00,
+        0x00,
+    ]);
+    /// `calypso.Sync.Reports`, as a client prints it.
+    pub const SYNC_REPORTS_TEXT: &str = "0000ca25-b0cd-11ec-871f-d45ddf138840";
+
+    /// `calypso.Sync.Time`.
+    pub const SYNC_TIME_UUID: Uuid = Uuid::new_long([
+        0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x23, 0xca, 0x00,
+        0x00,
+    ]);
+    /// `calypso.Sync.Time`, as a client prints it.
+    pub const SYNC_TIME_TEXT: &str = "0000ca23-b0cd-11ec-871f-d45ddf138840";
+
     /// `calypso.Sync.Requests`.
     pub const SYNC_REQUESTS_UUID: Uuid = Uuid::new_long([
         0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x22, 0xca, 0x00,
@@ -65,6 +81,9 @@ pub mod uuid {
 pub mod max_len {
     /// `calypso.Sync.Calibration`.
     pub const SYNC_CALIBRATION: usize = 20;
+
+    /// `calypso.Sync.Reports`.
+    pub const SYNC_REPORTS: usize = 20;
 }
 
 /// `calypso.CalibrationStatus` as one GATT attribute value: the message encoded whole, which is what a single-shot characteristic carries (`max_len` 20).
@@ -142,12 +161,93 @@ impl FromGatt for SyncCalibrationValue {
     }
 }
 
+/// `calypso.Report` as one GATT attribute value: the message encoded whole, which is what a single-shot characteristic carries (`max_len` 20).
+/// `encode` returns `None` only for a message that does not fit `max_len`; `decode` returns `None` for bytes that are not this message at all.
+#[derive(Default)]
+pub struct SyncReportsValue {
+    bytes: Vec<u8, 20>,
+}
+
+impl SyncReportsValue {
+    /// Encode `message` into a value.
+    pub fn encode(message: &crate::pb::msg::Report) -> Option<Self> {
+        let mut bytes = Vec::new();
+        bytes.resize(20, 0).ok()?;
+        let mut writer: &mut [u8] = bytes.as_mut_slice();
+        {
+            let mut encoder = micropb::PbEncoder::new(&mut writer);
+            message.encode(&mut encoder).ok()?;
+        }
+        let written = 20 - writer.len();
+        bytes.truncate(written);
+        Some(SyncReportsValue { bytes })
+    }
+
+    /// Encode `message` into an existing value, reusing its buffer: for a
+    /// sender that notifies repeatedly and does not want a value per message.
+    /// Returns false if the message does not fit.
+    pub fn encode_into(&mut self, message: &crate::pb::msg::Report) -> bool {
+        self.bytes.clear();
+        if self.bytes.resize(20, 0).is_err() {
+            return false;
+        }
+        let mut writer: &mut [u8] = self.bytes.as_mut_slice();
+        {
+            let mut encoder = micropb::PbEncoder::new(&mut writer);
+            if message.encode(&mut encoder).is_err() {
+                self.bytes.clear();
+                return false;
+            }
+        }
+        let written = 20 - writer.len();
+        self.bytes.truncate(written);
+        true
+    }
+
+    /// Decode the value.
+    pub fn decode(&self) -> Option<crate::pb::msg::Report> {
+        let mut message = crate::pb::msg::Report::default();
+        message.decode_from_bytes(self.bytes.as_slice()).ok()?;
+        Some(message)
+    }
+
+    /// The value as it goes on the wire.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+}
+
+impl AsGatt for SyncReportsValue {
+    const MIN_SIZE: usize = 0;
+    const MAX_SIZE: usize = 20;
+
+    fn as_gatt(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+}
+
+impl FromGatt for SyncReportsValue {
+    fn from_gatt(data: &[u8]) -> Result<Self, FromGattError> {
+        let mut bytes = Vec::new();
+        bytes
+            .extend_from_slice(data)
+            .map_err(|_| FromGattError::InvalidLength)?;
+        Ok(SyncReportsValue { bytes })
+    }
+}
+
 /// `calypso.Sync`.
 #[gatt_service(uuid = "0000ca20-b0cd-11ec-871f-d45ddf138840")]
 pub struct SyncService {
     /// `Calibration` (0000ca24-b0cd-11ec-871f-d45ddf138840), calypso.CalibrationStatus.
     #[characteristic(uuid = "0000ca24-b0cd-11ec-871f-d45ddf138840", read)]
     pub calibration: SyncCalibrationValue,
+    /// `Reports` (0000ca25-b0cd-11ec-871f-d45ddf138840), calypso.Report.
+    #[characteristic(uuid = "0000ca25-b0cd-11ec-871f-d45ddf138840", notify)]
+    pub reports: SyncReportsValue,
+    /// `Time` (0000ca23-b0cd-11ec-871f-d45ddf138840), bare U32.
+    #[characteristic(uuid = "0000ca23-b0cd-11ec-871f-d45ddf138840", write)]
+    pub time: u32,
     /// `Requests` (0000ca22-b0cd-11ec-871f-d45ddf138840), calypso.SyncRequest.
     ///
     /// Pipe "sync": this value carries chunks and the pipe runtime owns it,
@@ -173,7 +273,31 @@ pub struct CalypsoGatt {
 }
 
 /// Everything a client can write, decoded according to the schema.
-pub enum Request {}
+#[derive(Debug)]
+pub enum Request {
+    /// `calypso.Sync.Time`.
+    Time(u32),
+}
+
+impl Request {
+    /// The request a write carried, or `None` if it was not one of ours.
+    ///
+    /// Call this **after** the event is accepted: until the server has stored the
+    /// value, the table still holds the last one.
+    pub fn from_event<P: PacketPool>(
+        server: &CalypsoGatt<'_>,
+        event: &GattEvent<'_, '_, P>,
+    ) -> Option<Self> {
+        let GattEvent::Write(write) = event else {
+            return None;
+        };
+        let handle = write.handle();
+        if handle == server.sync.time.handle {
+            return server.get(&server.sync.time).ok().map(Request::Time);
+        }
+        None
+    }
+}
 
 /// Pipe `sync`: `crate::pb::msg::SyncRequest` in, `crate::pb::msg::SyncMessage` out.
 ///

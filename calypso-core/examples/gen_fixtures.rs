@@ -39,7 +39,7 @@ fn main() -> std::io::Result<()> {
 
     // 2. A single-rep set whose trace is one point: the degenerate plot case (axis fitting, camera fit and the polyline must all cope).
     {
-        let mut dump = Vec::new();
+        let mut dump = fixtures::new_dump(&mut rec_buf);
         let trace = vec![TracePoint {
             t_ms: 1_000,
             pos: [0.0, 0.0, -0.01],
@@ -79,14 +79,14 @@ fn main() -> std::io::Result<()> {
         assert_eq!(summary.trace_len, 512);
 
         summary.rep_uuid = pb::uuid_to_field(&fixture_uuid(1));
-        let mut dump = Vec::new();
+        let mut dump = fixtures::new_dump(&mut rec_buf);
         push_rep(&mut dump, &mut rec_buf, &mut summary, trace.as_slice()).unwrap();
         write(&dir, "long-decimated.pblog", &dump)?;
     }
 
     // 4. A rep whose trace fell off the device's ring: the summary is there, its chunks are not. The app must say "trace unavailable", not crash.
     {
-        let mut dump = Vec::new();
+        let mut dump = fixtures::new_dump(&mut rec_buf);
         let summary = msg::RepSummary {
             rep_uuid: pb::uuid_to_field(&fixture_uuid(7)),
             t_start_ms: 5_000,
@@ -105,7 +105,7 @@ fn main() -> std::io::Result<()> {
 
     // 5. Extreme values: every field at its maximum encoding, to check the decoders and the plot's axis fitting on pathological input.
     {
-        let mut dump = Vec::new();
+        let mut dump = fixtures::new_dump(&mut rec_buf);
         let trace: Vec<TracePoint> = (0..4)
             .map(|i| TracePoint {
                 t_ms: u32::MAX - 40 + i * 10,
@@ -147,7 +147,7 @@ fn main() -> std::io::Result<()> {
         let (samples, _) = fixtures::dipped_squat_set(2, 0.35);
         let reps = fixtures::detect_and_trace(&samples, 512);
         assert_eq!(reps.len(), 2, "the dip should not stop the detector");
-        let mut dump = Vec::new();
+        let mut dump = fixtures::new_dump(&mut rec_buf);
         for (i, (mut summary, trace)) in reps.into_iter().enumerate() {
             let xs: Vec<f32> = trace.iter().map(|p| p.pos[0]).collect();
             let range = xs.iter().cloned().fold(f32::MIN, f32::max)

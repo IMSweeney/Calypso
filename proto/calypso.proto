@@ -12,14 +12,15 @@
 // Positions/velocities are metres and metres per second (float).
 //
 // Storage layout: each rep is one `RepSummary` record followed by
-// `summary.chunk_count` `TraceChunk` records carrying the same `rep_uuid`.
+// `summary.chunk_count` `TraceChunk` records carrying the same `rep_uuid`, and a
+// boot's clock is a `BootClock` record between them.
 //
 // Rep identity is a **v4 UUID, minted on the device when the rep closes**. It is
-// random rather than a counter or a timestamp because the device has no RTC and
-// its uptime resets on every boot, so neither a counter nor a clock can be unique
-// across boots; and because identity then needs no coordination between devices.
-// The price is that UUIDs do not sort — ordering comes from the archive's append
-// order.
+// random rather than a counter or a timestamp because a rep can be recorded
+// before the client has ever set the device's clock, so an identity derived from
+// time would have to have a second form for those; and because random ids need no
+// coordination between devices. The price is that UUIDs do not sort — a rep's
+// place in time comes from `RepSummary.t_unix_ms` instead.
 
 syntax = "proto3";
 
@@ -60,6 +61,14 @@ message RepSummary {
   uint32 trace_len = 13;    // trace points stored across all chunks
   uint32 chunk_count = 14;  // TraceChunk records following this summary
   bool decimated = 15;      // trace was decimated to fit device memory
+  // The rep's wall-clock time, unix milliseconds, or 0 when the device had no
+  // clock for the boot that recorded it.
+  //
+  // **Set when a summary is streamed, 0 in the log.** The time is a property of
+  // the boot, not of the rep, and it is often not known until after the rep has
+  // been written: a stored summary therefore carries its uptime (`t_start_ms`)
+  // and the boot's clock travels as its own record (`BootClock`).
+  uint64 t_unix_ms = 16;
 }
 
 // A slice of a rep's trace: as stored in the log, and as sent over BLE.
@@ -77,12 +86,37 @@ message TraceChunk {
   uint32 total_chunks = 5;
 }
 
-// One log record: a rep summary or one of its trace chunks. Keeping both
-// under one wire type makes the log a single self-describing stream.
+// The device's clock, as of one point in the log: what its uptime zero was worth
+// on the wall clock from here on.
+//
+// The device has no RTC, so the only time it can know is the one the client set
+// (`Time`, `proto/calypso_gatt.proto`). That time belongs in the log rather than
+// in RAM because it outlives the boot: reps written while the client was
+// connected keep their time when the device restarts, and a rep that only the RAM
+// remembers a clock for would lose it.
+//
+// Written at most twice per boot:
+//   - at mount, with `epoch_s` 0 — a boot's records start here, which is what
+//     stops a boot that never had a clock from being read as the one before it;
+//   - when the client sets the clock, with the epoch. Re-setting it writes another,
+//     and the newest one before a record is the one that dates it.
+//
+// A record's clock is the newest `BootClock` **at or before it**, which is the
+// only rule both ends can apply: the device can name its own boot's records by
+// the ids it has in RAM, and a dump of the log carries no ids at all
+// (`docs/FIXTURES.md`), so a reader goes by order.
+message BootClock {
+  uint32 epoch_s = 1; // unix seconds at that boot's uptime zero; 0 = not known
+}
+
+// One log record: a rep summary, one of its trace chunks, or a clock reading.
+// Keeping them under one wire type makes the log a single self-describing
+// stream.
 message RepRecord {
   oneof body {
     RepSummary summary = 1;
     TraceChunk trace = 2;
+    BootClock clock = 3;
   }
 }
 
@@ -92,6 +126,11 @@ message RepRecord {
 // (app -> device, a `SyncRequest`) and `messages` (device -> app, a
 // `SyncMessage`). One of each, so a new operation is a new arm of these oneofs
 // rather than a new characteristic and a new UUID.
+//
+// Setting the clock is deliberately *not* an arm of `SyncRequest`. It is a state
+// the app writes once per boot, like the calibration a client reads, and on the
+// pipe it would queue behind the summaries it is meant to be there for — the
+// device holds them until it has a clock (see `BootClock`).
 
 // Sent by the app to request a rep's trace. `chunk_index` is ignored unless
 // `all_chunks` is false.
@@ -163,4 +202,75 @@ message SyncStatus {
   bytes oldest_rep_uuid = 2;    // reps fall off the ring when it wraps
   bytes newest_rep_uuid = 3;
   bool trace_unavailable = 4;  // requested trace has been overwritten
+}
+
+// --- Diagnostics ----------------------------------------------------------
+
+// What the device says when something goes wrong, pushed on the `Reports`
+// characteristic (`proto/calypso_gatt.proto`).
+//
+// **A kind and nothing else.** The device's own sentence stays in its console
+// log; the app turns the kind into words. Text was the other shape considered
+// and it loses: a sentence long enough to be useful does not fit the payload
+// every link can carry, so it would have to be truncated to whatever the
+// current link takes, and a sentence that differs by link is one the app cannot
+// label, count or recognise. The detail underneath a kind (which flash error,
+// which rep) is what a serial console is for.
+//
+// These are **events, not state**, which is why the characteristic is
+// notify-only: a fault is reported when it happens, there is no "and it is fine
+// now", and nothing reads a latest one back — a latch the device has to call
+// current is a state it cannot know. A client that was not subscribed hears
+// nothing, so the device holds what it raised while nobody was listening and
+// sends it when a subscriber appears.
+//
+// The app owns every sentence, so a kind names a **class** of failure and not
+// an incident: adding detail on the device side must not change which kind it
+// reports. The app counts what arrives.
+message Report {
+  ReportKind kind = 1;
+}
+
+// The classes of failure that reach the phone. Each is something a person
+// holding the phone can act on, or can at least be told about in a sentence;
+// the firmware's own log has the rest.
+enum ReportKind {
+  REPORT_KIND_UNSPECIFIED = 0;
+  // The rep log did not mount, or could not be read: nothing this boot is
+  // stored, and nothing will ever be offered to sync. A bad partition table or
+  // a flash that will not answer leaves this device a sensor with no record
+  // (docs/GOTCHAS.md).
+  REPORT_KIND_LOG_UNUSABLE = 1;
+  // A rep closed and could not be written: the trace is lost, and no summary
+  // will arrive for it either.
+  REPORT_KIND_REP_NOT_STORED = 2;
+  // A rep was detected but its samples were no longer in the ring, so it was
+  // dropped before it could be computed. A rep the app will never see.
+  REPORT_KIND_REP_WINDOW_UNAVAILABLE = 3;
+  // The sampler could not read the IMU: nothing is recorded while this lasts.
+  // Reported at most once a second however many reads fail.
+  REPORT_KIND_IMU_READ_FAILED = 4;
+  // The IMU's stored calibration profile did not apply, or did not persist.
+  // Reps are recorded, but the profile the app last saved is not what is
+  // running.
+  REPORT_KIND_CALIBRATION_PROFILE = 5;
+  // The client set the clock and the device kept it in RAM only: this boot's
+  // reps are dated, a later boot's log has no record of the epoch.
+  REPORT_KIND_CLOCK_NOT_PERSISTED = 6;
+  // The pipe gave up on a message the app is waiting for (three attempts, no
+  // acknowledgement). The app's own transfer timeout says the same thing a few
+  // seconds later.
+  REPORT_KIND_TRANSFER_ABANDONED = 7;
+  // The app asked for something this device will not serve: a body it does not
+  // know, a request it cannot decode, or a trace asked for with nothing
+  // subscribed. Always an app firmware-mismatch rather than a device fault.
+  REPORT_KIND_REQUEST_REFUSED = 8;
+  // A requested trace could not be read back out of the log. The app is
+  // waiting on it and will time out.
+  REPORT_KIND_TRACE_UNREADABLE = 9;
+  // A notification the device tried to send failed on the link.
+  REPORT_KIND_NOTIFY_FAILED = 10;
+  // The radio's own machinery failed: the HCI runner errored, or advertising
+  // could not be started. The device may be invisible or unreachable.
+  REPORT_KIND_RADIO_FAILED = 11;
 }

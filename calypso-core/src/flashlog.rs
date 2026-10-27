@@ -255,6 +255,13 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         self.sectors
     }
 
+    /// The id the next record will be given.
+    ///
+    /// Ids are assigned in write order and keep counting across boots (they continue from the newest record the mount scan found), which is what lets a boot name the records it wrote (`crate::clock`).
+    pub fn next_id(&self) -> u32 {
+        self.next_id
+    }
+
     /// Iterate all live records, oldest first. Records larger than `buf` are skipped.
     pub fn for_each(
         &mut self,

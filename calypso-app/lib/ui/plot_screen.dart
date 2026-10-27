@@ -4,15 +4,23 @@ import 'package:flutter/material.dart';
 
 import '../model/rep.dart';
 import '../protocol/calypso.pb.dart' as pb;
-import '../model/uuid.dart';
 import '../plot/rep_plot.dart';
 import '../store/rep_archive.dart';
 
 class PlotScreen extends StatefulWidget {
-  const PlotScreen({super.key, required this.store, required this.repUuid});
+  const PlotScreen({
+    super.key,
+    required this.store,
+    required this.repUuid,
+    required this.label,
+  });
 
   final RepArchive store;
   final String repUuid;
+
+  /// What the screen calls the rep: what the row it was opened from called it. Naming a rep is the list's business,
+  /// and a rep the list cannot name is a rep it does not offer.
+  final String label;
 
   @override
   State<PlotScreen> createState() => _PlotScreenState();
@@ -45,7 +53,7 @@ class _PlotScreenState extends State<PlotScreen> {
         _loading = false;
         if (trace.isEmpty) {
           _error =
-              'Rep ${uuidShort(repUuid)}: no trace in the archive '
+              '${widget.label} has no trace in the archive '
               '(${stored?.summary.chunkCount ?? 0} chunks were expected)';
         }
       });
@@ -67,7 +75,7 @@ class _PlotScreenState extends State<PlotScreen> {
     }
     final selected = _selected;
     return Scaffold(
-      appBar: AppBar(title: Text('Rep ${uuidShort(widget.repUuid)}')),
+      appBar: AppBar(title: Text(widget.label)),
       body: Column(
         children: [
           if (_error != null)

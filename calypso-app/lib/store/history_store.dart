@@ -1,10 +1,7 @@
 library;
 
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-
-import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../protocol/calypso.pb.dart' as pb;
 import 'rep_archive.dart';
@@ -17,7 +14,6 @@ class HistoryFiles {
   final Directory directory;
 
   File get records => File('${directory.path}/history.pblog');
-  File get receiptTimes => File('${directory.path}/received.json');
 }
 
 class HistoryStore implements RepArchive {
@@ -27,7 +23,6 @@ class HistoryStore implements RepArchive {
 
   final List<StoredRep> _reps = [];
   final Set<String> _uuids = {};
-  final Map<String, DateTime> _received = {};
   int _bytes = 0;
 
   @override
@@ -45,18 +40,16 @@ class HistoryStore implements RepArchive {
   Future<void> load() async {
     _reps.clear();
     _uuids.clear();
-    _received.clear();
     truncated = false;
 
     await files.directory.create(recursive: true);
-    await _loadReceiptTimes();
 
     if (await files.records.exists()) {
       final bytes = await files.records.readAsBytes();
       _bytes = bytes.length;
       _goodBytes = 0;
 
-      final scan = scanBlocks(bytes, _received);
+      final scan = scanBlocks(bytes);
       _reps.addAll(scan.reps);
       for (final rep in _reps) {
         _uuids.add(rep.uuid);
@@ -67,17 +60,10 @@ class HistoryStore implements RepArchive {
       _bytes = 0;
       _goodBytes = 0;
     }
-
-    final before = _received.length;
-    _received.removeWhere((uuid, _) => !_uuids.contains(uuid));
-    if (_received.length != before) await _saveReceiptTimes();
   }
 
   @override
-  Future<int> appendNew(
-    Map<String, Uint8List> recordBlocks, {
-    DateTime? receivedAt,
-  }) async {
+  Future<int> appendNew(Map<String, Uint8List> recordBlocks) async {
     if (truncated) {
       final handle = await files.records.open(mode: FileMode.append);
       await handle.truncate(_goodBytes);
@@ -92,13 +78,11 @@ class HistoryStore implements RepArchive {
         sink.add(entry.value);
         added++;
         _uuids.add(entry.key);
-        _received[entry.key] = receivedAt ?? DateTime.now();
       }
     } finally {
       await sink.flush();
       await sink.close();
     }
-    if (added > 0) await _saveReceiptTimes();
     if (added > 0 || _reps.isEmpty) await load();
     return added;
   }
@@ -121,32 +105,6 @@ class HistoryStore implements RepArchive {
       return assembleTraceFromBlock(Uint8List.fromList(block), uuid);
     } finally {
       await handle.close();
-    }
-  }
-
-  Future<void> _loadReceiptTimes() async {
-    if (!await files.receiptTimes.exists()) return;
-    try {
-      final json =
-          jsonDecode(await files.receiptTimes.readAsString())
-              as Map<String, dynamic>;
-      json.forEach((key, value) {
-        final when = DateTime.tryParse('$value');
-        if (when != null) _received[key] = when;
-      });
-    } catch (_) {
-      _received.clear();
-    }
-  }
-
-  Future<void> _saveReceiptTimes() async {
-    final json = {
-      for (final e in _received.entries) e.key: e.value.toIso8601String(),
-    };
-    try {
-      await files.receiptTimes.writeAsString(jsonEncode(json));
-    } catch (e) {
-      debugPrint('calypso: receipt times not saved ($e)');
     }
   }
 }

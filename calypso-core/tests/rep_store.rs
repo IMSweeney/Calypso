@@ -192,6 +192,45 @@ fn summary_and_chunks_share_the_rep_uuid() {
 }
 
 #[test]
+fn clock_records_sit_among_the_reps_without_disturbing_them() {
+    let (samples, _) = squat_set(1, 1500, 800, 0.4);
+    let (traces, summaries) = pipeline(&samples);
+    assert_eq!(traces.len(), 1);
+    let mut summary = summaries[0].clone();
+    summary.rep_uuid = calypso_core::pb::uuid_to_field(&fixture_uuid(1));
+    let chunks = calypso_core::pb::chunk_count_for(traces[0].len());
+
+    let mut flash = BigFlash::new();
+    let mut buf = [0u8; RECORD_BUF_BYTES];
+    {
+        let mut log = mount(&mut flash);
+        assert_eq!(log.next_id(), 1, "an empty log starts numbering at 1");
+        // Every boot opens with its clock, and the client's write replaces it later in the same boot.
+        assert_eq!(store::append_clock(&mut log, &mut buf, 0).unwrap(), 1);
+        store::append_rep(&mut log, &mut buf, &mut summary, &traces[0]).unwrap();
+        assert_eq!(
+            store::append_clock(&mut log, &mut buf, 1_760_000_000).unwrap(),
+            3 + chunks,
+            "the client's write lands after the summary and chunks of the rep it dates"
+        );
+    }
+
+    // Reading it back: the clocks are not reps, and the rep is whole.
+    let mut log = mount(&mut flash);
+    let mut rec = msg::RepRecord::default();
+    let mut back = Vec::new();
+    store::for_each_summary(&mut log, &mut buf, &mut rec, |s| back.push(s.clone())).unwrap();
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].trace_len, traces[0].len() as u32);
+
+    let mut storage = vec![calypso_core::rep::TracePoint::ZERO; traces[0].len()];
+    let mut trace = TraceBuf::new(&mut storage);
+    let points =
+        store::read_trace(&mut log, &mut buf, &mut rec, fixture_uuid(1), &mut trace).unwrap();
+    assert_eq!(points, traces[0].len());
+}
+
+#[test]
 #[should_panic(expected = "is not a RepRecord")]
 fn a_crc_valid_record_that_is_not_a_rep_record_panics() {
     let mut flash = MockFlash::new();

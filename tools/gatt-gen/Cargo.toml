@@ -7,6 +7,10 @@ keywords     = ["ble", "bluetooth", "gatt", "protobuf", "codegen"]
 license      = "Apache-2.0"
 name         = "gatt-gen"
 readme       = "README.md"
+# What `cargo run` builds here. The examples below are members, so without this
+# the tool cannot be run from its own manifest and `gen_gatt.sh` -- which is how
+# both ends are regenerated -- does not work at all.
+default-run  = "gatt-gen"
 repository   = "https://github.com/IMSweeney/gatt-gen"
 rust-version = "1.88"
 version      = "0.1.0"

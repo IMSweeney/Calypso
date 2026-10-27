@@ -16,6 +16,22 @@ use crate::uuid;
 /// Sample interval used by the synthetic fixtures (100 Hz, like the device).
 pub const SAMPLE_DT_MS: u32 = 10;
 
+/// The wall clock the fixtures are dated from: 2026-01-01T00:00:00Z.
+///
+/// A fixed second rather than the time of generation, so a regenerated fixture is byte-identical, and one late enough that the device would believe it (`crate::clock::EARLIEST_S`).
+pub const FIXTURE_EPOCH_S: u32 = 1_767_225_600;
+
+/// A dump that starts the way a log does: with the boot's clock.
+///
+/// Every boot writes one at mount (`crate::clock`), so a dump without one is a log whose reps can never be dated — and the app labels and orders its list by that time.
+pub fn new_dump(rec_buf: &mut [u8]) -> Vec<u8> {
+    let mut dump = Vec::new();
+    let n =
+        pb::encode_clock(FIXTURE_EPOCH_S, rec_buf).expect("a clock record fits a record buffer");
+    push_record(&mut dump, &rec_buf[..n]);
+    dump
+}
+
 /// Ring size used when replaying synthetic motion through the sampler pipeline.
 const REPLAY_RING: usize = 4096;
 /// Detector window (max rep + ZUPT margins).
@@ -138,7 +154,7 @@ pub fn squat_dump(reps: usize, a: f32) -> Vec<u8> {
     let (samples, _) = squat_set(reps, 1500, 800, a);
     let reps = detect_and_trace(&samples, 512);
     let mut rec_buf = [0u8; RECORD_BUF_BYTES];
-    let mut dump = Vec::new();
+    let mut dump = new_dump(&mut rec_buf);
     for (i, (mut summary, trace)) in reps.into_iter().enumerate() {
         // Deterministic identities: fixtures are regenerated and compared.
         summary.rep_uuid = pb::uuid_to_field(&uuid::fixture_uuid(i as u32));

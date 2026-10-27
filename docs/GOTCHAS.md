@@ -262,16 +262,33 @@ and is the only one sizeable from here.
 
 `wifi::new` is not called: this is a BLE-only device, and initialising Wi-Fi
 started a task with its own stack plus driver buffers — most of the ~54 KB the
-radio took, from a 164 KB heap. **If BLE ever stops coming up, put `wifi::new`
-back first.**
+radio took, from a 164 KB heap.
 
-Worth knowing, because the code and the notes have disagreed here: `esp-radio`'s
-BLE bring-up contains `#[cfg(coex)] assert!(coex_init() == 0, "coex_init failed")`,
-that assert needs the adapter functions Wi-Fi registers, and
-`calypso-esp32/Cargo.toml` currently enables both the `coex` and `wifi` features —
-the string *is* present in current builds. BLE still comes up, so `coex_init`
-evidently returns 0 without Wi-Fi being initialised. Either the features get
-trimmed or the reason gets documented; see [ROADMAP.md](../ROADMAP.md).
+The build is BLE-only, so that distinction no longer comes up: `esp-radio`'s BLE
+bring-up has a `#[cfg(coex)] assert!(coex_init() == 0, "coex_init failed")`, `coex`
+is only set when the `wifi` and `ble` features are both on, and this manifest now
+enables only `ble` — see "The radio is built for a Wi-Fi stack the firmware never
+starts". The assert is not compiled, and there is no coexistence layer to fail.
+
+**If BLE stops coming up after a radio dependency bump**, re-enabling `wifi` and
+`coex` and calling `wifi::new` is the first thing to try: that is where this
+device has been lost before, and it is why the trim is a `cargo check` change
+until it has run on a board.
+
+### The radio is built for a Wi-Fi stack the firmware never starts
+
+**Symptom.** The image carries the Wi-Fi driver and the coexistence layer for a
+device that only ever does BLE, and nothing anywhere complains.
+
+**Cause.** `esp-radio`'s features are additive and the starting template's set was
+never trimmed. `coex` is the trap in it: it arbitrates between Wi-Fi and BLE, so on
+its own it changes nothing and only leaves a build-script warning (`coex is enabled
+but wifi is not`) — it reads like a safety flag, and is not one.
+
+**Fix.** BLE only: `features = ["ble", "defmt", "esp-alloc", "esp32",
+"unstable"]`, as `calypso-esp32/Cargo.toml` says. `unstable` is not optional — the
+build script refuses `ble` without it. With `wifi` gone, `smoltcp`, `embassy-net`,
+`embedded-io` and `embedded-io-async` have no user in the manifest either.
 
 ## BLE identity and discovery
 
@@ -622,6 +639,25 @@ advance a cursor, so each is news by construction, and calibration was the only 
 the pipe that could say the same thing twice. Anything else added there needs the same
 thought.
 
+### Nothing arrives from a device whose clock is not set
+
+**Symptom.** The app connects, says it is connected, and no rep ever appears. The
+device's boot log has no `rep … stored` line either, so it looks like nothing was
+ever recorded.
+
+**Cause.** The device sends only summaries it can date, and it dates them from the
+clock the client writes on connecting (`Time`, [APP_SYNC.md](APP_SYNC.md)). Reps
+of the boot running now wait for that write rather than going out without a time, and
+a boot that never saw a client has no clock at all — so a device switched on and used
+with no app in that boot records reps that are never offered.
+
+**Fix.** Nothing to do but connect: the app writes the clock as soon as the link is
+up, and says `clock: device set to … s`. If it never appears, the client is a build
+from before the characteristic existed and was refused at connect for the missing
+characteristic — rebuild it from the same schema as the firmware. The device says so
+on its side once per connection: `sync: no clock this boot, so no summary goes out
+until the app sets one`.
+
 ## Types
 
 ### The device keeps two types off the wire, on purpose
@@ -698,8 +734,10 @@ listener otherwise outlives the test that added it.
 macOS is sandboxed and needs `com.apple.security.device.bluetooth` in
 `macos/Runner/*.entitlements` (already set); without it the plugin reports
 `unsupported`, with nothing pointing at the entitlement. iOS needs
-`NSBluetoothAlwaysUsageDescription` (already in `Info.plist`). The iOS Simulator
-has no CoreBluetooth at all, so use a device or the Mac.
+`NSBluetoothAlwaysUsageDescription` (`ios/Runner/Info.plist`): without it the system
+**terminates the app** the moment the plugin instantiates its central manager, which
+is a crash on the first tap of Connect and on nothing else — the Simulator never
+reaches it, because there is no CoreBluetooth there at all. Use a device or the Mac.
 
 ### Generated Dart is checked in
 

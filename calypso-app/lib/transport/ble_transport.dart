@@ -13,6 +13,7 @@ import '../protocol/calypso.pb.dart' as pb;
 import '../protocol/pblog.dart';
 import '../state/ble_status.dart';
 import '../state/calibration.dart';
+import '../state/device_reports.dart';
 import '../sync/trace_reassembly.dart';
 import 'ble_link.dart';
 import 'transport.dart';
@@ -77,9 +78,11 @@ class BleTransport implements RepTransport {
 
   final BleStatusNotifier status = BleStatusNotifier();
   final CalibrationNotifier calibration = CalibrationNotifier();
+  final DeviceReports reports = DeviceReports();
 
   String? _deviceId;
   StreamSubscription<Uint8List>? _messagesSub;
+  StreamSubscription<pb.Report>? _reportsSub;
 
   /// The app's end of the pipe: one receiver for everything the device sends, and one sender for everything the app asks with. Both directions are the same frame on the same two characteristics, so what arrives has to be sorted by the frame rather than by where it came from (`_onNotification`).
   final pipe.Receiver _receiver = pipe.Receiver(SyncPipe.window);
@@ -154,7 +157,7 @@ class BleTransport implements RepTransport {
       debugPrint(
         'calypso: device offers ${_describe(services)}; '
         'want ${SyncClient.serviceUuid}[${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}, '
-        '${SyncClient.calibrationUuid}]',
+        '${SyncClient.calibrationUuid}, ${SyncClient.reportsUuid}, ${SyncClient.timeUuid}]',
       );
       if (!_offersSync(services) || _strangersIn(services).isNotEmpty) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -172,9 +175,9 @@ class BleTransport implements RepTransport {
           );
         }
         throw StateError(
-          'device offers ${_describe(services)}, not all three characteristics of '
+          'device offers ${_describe(services)}, not all five characteristics of '
           '${SyncClient.serviceUuid} (${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}, '
-          '${SyncClient.calibrationUuid})',
+          '${SyncClient.calibrationUuid}, ${SyncClient.reportsUuid}, ${SyncClient.timeUuid})',
         );
       }
       final strangers = _strangersIn(services);
@@ -239,8 +242,15 @@ class BleTransport implements RepTransport {
       return;
     }
 
-    // The schema's client for this connection, and the one thing it is for here: the calibration levels. Read once now, so the hint is right from the first frame, and asked for again on the app's own interval.
+    // The schema's client for this connection: the calibration levels, which it reads, the clock, which it writes, and the reports it subscribes to.
     _client = SyncClient(_GattLink(_link, deviceId));
+    // Before the clock and before anything is asked for: from here on the device can tell
+    // the app what has gone wrong, including what it raised while nobody was listening.
+    await _subscribeReports();
+    // The clock before the calibration and before anything is asked for: the device holds this boot's summaries
+    // until it has one, and they are the reps this connection exists for.
+    await setClock();
+    // Read the levels once now, so the hint is right from the first frame, and ask for them again on the app's own interval.
     await refreshCalibration();
     _calibrationTimer = Timer.periodic(
       calibrationPoll,
@@ -249,6 +259,39 @@ class BleTransport implements RepTransport {
 
     bleLog.info('connected to $deviceId');
     status.set(BleStatus.connected, deviceId: deviceId);
+  }
+
+  /// Subscribe to the device's own reports of what went wrong, and start listening.
+  ///
+  /// Notifications, not a read: a fault is an event with no state to catch up on, and the
+  /// device hands over anything it raised while nobody was listening as soon as this
+  /// subscription lands (`proto/calypso_gatt.proto`). Listening first and subscribing
+  /// second, because the first report can arrive the moment the subscription completes.
+  ///
+  /// A failure is logged and not raised: these are diagnostics, and a link that will not
+  /// carry them is still the link the reps sync over.
+  Future<void> _subscribeReports() async {
+    final client = _client;
+    if (client == null) return;
+    _reportsSub = client.reportsUpdates.listen(
+      _onReport,
+      onError: (Object error) =>
+          bleLog.warning('error on ${SyncClient.reportsUuid}: $error'),
+    );
+    try {
+      await client.subscribeReports();
+      bleLog.info('subscribed to ${SyncClient.reportsUuid}');
+    } catch (e) {
+      bleLog.warning(
+        'could not subscribe to the device\'s reports ($e); the reps still sync',
+      );
+    }
+  }
+
+  /// One fault from the device: the app's sentence for it, on its own line in the log.
+  void _onReport(pb.Report report) {
+    bleLog.warning('device: ${describeReport(report.kind)}');
+    reports.add(report.kind);
   }
 
   /// Ask the device for the IMU's calibration levels, and publish them.
@@ -273,6 +316,26 @@ class BleTransport implements RepTransport {
     }
   }
 
+  /// Tell the device what time it is: unix seconds in UTC.
+  ///
+  /// The device keeps that as the epoch of the boot it is running — what its uptime zero was worth — and dates
+  /// every rep it sends with it, including the ones it stored before this write. The epoch lasts exactly one boot
+  /// (`proto/calypso.proto`), so it is set on every connection rather than tracked or cached here.
+  ///
+  /// A failure is logged and not raised: the reps still arrive, and one that cannot be dated is one the device
+  /// says nothing about rather than one the app guesses at.
+  Future<void> setClock() async {
+    final client = _client;
+    if (client == null) return;
+    final nowS = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+    try {
+      await client.writeTime(nowS);
+      bleLog.info('clock: device set to $nowS s');
+    } catch (e) {
+      bleLog.warning('clock: could not set the device clock: $e');
+    }
+  }
+
   static bool _offersSync(List<DiscoveredService> services) => services.any(
     (service) =>
         _sameUuid(service.uuid, SyncClient.serviceUuid) &&
@@ -284,7 +347,15 @@ class BleTransport implements RepTransport {
         ) &&
         service.characteristics.any(
           (c) => _sameUuid(c, SyncClient.calibrationUuid),
-        ),
+        ) &&
+        // Required for the same reason as the clock: a device that cannot say what went wrong
+        // is one whose failures are silent, which is the thing this characteristic exists to end.
+        service.characteristics.any(
+          (c) => _sameUuid(c, SyncClient.reportsUuid),
+        ) &&
+        // Required rather than optional: without it nothing this device sends can be dated, and the archive it
+        // syncs into would keep those reps for ever (`proto/calypso_gatt.proto`).
+        service.characteristics.any((c) => _sameUuid(c, SyncClient.timeUuid)),
   );
 
   /// The sync service's characteristics that the schema does not declare.
@@ -296,7 +367,9 @@ class BleTransport implements RepTransport {
         for (final characteristic in service.characteristics)
           if (!_sameUuid(characteristic, SyncClient.messagesUuid) &&
               !_sameUuid(characteristic, SyncClient.requestsUuid) &&
-              !_sameUuid(characteristic, SyncClient.calibrationUuid))
+              !_sameUuid(characteristic, SyncClient.calibrationUuid) &&
+              !_sameUuid(characteristic, SyncClient.reportsUuid) &&
+              !_sameUuid(characteristic, SyncClient.timeUuid))
             characteristic,
   ];
 
@@ -337,9 +410,12 @@ class BleTransport implements RepTransport {
 
   Future<void> _teardownConnection() async {
     calibration.clear();
+    reports.clear();
     _stopCalibrationPoll();
     _messagesSub?.cancel();
     _messagesSub = null;
+    _reportsSub?.cancel();
+    _reportsSub = null;
     // Whatever was in flight went with the link: half a message is not a message.
     _receiver.reset();
     _sender.reset();
@@ -359,6 +435,7 @@ class BleTransport implements RepTransport {
     bleLog.info('connection lost${error == null ? '' : ': $error'}');
     _deviceId = null;
     calibration.clear();
+    reports.clear();
     _stopCalibrationPoll();
     status.set(BleStatus.disconnected, error: error);
     _failPending('connection lost');

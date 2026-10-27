@@ -12,9 +12,14 @@
 
 import 'dart:core' as $core;
 
+import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
 
+import 'calypso.pbenum.dart';
+
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
+
+export 'calypso.pbenum.dart';
 
 /// One point of a stored rep trace.
 ///
@@ -215,6 +220,7 @@ class RepSummary extends $pb.GeneratedMessage {
     $core.int? traceLen,
     $core.int? chunkCount,
     $core.bool? decimated,
+    $fixnum.Int64? tUnixMs,
   }) {
     final result = RepSummary._();
     if (repUuid != null) result.repUuid = repUuid;
@@ -232,6 +238,7 @@ class RepSummary extends $pb.GeneratedMessage {
     if (traceLen != null) result.traceLen = traceLen;
     if (chunkCount != null) result.chunkCount = chunkCount;
     if (decimated != null) result.decimated = decimated;
+    if (tUnixMs != null) result.tUnixMs = tUnixMs;
     return result;
   }
 
@@ -269,6 +276,9 @@ class RepSummary extends $pb.GeneratedMessage {
     ..aI(14, _omitFieldNames ? '' : 'chunkCount',
         fieldType: $pb.PbFieldType.OU3)
     ..aOB(15, _omitFieldNames ? '' : 'decimated')
+    ..a<$fixnum.Int64>(
+        16, _omitFieldNames ? '' : 'tUnixMs', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -425,6 +435,22 @@ class RepSummary extends $pb.GeneratedMessage {
   $core.bool hasDecimated() => $_has(14);
   @$pb.TagNumber(15)
   void clearDecimated() => $_clearField(15);
+
+  /// The rep's wall-clock time, unix milliseconds, or 0 when the device had no
+  /// clock for the boot that recorded it.
+  ///
+  /// **Set when a summary is streamed, 0 in the log.** The time is a property of
+  /// the boot, not of the rep, and it is often not known until after the rep has
+  /// been written: a stored summary therefore carries its uptime (`t_start_ms`)
+  /// and the boot's clock travels as its own record (`BootClock`).
+  @$pb.TagNumber(16)
+  $fixnum.Int64 get tUnixMs => $_getI64(15);
+  @$pb.TagNumber(16)
+  set tUnixMs($fixnum.Int64 value) => $_setInt64(15, value);
+  @$pb.TagNumber(16)
+  $core.bool hasTUnixMs() => $_has(15);
+  @$pb.TagNumber(16)
+  void clearTUnixMs() => $_clearField(16);
 }
 
 /// A slice of a rep's trace: as stored in the log, and as sent over BLE.
@@ -535,18 +561,95 @@ class TraceChunk extends $pb.GeneratedMessage {
   void clearTotalChunks() => $_clearField(5);
 }
 
-enum RepRecord_Body { summary, trace, notSet }
+/// The device's clock, as of one point in the log: what its uptime zero was worth
+/// on the wall clock from here on.
+///
+/// The device has no RTC, so the only time it can know is the one the client set
+/// (`Time`, `proto/calypso_gatt.proto`). That time belongs in the log rather than
+/// in RAM because it outlives the boot: reps written while the client was
+/// connected keep their time when the device restarts, and a rep that only the RAM
+/// remembers a clock for would lose it.
+///
+/// Written at most twice per boot:
+///   - at mount, with `epoch_s` 0 — a boot's records start here, which is what
+///     stops a boot that never had a clock from being read as the one before it;
+///   - when the client sets the clock, with the epoch. Re-setting it writes another,
+///     and the newest one before a record is the one that dates it.
+///
+/// A record's clock is the newest `BootClock` **at or before it**, which is the
+/// only rule both ends can apply: the device can name its own boot's records by
+/// the ids it has in RAM, and a dump of the log carries no ids at all
+/// (`docs/FIXTURES.md`), so a reader goes by order.
+class BootClock extends $pb.GeneratedMessage {
+  factory BootClock({
+    $core.int? epochS,
+  }) {
+    final result = BootClock._();
+    if (epochS != null) result.epochS = epochS;
+    return result;
+  }
 
-/// One log record: a rep summary or one of its trace chunks. Keeping both
-/// under one wire type makes the log a single self-describing stream.
+  BootClock._();
+
+  factory BootClock.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      BootClock()..mergeFromBuffer(data, registry);
+  factory BootClock.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      BootClock()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'BootClock',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
+      createEmptyInstance: BootClock.$_createMessage)
+    ..aI(1, _omitFieldNames ? '' : 'epochS', fieldType: $pb.PbFieldType.OU3)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  BootClock clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  BootClock copyWith(void Function(BootClock) updates) =>
+      super.copyWith((message) => updates(message as BootClock)) as BootClock;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use BootClock() / BootClock.new instead')
+  static BootClock create() => BootClock._();
+  static $pb.GeneratedMessage $_createMessage() => BootClock._();
+  @$core.override
+  BootClock createEmptyInstance() => BootClock._();
+  @$core.pragma('dart2js:noInline')
+  static BootClock getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<BootClock>(BootClock.$_createMessage);
+  static BootClock? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.int get epochS => $_getIZ(0);
+  @$pb.TagNumber(1)
+  set epochS($core.int value) => $_setUnsignedInt32(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasEpochS() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearEpochS() => $_clearField(1);
+}
+
+enum RepRecord_Body { summary, trace, clock, notSet }
+
+/// One log record: a rep summary, one of its trace chunks, or a clock reading.
+/// Keeping them under one wire type makes the log a single self-describing
+/// stream.
 class RepRecord extends $pb.GeneratedMessage {
   factory RepRecord({
     RepSummary? summary,
     TraceChunk? trace,
+    BootClock? clock,
   }) {
     final result = RepRecord._();
     if (summary != null) result.summary = summary;
     if (trace != null) result.trace = trace;
+    if (clock != null) result.clock = clock;
     return result;
   }
 
@@ -562,17 +665,20 @@ class RepRecord extends $pb.GeneratedMessage {
   static const $core.Map<$core.int, RepRecord_Body> _RepRecord_BodyByTag = {
     1: RepRecord_Body.summary,
     2: RepRecord_Body.trace,
+    3: RepRecord_Body.clock,
     0: RepRecord_Body.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RepRecord',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
       createEmptyInstance: RepRecord.$_createMessage)
-    ..oo(0, [1, 2])
+    ..oo(0, [1, 2, 3])
     ..aOM<RepSummary>(1, _omitFieldNames ? '' : 'summary',
         subBuilder: RepSummary.$_createMessage)
     ..aOM<TraceChunk>(2, _omitFieldNames ? '' : 'trace',
         subBuilder: TraceChunk.$_createMessage)
+    ..aOM<BootClock>(3, _omitFieldNames ? '' : 'clock',
+        subBuilder: BootClock.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -597,9 +703,11 @@ class RepRecord extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
+  @$pb.TagNumber(3)
   RepRecord_Body whichBody() => _RepRecord_BodyByTag[$_whichOneof(0)]!;
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
+  @$pb.TagNumber(3)
   void clearBody() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
@@ -623,6 +731,17 @@ class RepRecord extends $pb.GeneratedMessage {
   void clearTrace() => $_clearField(2);
   @$pb.TagNumber(2)
   TraceChunk ensureTrace() => $_ensure(1);
+
+  @$pb.TagNumber(3)
+  BootClock get clock => $_getN(2);
+  @$pb.TagNumber(3)
+  set clock(BootClock value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasClock() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearClock() => $_clearField(3);
+  @$pb.TagNumber(3)
+  BootClock ensureClock() => $_ensure(2);
 }
 
 /// Sent by the app to request a rep's trace. `chunk_index` is ignored unless
@@ -1120,6 +1239,83 @@ class SyncStatus extends $pb.GeneratedMessage {
   $core.bool hasTraceUnavailable() => $_has(3);
   @$pb.TagNumber(4)
   void clearTraceUnavailable() => $_clearField(4);
+}
+
+/// What the device says when something goes wrong, pushed on the `Reports`
+/// characteristic (`proto/calypso_gatt.proto`).
+///
+/// **A kind and nothing else.** The device's own sentence stays in its console
+/// log; the app turns the kind into words. Text was the other shape considered
+/// and it loses: a sentence long enough to be useful does not fit the payload
+/// every link can carry, so it would have to be truncated to whatever the
+/// current link takes, and a sentence that differs by link is one the app cannot
+/// label, count or recognise. The detail underneath a kind (which flash error,
+/// which rep) is what a serial console is for.
+///
+/// These are **events, not state**, which is why the characteristic is
+/// notify-only: a fault is reported when it happens, there is no "and it is fine
+/// now", and nothing reads a latest one back — a latch the device has to call
+/// current is a state it cannot know. A client that was not subscribed hears
+/// nothing, so the device holds what it raised while nobody was listening and
+/// sends it when a subscriber appears.
+///
+/// The app owns every sentence, so a kind names a **class** of failure and not
+/// an incident: adding detail on the device side must not change which kind it
+/// reports. The app counts what arrives.
+class Report extends $pb.GeneratedMessage {
+  factory Report({
+    ReportKind? kind,
+  }) {
+    final result = Report._();
+    if (kind != null) result.kind = kind;
+    return result;
+  }
+
+  Report._();
+
+  factory Report.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      Report()..mergeFromBuffer(data, registry);
+  factory Report.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      Report()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'Report',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
+      createEmptyInstance: Report.$_createMessage)
+    ..aE<ReportKind>(1, _omitFieldNames ? '' : 'kind',
+        enumValues: ReportKind.values)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  Report clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  Report copyWith(void Function(Report) updates) =>
+      super.copyWith((message) => updates(message as Report)) as Report;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use Report() / Report.new instead')
+  static Report create() => Report._();
+  static $pb.GeneratedMessage $_createMessage() => Report._();
+  @$core.override
+  Report createEmptyInstance() => Report._();
+  @$core.pragma('dart2js:noInline')
+  static Report getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<Report>(Report.$_createMessage);
+  static Report? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  ReportKind get kind => $_getN(0);
+  @$pb.TagNumber(1)
+  set kind(ReportKind value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasKind() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearKind() => $_clearField(1);
 }
 
 const $core.bool _omitFieldNames =

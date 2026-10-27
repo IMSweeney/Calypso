@@ -2,6 +2,8 @@ library;
 
 import 'dart:typed_data';
 
+import 'package:fixnum/fixnum.dart';
+
 import '../model/rep.dart';
 import '../protocol/calypso.pb.dart' as pb;
 import '../protocol/pblog.dart';
@@ -12,7 +14,6 @@ class StoredRep {
     required this.summary,
     required this.offset,
     required this.length,
-    this.receivedAt,
     this.hasTrace = false,
   });
 
@@ -20,7 +21,6 @@ class StoredRep {
 
   final int offset;
   final int length;
-  final DateTime? receivedAt;
 
   /// Whether the app stored the trace with the rep.
   ///
@@ -29,6 +29,11 @@ class StoredRep {
 
   /// Set: `scanBlocks` refuses a summary whose uuid does not parse.
   String get uuid => summary.uuid!;
+
+  /// When the rep happened: the device's clock, which every summary it sends carries.
+  ///
+  /// Null only for records that predate the device having a clock at all — the app's `received.json` is gone, so there is nothing to fall back to, and a rep with no time is on no day for the list to show.
+  DateTime? get recordedAt => summary.recordedAt;
 }
 
 abstract class RepArchive {
@@ -38,10 +43,7 @@ abstract class RepArchive {
   int get sizeBytes;
   bool contains(String uuid);
 
-  Future<int> appendNew(
-    Map<String, Uint8List> recordBlocks, {
-    DateTime? receivedAt,
-  });
+  Future<int> appendNew(Map<String, Uint8List> recordBlocks);
 
   Future<List<pb.TraceSample>> trace(String uuid);
 }
@@ -55,7 +57,7 @@ class BlockScan {
   final int goodBytes;
 }
 
-BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
+BlockScan scanBlocks(Uint8List bytes) {
   final reps = <StoredRep>[];
   var goodBytes = 0;
   var truncated = false;
@@ -65,6 +67,9 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
   var blockLength = 0;
   var blockHasTrace = false;
   (String, pb.RepSummary)? pending;
+  // The newest clock record so far: a capture read as history dates its reps from it, the way a fixture is dated
+  // by [`summariesOf`]. An archive the app itself wrote has the times on the summaries already, and no clocks.
+  var epochS = 0;
 
   while (pos + 4 <= bytes.length) {
     final length = ByteData.sublistView(
@@ -84,6 +89,13 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
       truncated = true;
       break;
     }
+    // A clock is not part of a rep: it sets the epoch and belongs to no block, or a capture's boot record would
+    // be counted into whatever rep precedes it.
+    if (record.hasClock()) {
+      epochS = record.clock.epochS;
+      pos = start + length;
+      continue;
+    }
     if (record.hasSummary()) {
       goodBytes = pos;
       final uuid = record.summary.uuid;
@@ -91,13 +103,15 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
         truncated = true;
         break;
       }
+      if (epochS != 0) {
+        record.summary.tUnixMs = Int64(epochS * 1000 + record.summary.tStartMs);
+      }
       if (pending != null) {
         reps.add(
           StoredRep(
             summary: pending.$2,
             offset: blockStart!,
             length: blockLength,
-            receivedAt: receivedAt[pending.$1],
             hasTrace: blockHasTrace,
           ),
         );
@@ -113,16 +127,12 @@ BlockScan scanBlocks(Uint8List bytes, Map<String, DateTime> receivedAt) {
   }
 
   if (pending == null) return BlockScan(reps, truncated, goodBytes);
-  if (truncated) {
-    receivedAt.remove(pending.$1);
-    return BlockScan(reps, truncated, goodBytes);
-  }
+  if (truncated) return BlockScan(reps, truncated, goodBytes);
   reps.add(
     StoredRep(
       summary: pending.$2,
       offset: blockStart!,
       length: blockLength,
-      receivedAt: receivedAt[pending.$1],
       hasTrace: blockHasTrace,
     ),
   );

@@ -26,6 +26,44 @@ flutter run -d macos --dart-define=FIXTURE=           # empty: start with an emp
 The **iOS Simulator has no CoreBluetooth at all**, so BLE needs a real device or
 the Mac; development against fixtures needs neither.
 
+## TestFlight
+
+The iOS target builds as it stands (`flutter build ios --release --no-codesign`);
+what a store build adds is the signing identity, which lives in an Apple account
+rather than in the repo.
+
+```sh
+flutter build ipa --release --export-method app-store --dart-define=FIXTURE=
+```
+
+- **Signing is a one-time Xcode step.** `ios/Runner.xcworkspace` → Runner target →
+  Signing & Capabilities → Automatically manage signing → your team. That writes
+  `DEVELOPMENT_TEAM` into `ios/Runner.xcodeproj/project.pbxproj`, which is the part
+  worth committing; without it the export step fails. A paid Apple Developer Program
+  membership is required, and the bundle id needs an App ID and an App Store Connect
+  record before anything uploads.
+- **The build number is the thing that has to move.** `version: 0.1.0+N` in
+  `pubspec.yaml`; a build number already seen for that version is refused, so bump
+  `N` (or pass `--build-number`) for every upload.
+- **`--dart-define=FIXTURE=` is not optional here.** The default is
+  `synthetic-squat` (`lib/ui/rep_list_screen.dart`), and the app syncs that fixture
+  into the real history on launch — a store build without the empty define shows
+  every tester a rep that never happened.
+- **The phone needs firmware from the same schema.** The app refuses a device whose
+  GATT table is not the one it was built from (`_offersSync`, and `_strangersIn` for
+  the other direction), and the firmware's advertised address carries the schema
+  hash. A tester with an older flash gets "not all five characteristics" rather than
+  a half-working sync, so the notes should say which firmware the build goes with.
+- **Testers need a physical device**, for the reason above.
+- `Info.plist` already answers Apple's export-compliance question
+  (`ITSAppUsesNonExemptEncryption`), so an upload does not sit in "Missing
+  Compliance" waiting for someone to click through it.
+
+Upload with Xcode → Window → Organizer → Distribute App → App Store Connect (or the
+Transporter app), then attach the build to a group in App Store Connect. Internal
+testers get it as soon as it processes; external testers need the first build of a
+version to pass Beta App Review.
+
 ## Test
 
 ```sh

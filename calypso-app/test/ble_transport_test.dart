@@ -121,7 +121,10 @@ void main() {
         isFalse,
         reason: 'the scan stops once a device is found',
       );
-      expect(link.subscribed, [SyncClient.messagesUuid]);
+      expect(link.subscribed, [
+        SyncClient.messagesUuid,
+        SyncClient.reportsUuid,
+      ]);
       expect(transport.status.status, BleStatus.connected);
       expect(transport.status.deviceId, 'device-1');
     },
@@ -136,6 +139,7 @@ void main() {
       'connect',
       'discoverServices',
       'subscribe:${SyncClient.messagesUuid}',
+      'subscribe:${SyncClient.reportsUuid}',
     ]);
     expect(link.discovered, ['device-1']);
     expect(transport.status.status, BleStatus.connected);
@@ -170,35 +174,36 @@ void main() {
     },
   );
 
-  test(
-    'a characteristic the schema does not declare is refused, named',
-    () async {
-      final link = FakeBleLink()
-        ..services = const [
-          DiscoveredService('0000ca20-b0cd-11ec-871f-d45ddf138840', [
-            '0000ca21-b0cd-11ec-871f-d45ddf138840',
-            '0000ca22-b0cd-11ec-871f-d45ddf138840',
-            '0000ca24-b0cd-11ec-871f-d45ddf138840',
-            '0000ca23-b0cd-11ec-871f-d45ddf138840',
-          ]),
-        ];
+  test('a characteristic the schema does not declare is refused, named', () async {
+    // Every characteristic this build's schema declares, and one it does not: a uuid from outside the
+    // family, so this test cannot start passing by accident the next time the schema grows one.
+    final link = FakeBleLink()
+      ..services = const [
+        DiscoveredService('0000ca20-b0cd-11ec-871f-d45ddf138840', [
+          '0000ca21-b0cd-11ec-871f-d45ddf138840',
+          '0000ca22-b0cd-11ec-871f-d45ddf138840',
+          '0000ca24-b0cd-11ec-871f-d45ddf138840',
+          '0000ca25-b0cd-11ec-871f-d45ddf138840',
+          '0000ca23-b0cd-11ec-871f-d45ddf138840',
+          '12345678-1234-5678-1234-567812345678',
+        ]),
+      ];
 
-      final transport = await connectedTransport(link);
+    final transport = await connectedTransport(link);
 
-      expect(transport.status.status, BleStatus.failed);
-      expect(link.subscribed, isEmpty, reason: 'nothing was subscribed to');
-      expect(
-        transport.status.error,
-        contains('0000ca23-b0cd-11ec-871f-d45ddf138840'),
-        reason: 'the stranger is in the message',
-      );
-      expect(
-        transport.status.error,
-        contains('cached GATT database'),
-        reason: 'and the cause a reflash does not fix',
-      );
-    },
-  );
+    expect(transport.status.status, BleStatus.failed);
+    expect(link.subscribed, isEmpty, reason: 'nothing was subscribed to');
+    expect(
+      transport.status.error,
+      contains('12345678-1234-5678-1234-567812345678'),
+      reason: 'the stranger is in the message',
+    );
+    expect(
+      transport.status.error,
+      contains('cached GATT database'),
+      reason: 'and the cause a reflash does not fix',
+    );
+  });
 
   test('a reversed GATT tree names both causes', () async {
     final link = FakeBleLink()
@@ -459,6 +464,42 @@ void main() {
     },
   );
 
+  test(
+    'connecting sets the device clock, before the app asks for anything',
+    () async {
+      final link = FakeBleLink();
+      final device = FakeDevice(link);
+      final transport = await connectedTransport(link);
+
+      // The device holds this boot's summaries until it has a clock, so the write is the first thing that happens
+      // after the link is up — before the sync that asks for them.
+      expect(device.clocks, hasLength(1), reason: 'set once, at connect');
+      final nowS = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+      expect(
+        (device.clocks.single - nowS).abs(),
+        lessThan(5),
+        reason: 'what the phone clock says, in unix seconds',
+      );
+
+      await transport.disconnect();
+    },
+  );
+
+  test('a device that refuses the clock write is still connected', () async {
+    final link = FakeBleLink()..writeError = StateError('no such attribute');
+    final device = FakeDevice(link);
+    final transport = await connectedTransport(link);
+
+    expect(transport.status.status, BleStatus.connected);
+    expect(
+      device.clocks,
+      isEmpty,
+      reason: 'the write did not land, and the sync is still worth doing',
+    );
+
+    await transport.disconnect();
+  });
+
   test('the calibration status is read at connect, and leaves with it', () async {
     final link = FakeBleLink();
     // What the device's table holds, served before the transport reads it.
@@ -513,6 +554,84 @@ void main() {
     expect(transport.calibration.isReady, isTrue);
 
     await transport.close();
+  });
+
+  test('the device\'s own faults arrive as sentences', () async {
+    final link = FakeBleLink();
+    final device = FakeDevice(link);
+    final transport = await connectedTransport(link);
+
+    expect(
+      link.subscribed,
+      contains(SyncClient.reportsUuid),
+      reason: 'subscribed while connecting, so a fault has somewhere to go',
+    );
+    expect(
+      transport.reports.latest,
+      isNull,
+      reason: 'a device that has not complained has nothing to show',
+    );
+
+    device.sendReport(pb.ReportKind.REPORT_KIND_REP_NOT_STORED);
+    await pumpEventQueue();
+
+    expect(transport.reports.latest, pb.ReportKind.REPORT_KIND_REP_NOT_STORED);
+    expect(
+      transport.reports.message,
+      contains('could not save a rep'),
+      reason: 'the sentence is the app\'s, not the wire\'s',
+    );
+
+    await transport.disconnect();
+  });
+
+  test(
+    'a fault that keeps happening is counted, and leaves with the link',
+    () async {
+      final link = FakeBleLink();
+      final device = FakeDevice(link);
+      final transport = await connectedTransport(link);
+
+      device.sendReport(pb.ReportKind.REPORT_KIND_IMU_READ_FAILED);
+      device.sendReport(pb.ReportKind.REPORT_KIND_IMU_READ_FAILED);
+      await pumpEventQueue();
+
+      expect(
+        transport.reports.count,
+        2,
+        reason:
+            'the device coalesces, so two that arrive are two that happened '
+            'apart',
+      );
+      expect(
+        transport.reports.latest,
+        pb.ReportKind.REPORT_KIND_IMU_READ_FAILED,
+      );
+
+      link.dropConnection('out of range');
+      await pumpEventQueue();
+      expect(transport.reports.latest, isNull);
+      expect(transport.reports.count, 0);
+    },
+  );
+
+  test('a device that cannot report faults is refused, named', () async {
+    final link = FakeBleLink()
+      ..services = const [
+        DiscoveredService(SyncClient.serviceUuid, [
+          SyncClient.messagesUuid,
+          SyncClient.requestsUuid,
+          SyncClient.calibrationUuid,
+          SyncClient.timeUuid,
+        ]),
+      ];
+
+    final transport = await connectedTransport(link);
+
+    expect(transport.status.status, BleStatus.failed);
+    expect(transport.status.error, contains('not all five'));
+    expect(transport.status.error, contains(SyncClient.reportsUuid));
+    expect(link.subscribed, isEmpty);
   });
 
   test('malformed notifications are ignored, not fatal', () async {

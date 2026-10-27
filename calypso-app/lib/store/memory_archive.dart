@@ -11,7 +11,6 @@ class MemoryArchive implements RepArchive {
   }
 
   final List<int> _bytes = [];
-  final Map<String, DateTime> _received = {};
   final Set<String> _uuids = {};
   List<StoredRep> _reps = [];
   bool _truncated = false;
@@ -30,25 +29,20 @@ class MemoryArchive implements RepArchive {
 
   @override
   Future<void> load() async {
-    final scan = scanBlocks(Uint8List.fromList(_bytes), _received);
+    final scan = scanBlocks(Uint8List.fromList(_bytes));
     _reps = scan.reps;
     _truncated = scan.truncated;
     _uuids
       ..clear()
       ..addAll([for (final rep in _reps) rep.uuid]);
-    _received.removeWhere((uuid, _) => !_uuids.contains(uuid));
   }
 
   @override
-  Future<int> appendNew(
-    Map<String, Uint8List> recordBlocks, {
-    DateTime? receivedAt,
-  }) async {
+  Future<int> appendNew(Map<String, Uint8List> recordBlocks) async {
     var added = 0;
     for (final entry in recordBlocks.entries) {
       if (_uuids.contains(entry.key)) continue;
       _bytes.addAll(entry.value);
-      _received[entry.key] = receivedAt ?? DateTime.now();
       added++;
     }
     if (added > 0) await load();

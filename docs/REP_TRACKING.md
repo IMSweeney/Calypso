@@ -27,7 +27,8 @@ Flash log (ring of 4 KB sectors) ──► BLE sync to the app
 - Sample format, fixed point, 20 bytes:
   `{ t_ms: u32, accel: [i16; 3], quat: [i16; 4] }` — accel at 0.01 m/s² per LSB
   (BNO055 native), quaternion at 1/2¹⁴ per LSB in `[w, x, y, z]` order.
-  `t_ms` is monotonic device uptime; the device has no RTC.
+  `t_ms` is monotonic device uptime; the device has no RTC, so a rep's wall-clock
+  time comes from the boot's clock, which the app sets ([`APP_SYNC.md`](APP_SYNC.md)).
 - Samples go into a RAM ring of `SAMPLE_RING_LEN` = 12 s (`REP_WINDOW_SAMPLES` = 900
   = 9 s of motion, plus 3 s headroom). The detector never asks for more than 9 s.
 - The sampler also reads the gravity vector once a second, for the level verdict in
@@ -70,6 +71,31 @@ Both the derived displacement **and** the raw inputs (accel, quaternion) are sto
 so the app can re-derive traces with better algorithms later without a firmware
 update.
 
+## The frame
+
+`pos` is in the IMU's **world frame**: the frame the fusion reports the device's
+orientation against. What that frame means is decided by gravity and by the clip.
+
+- **Z is up, and a squat travels down it.** Roll and pitch are absolute because
+  gravity is, so this is the vertical axis on every device and a descent is negative
+  Z. No magnetometer is involved, and the app draws it upward.
+- **X is along the bar and Y is forward/back.** Heading is the one angle with no
+  absolute reference here: the fusion starts in whatever frame the device was in when
+  it started and drifts from there, so the horizontal axes are the mount's, not the
+  room's. The device is clipped with its **X axis along the bar**, which is what puts
+  the bar's direction in X and the lifter's forward/back in Y. Which of the two ways
+  along the bar +X runs is the clip's business as well: a sideways distance is
+  meaningful, "left" is not.
+- **Which of the device's axes points up is the clip's business, not the trace's.**
+  Clipping it with Y up instead of Z is a rotation about the bar, and the quaternion
+  takes the motion back out of the body frame, so the trace is the same either way.
+  The device's own axes turn up only in the app's orientation gizmo.
+
+The firmware's level verdict reads gravity on the **X** axis — the same convention
+from the other end: level means X is horizontal, and X along a horizontal bar is
+level. It cannot see *which* horizontal direction X points, so it is the clip's
+geometry that puts X along the bar rather than across it.
+
 ## What gets stored
 
 One rep is one `RepSummary` record followed by `chunk_count` `TraceChunk` records
@@ -78,6 +104,10 @@ carrying the same `rep_uuid`:
 ```
 [RepSummary][TraceChunk 0][TraceChunk 1]…
 ```
+
+A `BootClock` record sits between the reps: it is what a boot's reps are dated by,
+written when the boot mounts and replaced by the client's write when it connects
+([`APP_SYNC.md`](APP_SYNC.md)). A record's clock is the newest one at or before it.
 
 - A chunk holds up to 48 trace points (`pb::TRACE_CHUNK_SAMPLES`), so an encoded
   record always fits inside one 4 KB erase sector (the log's record limit is 4076
@@ -89,9 +119,11 @@ carrying the same `rep_uuid`:
   and power-loss behaviour.
 
 **Rep identity is a v4 UUID minted on the device when the rep closes.** Random,
-because the device has no RTC and its uptime resets on every boot, so neither a
-counter nor a timestamp can be unique across boots. The price is that UUIDs do not
-sort: ordering comes from the archive's append order on the client.
+because a rep can close before any client has set the device's clock, so an identity
+derived from time would need a second form for those; and because random ids need no
+coordination between devices. The price is that UUIDs do not sort — a rep's place in
+time comes from the clock its boot was given, which the summary carries as
+`t_unix_ms`.
 
 Reps only need to survive on the device until the next sync — the app is the archive
 of record, so a ring wrap is harmless. See [`APP_SYNC.md`](APP_SYNC.md).
@@ -101,3 +133,8 @@ of record, so a ring wrap is harmless. See [`APP_SYNC.md`](APP_SYNC.md).
 Summaries auto-stream as soon as an app subscribes; traces stream on request, one
 stored `TraceChunk` per transfer, cut into pipe chunks and reassembled by the client.
 The protocol, the GATT table and the client side are in [`APP_SYNC.md`](APP_SYNC.md).
+
+What streams is only what the device can date: the client writes its clock on every
+connection, and until it has, this boot's summaries wait rather than going out
+without a time. Reps stored before that write in an earlier boot are dated by it if a
+session saw them, and never offered if none did.

@@ -18,6 +18,14 @@ the bytes the device would put in flash. The client's history file uses the same
 framing, so **a history file, a fixture and a capture are one format**: a capture is
 just a copy of somebody's archive.
 
+That includes the `BootClock` record a dump opens with. A stored rep carries its
+uptime, not a time: the boot's epoch is a record of its own, and the client resolves
+it the way the device does — the newest clock record at or before the summary — so a
+fixture's reps are dated by the fixture and not by when a test read it
+([`APP_SYNC.md`](APP_SYNC.md)). A summary before its boot's clock record is left
+dateless, which is what a capture of a boot that had no clock when those reps were
+stored looks like.
+
 A dump may end mid-record (a torn write, or a capture interrupted). A reader must
 report that rather than ignore it, and still return the records before it.
 
@@ -33,7 +41,13 @@ In the app, fixtures are consumed through:
 
 - `FixtureTransport` — loads an asset and replays summaries with pacing, so the UI
   sees a realistic stream. The app seeds its archive from
-  `--dart-define=FIXTURE=<name>` (default `synthetic-squat`, empty for none).
+  `--dart-define=FIXTURE=<name>` (default `synthetic-squat`, empty for none), and a
+  seeded run **opens on the day the fixture's reps are dated**, so the demo shows the
+  session that was recorded instead of an empty today.
+  A fixture is dated by its own boot clock — the generators use `FIXTURE_EPOCH_S`,
+  1 January 2026 — and nothing shifts it. That is what the fixed epoch buys: the
+  seeded page is reproducible, and a widget test that hands the screen the same
+  instant as its clock sees the fixture's reps as today's.
 - `MemoryArchive` — loads a fixture's records synchronously for widget tests.
 - Golden tests — `test/goldens/*.png` pin the squat, a scrubbed squat, a single point
   and the `dip-left` fixture.

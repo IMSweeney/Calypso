@@ -27,12 +27,28 @@ Where Calypso is and what is left. Feature documentation lives in
 - **Client app** — sync, the archive of record, rep list, 3D bar-path plot,
   calibration hint, BLE transport, all testable without hardware.
 - **Bench mode** — `cargo run --features fake-reps` stores a synthetic rep every
-  10 s, exercising the whole device → log → BLE → app path without lifting. See
+  30 s, exercising the whole device → log → BLE → app path without lifting. See
   [calypso-esp32/README.md](calypso-esp32/README.md).
+- **Device time** — the app writes the device's clock on every connection, so a rep
+  carries the time it happened rather than the time the app heard about it: the log
+  keeps each boot's epoch as its own record, the device dates every summary it
+  streams, and the list is ordered and labelled by that. A boot the app never
+  reached has no clock, and its reps are never offered. **Not yet run on
+  hardware.** See [docs/APP_SYNC.md](docs/APP_SYNC.md).
 - **Diagnostics that can be read back** — the app logs every BLE message to a
   rotating file, and the firmware's boot log carries the heap and stack figures.
   See [calypso-app/README.md](calypso-app/README.md) and
   [docs/GOTCHAS.md](docs/GOTCHAS.md).
+- **The device's own faults reach the app** — a failed mount, a rep that could not be
+  stored, an IMU that stopped answering, a transfer the link dropped: each is now a
+  `Report` kind pushed on its own characteristic, raised once a second however often it
+  happens, and shown as a banner the person holding the phone can act on. Anything
+  raised while nothing was subscribed is sent when the app connects, so a boot that
+  went wrong before the app arrived still says so. **Not yet run on hardware.** See
+  [docs/APP_SYNC.md](docs/APP_SYNC.md).
+- **A day at a time** — the rep list opens on today and an arrow either side walks it
+  back a day per press, headed by the date, so the archive is browsable instead of
+  only the current day being reachable. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
 
 ## Open
 
@@ -102,10 +118,9 @@ Where Calypso is and what is left. Feature documentation lives in
 - [ ] Run the app against the hardware and check in a capture as a fixture.
       Hardware rep detection already works (a 4,150 ms squat-shaped rep with 416
       trace points has been stored and read back), so what is missing is the
-      capture.
-- [ ] Settle **axis mapping** once a real squat exists: which of the device's
-      world axes is "up"? Until then the plot draws the device frame as-is and
-      labels axes generically.
+      capture. It is also what settles the frame a trace is in — a real squat should
+      travel down the trace's Z, the axis the plot draws upward, and land the right
+      way up (see [docs/REP_TRACKING.md](docs/REP_TRACKING.md)).
 - [ ] **Re-check the summary stats on real motion.** `mean_velocity` is the mean
       of the *raw* speed while `peak_velocity` is the peak of the *detrended* one,
       so a mean above the peak means a large DC component rather than a maths bug.
@@ -120,12 +135,28 @@ Where Calypso is and what is left. Feature documentation lives in
       and silent to the app. Either reply with something that names what it
       answers — a request id, or a status body — or drop `SyncStatus` and accept
       the timeout.
-- [ ] **The firmware's own errors never reach the app.** A flash read that failed
-      mid-scan, an acknowledgement that did not go out, a trace that could not be
-      read back: each is a `warn!` in a log that is only on the wire if someone has
-      a serial console open, and the person who can act on it is holding the phone.
-      A reporting stream on the pipe — a `SyncMessage` body of its own, or the
-      `SyncStatus` above carrying a reason — would put them on screen.
+
+### Battery level
+
+- [ ] **Read the cell over the STEMMA bus, not off the charger's divider.** The
+      BFF's divider lands on A2, which is GPIO27 and therefore an ADC2 channel — and
+      on `esp32` the radio claims ADC2 for the life of its controller, BLE included,
+      so `Adc::new` panics and claiming it first fails `esp_radio::init`. The chosen
+      part is a MAX17048, in-line between the cell and the BFF's battery JST (its two
+      PH ports are one net), which costs no pins and yields a percentage instead of a
+      diode-drop guess. Blocked on the part arriving. What it needs after that:
+
+      1. sharing `I2c0` with the BNO055, which takes ownership of it in
+         `Bno055::new` — without putting a lock on the 100 Hz path;
+      2. percentage and voltage, polled far slower than the sampler, because a cell
+         takes hours to move;
+      3. a way for the app to see it — a characteristic of its own, or a field on the
+         status path — with `gatt-gen` rerun so the app's side is regenerated rather
+         than hand-written.
+
+      The number is only honest off charge: while the charger holds the cell at 4.2 V
+      the gauge reports the charger's curve, so it wants to be a hint ("this is going
+      to die mid-set") rather than a measurement the app reasons from.
 
 ### Firmware
 
@@ -135,9 +166,6 @@ Where Calypso is and what is left. Feature documentation lives in
       the flash partition layer first, then the radio path.
 - [ ] Tune the detector's thresholds against real reps (`calypso-core/src/rep.rs`);
       they are fitted to synthetic motion.
-- [ ] **Dependency hygiene** — `esp-radio` is built with `coex` and `wifi`, and
-      `smoltcp`/`embassy-net` are declared, while the firmware deliberately does
-      not initialise Wi-Fi. Trim the features or document why they stay.
 - [ ] **Trim the static heap region if the deepest stack figure ever asks for it.**
       The 64 KB `heap_allocator!` region is what the linker stack competes with
       most, and its surplus is stack the linker cannot use. Each byte trimmed moves
@@ -154,7 +182,7 @@ Where Calypso is and what is left. Feature documentation lives in
       sync would turn a transient drop into a retry.
 - [ ] **Session grouping** — deliberately skipped for v1: the device log is
       undifferentiated, and grouping reps into sets is a judgement better made with
-      real data on screen. The list is flat, newest first.
+      real data on screen. The list is flat, a day at a time, newest first.
 - [ ] Fault detection / coaching hints on the traces (bar dip, forward lean).
 - [ ] Real-device polish: reconnect UX, sync progress, permission prompts.
 - [ ] Install story: a free Apple ID gives 7-day builds; TestFlight and the App

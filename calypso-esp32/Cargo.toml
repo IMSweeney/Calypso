@@ -23,15 +23,6 @@ esp-rtos = { version = "0.2.0", features = [
 defmt                  = "1.0.1"
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["defmt", "esp32"] }
 
-embassy-net = { version = "0.7.1", features = [
-  "defmt",
-  "dhcpv4",
-  "medium-ethernet",
-  "tcp",
-  "udp",
-] }
-embedded-io = { version = "0.7.1", features = ["defmt"] }
-embedded-io-async = { version = "0.7.0", features = ["defmt"] }
 esp-alloc = { version = "0.9.0", features = ["defmt"] }
 esp-println = { version = "0.16.1", features = [
   "defmt-espflash",
@@ -45,28 +36,21 @@ embassy-executor = { version = "0.9.1", features = ["defmt"] }
 embassy-futures = "0.1.1"
 embassy-sync = "0.7.2"
 embassy-time = { version = "0.5.0", features = ["defmt"] }
+# BLE only. The radio also does Wi-Fi on this chip, and nothing here initialises
+# it, so `wifi` (the driver and its network stack) and `smoltcp` stay out.
+#
+# `coex` is not a "more is safer" flag: it arbitrates between the two radios, and
+# esp-radio only compiles it in when both are enabled — with no Wi-Fi it is a build
+# warning and nothing else.
+#
+# `unstable` is not optional: esp-radio refuses `ble` without it. `esp-alloc` is
+# the heap the controller allocates from. `defmt` and `esp32` are this build's.
 esp-radio = { version = "0.17.0", features = [
   "ble",
-  "coex",
   "defmt",
   "esp-alloc",
   "esp32",
-  "smoltcp",
   "unstable",
-  "wifi",
-] }
-smoltcp = { version = "0.12.0", default-features = false, features = [
-  "defmt",
-  "medium-ethernet",
-  "multicast",
-  "proto-dhcpv4",
-  "proto-dns",
-  "proto-ipv4",
-  "socket-dns",
-  "socket-icmp",
-  "socket-raw",
-  "socket-tcp",
-  "socket-udp",
 ] }
 trouble-host = { version = "0.5.0", features = ["gatt"] }
 
@@ -82,7 +66,7 @@ embedded-storage = "0.3.1"
 calypso-core = { path = "../calypso-core" }
 
 [features]
-# Store a synthetic "rep" every 10 s instead of detecting real ones, so the whole
+# Store a synthetic "rep" every 30 s instead of detecting real ones, so the whole
 # device -> flash log -> BLE -> app path can be exercised on a bench with nobody
 # lifting. A build flag rather than a runtime setting on purpose: a device must not
 # be one accidental setting away from recording fiction as if it were a set.

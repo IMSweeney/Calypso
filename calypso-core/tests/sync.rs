@@ -64,6 +64,7 @@ fn worst_case_summary_fits_a_transfer() {
         trace_len: u32::MAX,
         chunk_count: u32::MAX,
         decimated: true,
+        t_unix_ms: u64::MAX,
     };
     let (_, n) = wire(&summary_message(summary));
     assert!(n <= MESSAGE_MAX, "worst-case summary is {n} bytes");

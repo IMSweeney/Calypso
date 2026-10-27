@@ -1,0 +1,51 @@
+// The bare kinds that need a codec helper (`gatt.U8` and `gatt.Bool` are written out
+// where they are used), one per direction the generator emits one for. A value read off
+// a characteristic is decoded and one written to it is encoded, so a kind used only one
+// way must emit only that half: the other is an unused element in every app that
+// generates the file.
+syntax = "proto3";
+
+package fixture;
+
+import "gatt_options.proto";
+import "google/protobuf/empty.proto";
+
+service Bare {
+  option (gatt.service) = {
+    uuid: "6e400010-b5a3-f393-e0a9-e50e24dcca9e"
+    primary: true
+  };
+
+  // Both ways: one characteristic holds one value, so it is the same kind in each direction.
+  rpc Threshold(gatt.U16) returns (gatt.U16) {
+    option (gatt.characteristic) = {
+      uuid: "6e400011-b5a3-f393-e0a9-e50e24dcca9e"
+      props: [READ, WRITE]
+    };
+  }
+
+  // Written and never read: an encoder, and no decoder.
+  rpc Gain(gatt.I16) returns (google.protobuf.Empty) {
+    option (gatt.characteristic) = {
+      uuid: "6e400012-b5a3-f393-e0a9-e50e24dcca9e"
+      props: [WRITE_NO_RSP]
+    };
+  }
+
+  // A short name and a short codec: the one write whose call still fits on the line
+  // after `=>`, which is the other layout the emitted file has to get right.
+  rpc Tap(gatt.U16) returns (google.protobuf.Empty) {
+    option (gatt.characteristic) = {
+      uuid: "6e400014-b5a3-f393-e0a9-e50e24dcca9e"
+      props: [WRITE_NO_RSP]
+    };
+  }
+
+  // Notified and never written: a decoder, and no encoder.
+  rpc Tare(google.protobuf.Empty) returns (gatt.F32) {
+    option (gatt.characteristic) = {
+      uuid: "6e400013-b5a3-f393-e0a9-e50e24dcca9e"
+      props: [NOTIFY]
+    };
+  }
+}

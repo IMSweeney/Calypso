@@ -11,7 +11,6 @@ import '../logging/rotating_file_appender.dart';
 import '../logging/setup.dart';
 import '../model/rep.dart';
 import '../protocol/calypso.pb.dart' as pb;
-import '../model/uuid.dart';
 import '../store/archive_sync.dart';
 import '../store/history_store.dart';
 import '../store/rep_archive.dart';
@@ -21,12 +20,39 @@ import '../transport/fixture_transport.dart';
 import '../transport/transport.dart';
 import '../widgets/calibration_hint.dart';
 import '../widgets/connection_status.dart';
+import '../widgets/device_report_banner.dart';
 import 'plot_screen.dart';
 
 const String seedFixture = String.fromEnvironment(
   'FIXTURE',
   defaultValue: 'synthetic-squat',
 );
+
+/// The day heading's date, without a locale: the app carries no localisations, and three letters is all a heading
+/// needs.
+const List<String> _weekdays = [
+  'Mon',
+  'Tue',
+  'Wed',
+  'Thu',
+  'Fri',
+  'Sat',
+  'Sun',
+];
+const List<String> _months = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
 
 /// How a rep's trace is getting on, which is the one thing the list cannot show from the summary alone: a rep is stored the moment its fetch is over, so "not in the archive yet" *is* "being fetched", and the archive knows whether the trace came with it.
 enum TraceState {
@@ -41,12 +67,19 @@ enum TraceState {
 }
 
 /// One row: a rep the device has told the app about, and where its trace got to.
+///
+/// A row only exists for a rep the device could date and that happened today (`_rows`), which is why the uuid and the
+/// time are not nullable here.
 class RepRow {
-  const RepRow(this.summary, this.receivedAt, this.state);
+  const RepRow(this.summary, this.state);
 
   final pb.RepSummary summary;
-  final DateTime? receivedAt;
   final TraceState state;
+
+  String get uuid => summary.uuid!;
+
+  /// What the row is called: the time it happened. The plot screen is opened from a row and named the same way.
+  String get label => summary.timeOfDay!;
 }
 
 class RepListScreen extends StatefulWidget {
@@ -57,6 +90,7 @@ class RepListScreen extends StatefulWidget {
     this.source,
     this.ble,
     this.fixture = seedFixture,
+    this.clock,
   });
 
   final Directory? historyDirectory;
@@ -64,6 +98,9 @@ class RepListScreen extends StatefulWidget {
   final RepTransport? source;
   final BleTransport? ble;
   final String fixture;
+
+  /// The wall clock the list is a day of. Injected by tests, which date their reps from a fixed epoch.
+  final DateTime Function()? clock;
 
   @override
   State<RepListScreen> createState() => _RepListScreenState();
@@ -82,6 +119,10 @@ class _RepListScreenState extends State<RepListScreen> {
 
   StreamSubscription<pb.RepSummary>? _live;
   Future<void> _writes = Future<void>.value();
+
+  /// The day the list is on, or null while it is on today. Null rather than today's date, so a screen left open
+  /// across midnight follows the clock instead of pinning the day it was opened on.
+  DateTime? _day;
 
   @override
   void initState() {
@@ -115,30 +156,97 @@ class _RepListScreenState extends State<RepListScreen> {
     unawaited(_addToLog(archive, summary));
   }
 
-  /// What the list shows: every rep the device has told the app about, newest first.
+  DateTime _now() => (widget.clock ?? DateTime.now)();
+
+  DateTime get _today {
+    final local = _now().toLocal();
+    return DateTime(local.year, local.month, local.day);
+  }
+
+  /// One day either side of [day], as a calendar date: built from the date rather than by subtracting 24 hours, so a
+  /// page stays a calendar date across a daylight-saving change, and `DateTime` normalises a day number that walks
+  /// off either end of a month.
+  static DateTime _shift(DateTime day, int days) =>
+      DateTime(day.year, day.month, day.day + days);
+
+  /// What the heading over the list says: `Today` needs no date, and `Yesterday` reads faster than one. Anything
+  /// further back is the date, with the year only when it is not this year's.
+  String get _dayHeading {
+    final day = _day;
+    if (day == null) return 'Today';
+    final today = _today;
+    if (_onDay(today, _shift(day, 1))) return 'Yesterday';
+    final date =
+        '${_weekdays[day.weekday - 1]} ${day.day} ${_months[day.month - 1]}';
+    return day.year == today.year ? date : '$date ${day.year}';
+  }
+
+  void _earlierDay() => setState(() => _day = _shift(_day ?? _today, -1));
+
+  void _laterDay() {
+    final day = _day;
+    if (day == null) return;
+    final next = _shift(day, 1);
+    setState(() => _day = _onDay(next, _today) ? null : next);
+  }
+
+  /// The day a seeded fixture's reps are dated, so the app opens on the session the fixture is: a recording read
+  /// back months later would otherwise sit behind a today page that no arrow on today leads away from. Null when the
+  /// newest rep is today's, or when nothing in the archive is dated — the screen stays on today then, and the
+  /// forward arrow belongs off.
+  DateTime? _seedDay(RepArchive archive) {
+    DateTime? newest;
+    for (final rep in archive.reps) {
+      final when = rep.recordedAt?.toLocal();
+      if (when == null) continue;
+      final day = DateTime(when.year, when.month, when.day);
+      if (newest == null || day.isAfter(newest)) newest = day;
+    }
+    return newest == null || _onDay(newest, _today) ? null : newest;
+  }
+
+  /// Whether [when] falls on [day]'s date, on this device's clock: a rep is "today's" by the calendar, not by being less than 24 hours old.
+  static bool _onDay(DateTime? when, DateTime day) {
+    final local = when?.toLocal();
+    return local != null &&
+        local.year == day.year &&
+        local.month == day.month &&
+        local.day == day.day;
+  }
+
+  /// What the list shows: one day's reps, newest first.
   ///
   /// The archive holds the reps whose fetch is over; the transport holds the summaries that are not archived yet — which is the same thing as being fetched. Which side a rep is on, and whether its block carries a trace, is its state.
+  ///
+  /// **Ordered by when a rep happened, not by when the app heard about it.** A catch-up after a week apart arrives in one burst, so the order the archive was written in says nothing about the week; the time on each summary does, and it is what the row is labelled with too.
+  ///
+  /// **One day, and only reps the device could date.** A list that grows for ever buries today under everything before it, so the day is the page. A rep with no time at all — a capture of a boot whose clock was never set — cannot be placed on any day and so is on no page.
   List<RepRow> _rows(RepArchive? archive) {
+    final day = _day ?? _today;
     final stored = archive?.reps ?? const <StoredRep>[];
+    final archived = {for (final rep in stored) rep.uuid};
     final rows = <RepRow>[
-      for (final rep in stored.reversed)
+      for (final summary in _ble.pushedSummaries)
+        if (summary.uuid case final uuid? when !archived.contains(uuid))
+          RepRow(summary, TraceState.fetching),
+      for (final rep in stored)
         RepRow(
           rep.summary,
-          rep.receivedAt,
           rep.hasTrace ? TraceState.fetched : TraceState.missing,
         ),
     ];
-    final archived = {for (final rep in stored) rep.uuid};
-    final fetching = [
-      for (final summary in _ble.pushedSummaries)
-        if (summary.uuid case final uuid? when !archived.contains(uuid))
-          summary,
+    // `sort` is not stable, so the comparator has to be total: two reps in the same millisecond are ordered by uuid
+    // rather than by whatever order the list happened to be built in.
+    rows.sort((a, b) {
+      final at = a.summary.tUnixMs.toInt();
+      final bt = b.summary.tUnixMs.toInt();
+      if (at != bt) return bt.compareTo(at);
+      return (a.summary.uuid ?? '').compareTo(b.summary.uuid ?? '');
+    });
+    return [
+      for (final row in rows)
+        if (_onDay(row.summary.recordedAt, day)) row,
     ];
-    rows.insertAll(0, [
-      for (final summary in fetching.reversed)
-        RepRow(summary, null, TraceState.fetching),
-    ]);
-    return rows;
   }
 
   /// The state of a rep's trace, as the row's trailing widget.
@@ -196,12 +304,14 @@ class _RepListScreenState extends State<RepListScreen> {
       await archive.load();
 
       var synced = 0;
+      var seeded = false;
       var source = widget.source;
       if (source == null && widget.fixture.isNotEmpty) {
         final data = await rootBundle.load(
           'assets/fixtures/${widget.fixture}.pblog',
         );
         source = FixtureTransport.fromBytes(data.buffer.asUint8List());
+        seeded = true;
       }
       if (source != null) {
         synced = await archiveFromTransport(archive, source);
@@ -212,6 +322,8 @@ class _RepListScreenState extends State<RepListScreen> {
         _archive = archive;
         _synced = synced;
         _loading = false;
+        // A fixture is a recording of a session and this build is showing it, so it opens on the day it happened.
+        if (seeded) _day = _seedDay(archive);
       });
     } catch (e) {
       if (!mounted) return;
@@ -263,18 +375,43 @@ class _RepListScreenState extends State<RepListScreen> {
     await _ble.disconnect();
   }
 
-  String _formatTime(DateTime? when) {
-    if (when == null) return '—';
-    final local = when.toLocal();
-    String two(int v) => v.toString().padLeft(2, '0');
-    return '${local.year}-${two(local.month)}-${two(local.day)} '
-        '${two(local.hour)}:${two(local.minute)}';
-  }
-
   String get _statusLine {
     if (_syncTotal > 0) return 'syncing $_syncDone/$_syncTotal';
     if (_synced > 0) return '+$_synced synced';
     return '';
+  }
+
+  /// The day heading with an arrow either side of it: left is backwards in time, right is forwards, and forwards
+  /// stops at today because nothing has happened tomorrow.
+  Widget _dayBar() => Row(
+    children: [
+      IconButton(
+        onPressed: _earlierDay,
+        icon: const Icon(Icons.chevron_left),
+        tooltip: 'Earlier day',
+      ),
+      Expanded(
+        child: Text(
+          _dayHeading,
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+      ),
+      IconButton(
+        onPressed: _day == null ? null : _laterDay,
+        icon: const Icon(Icons.chevron_right),
+        tooltip: 'Later day',
+      ),
+    ],
+  );
+
+  /// The list with nothing on this day, which is not the same as an empty archive: the arrows are how you find out
+  /// where the reps are, so the words only have to say that this page is bare.
+  Widget _empty(RepArchive? archive) {
+    final error = _error;
+    if (error != null) return Center(child: Text(error));
+    final ever = archive?.reps.isNotEmpty ?? false;
+    return Center(child: Text(ever ? 'No reps' : 'No reps yet'));
   }
 
   @override
@@ -302,11 +439,13 @@ class _RepListScreenState extends State<RepListScreen> {
       body: Column(
         children: [
           CalibrationHint(calibration: _ble.calibration, status: _ble.status),
+          DeviceReportBanner(reports: _ble.reports, status: _ble.status),
+          _dayBar(),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : rows.isEmpty
-                ? Center(child: Text(_error ?? 'No reps yet'))
+                ? _empty(archive)
                 : ListView.separated(
                     itemCount: rows.length,
                     separatorBuilder: (_, _) => const Divider(height: 1),
@@ -314,9 +453,8 @@ class _RepListScreenState extends State<RepListScreen> {
                       final row = rows[index];
                       final s = row.summary;
                       return ListTile(
-                        title: Text(
-                          'Rep ${uuidShort(s.uuid)} · ${_formatTime(row.receivedAt)}',
-                        ),
+                        key: ValueKey<String>(row.uuid),
+                        title: Text(row.label),
                         subtitle: Text(
                           '${(s.durationMs / 1000).toStringAsFixed(1)} s · '
                           'ROM ${s.rom.toStringAsFixed(2)} m · '
@@ -333,7 +471,8 @@ class _RepListScreenState extends State<RepListScreen> {
                                 MaterialPageRoute(
                                   builder: (_) => PlotScreen(
                                     store: archive!,
-                                    repUuid: s.uuid!,
+                                    repUuid: row.uuid,
+                                    label: row.label,
                                   ),
                                 ),
                               ),

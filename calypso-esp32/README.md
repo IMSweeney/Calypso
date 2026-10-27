@@ -37,18 +37,27 @@ For a standalone image to hand to someone else, see [`dist/README.md`](../dist/R
 cargo run --features fake-reps
 ```
 
-Stores a synthetic "rep" every 10 s — the last 8 s of samples, whatever the motion
+Stores a synthetic "rep" every 30 s — the last 6 s of samples, whatever the motion
 was — instead of running the detector. Everything downstream is untouched, so this
 exercises the whole path on a bench with nobody lifting: the flash log, the
 summaries, the trace streaming, and the app syncing and plotting them.
 
 - The calibration gate is deliberately not applied, so reps appear at a steady
   rate rather than at the chip's opinion of itself. Real builds still gate.
-- It says so: one `fake-reps: storing a synthetic rep every 10 s, not detecting
+- It says so: one `fake-reps: storing a synthetic rep every 30 s, not detecting
   real ones` line at the start, so a bench session cannot be mistaken for a real
   one in a log.
 - It is a cargo feature, not a runtime setting: a device should not be one
   accidental switch away from recording fiction as a measurement.
+- **The app has to connect before any of it reaches the app.** Reps are only sent
+  with a time, and the time is the client's to write, so a bench session with no
+  app looks like a device recording nothing: `sync: no clock this boot, so no
+  summary goes out until the app sets one` is the line that says so.
+- **One synthetic fault too**, raised at boot before any client can have subscribed
+  and named in the log (`fake-reps: raising a synthetic report`). It is the half of
+  the reports path a bench session cannot reach otherwise: the app should show the
+  "could not save a rep" line and add it to its own log, which is the latch being
+  handed over when the subscription lands.
 
 ## Test
 

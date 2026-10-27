@@ -15,6 +15,36 @@ import 'dart:convert' as $convert;
 import 'dart:core' as $core;
 import 'dart:typed_data' as $typed_data;
 
+@$core.Deprecated('Use reportKindDescriptor instead')
+const ReportKind$json = {
+  '1': 'ReportKind',
+  '2': [
+    {'1': 'REPORT_KIND_UNSPECIFIED', '2': 0},
+    {'1': 'REPORT_KIND_LOG_UNUSABLE', '2': 1},
+    {'1': 'REPORT_KIND_REP_NOT_STORED', '2': 2},
+    {'1': 'REPORT_KIND_REP_WINDOW_UNAVAILABLE', '2': 3},
+    {'1': 'REPORT_KIND_IMU_READ_FAILED', '2': 4},
+    {'1': 'REPORT_KIND_CALIBRATION_PROFILE', '2': 5},
+    {'1': 'REPORT_KIND_CLOCK_NOT_PERSISTED', '2': 6},
+    {'1': 'REPORT_KIND_TRANSFER_ABANDONED', '2': 7},
+    {'1': 'REPORT_KIND_REQUEST_REFUSED', '2': 8},
+    {'1': 'REPORT_KIND_TRACE_UNREADABLE', '2': 9},
+    {'1': 'REPORT_KIND_NOTIFY_FAILED', '2': 10},
+    {'1': 'REPORT_KIND_RADIO_FAILED', '2': 11},
+  ],
+};
+
+/// Descriptor for `ReportKind`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List reportKindDescriptor = $convert.base64Decode(
+    'CgpSZXBvcnRLaW5kEhsKF1JFUE9SVF9LSU5EX1VOU1BFQ0lGSUVEEAASHAoYUkVQT1JUX0tJTk'
+    'RfTE9HX1VOVVNBQkxFEAESHgoaUkVQT1JUX0tJTkRfUkVQX05PVF9TVE9SRUQQAhImCiJSRVBP'
+    'UlRfS0lORF9SRVBfV0lORE9XX1VOQVZBSUxBQkxFEAMSHwobUkVQT1JUX0tJTkRfSU1VX1JFQU'
+    'RfRkFJTEVEEAQSIwofUkVQT1JUX0tJTkRfQ0FMSUJSQVRJT05fUFJPRklMRRAFEiMKH1JFUE9S'
+    'VF9LSU5EX0NMT0NLX05PVF9QRVJTSVNURUQQBhIiCh5SRVBPUlRfS0lORF9UUkFOU0ZFUl9BQk'
+    'FORE9ORUQQBxIfChtSRVBPUlRfS0lORF9SRVFVRVNUX1JFRlVTRUQQCBIgChxSRVBPUlRfS0lO'
+    'RF9UUkFDRV9VTlJFQURBQkxFEAkSHQoZUkVQT1JUX0tJTkRfTk9USUZZX0ZBSUxFRBAKEhwKGF'
+    'JFUE9SVF9LSU5EX1JBRElPX0ZBSUxFRBAL');
+
 @$core.Deprecated('Use traceSampleDescriptor instead')
 const TraceSample$json = {
   '1': 'TraceSample',
@@ -59,6 +89,7 @@ const RepSummary$json = {
     {'1': 'trace_len', '3': 13, '4': 1, '5': 13, '10': 'traceLen'},
     {'1': 'chunk_count', '3': 14, '4': 1, '5': 13, '10': 'chunkCount'},
     {'1': 'decimated', '3': 15, '4': 1, '5': 8, '10': 'decimated'},
+    {'1': 't_unix_ms', '3': 16, '4': 1, '5': 4, '10': 'tUnixMs'},
   ],
 };
 
@@ -72,7 +103,8 @@ final $typed_data.Uint8List repSummaryDescriptor = $convert.base64Decode(
     'xsTWluRGVnEiAKDHJvbGxfbWF4X2RlZxgKIAEoAlIKcm9sbE1heERlZxIiCg1waXRjaF9taW5f'
     'ZGVnGAsgASgCUgtwaXRjaE1pbkRlZxIiCg1waXRjaF9tYXhfZGVnGAwgASgCUgtwaXRjaE1heE'
     'RlZxIbCgl0cmFjZV9sZW4YDSABKA1SCHRyYWNlTGVuEh8KC2NodW5rX2NvdW50GA4gASgNUgpj'
-    'aHVua0NvdW50EhwKCWRlY2ltYXRlZBgPIAEoCFIJZGVjaW1hdGVk');
+    'aHVua0NvdW50EhwKCWRlY2ltYXRlZBgPIAEoCFIJZGVjaW1hdGVkEhoKCXRfdW5peF9tcxgQIA'
+    'EoBFIHdFVuaXhNcw==');
 
 @$core.Deprecated('Use traceChunkDescriptor instead')
 const TraceChunk$json = {
@@ -100,6 +132,18 @@ final $typed_data.Uint8List traceChunkDescriptor = $convert.base64Decode(
     'cGxlcxgEIAMoCzIULmNhbHlwc28uVHJhY2VTYW1wbGVSB3NhbXBsZXMSIQoMdG90YWxfY2h1bm'
     'tzGAUgASgNUgt0b3RhbENodW5rcw==');
 
+@$core.Deprecated('Use bootClockDescriptor instead')
+const BootClock$json = {
+  '1': 'BootClock',
+  '2': [
+    {'1': 'epoch_s', '3': 1, '4': 1, '5': 13, '10': 'epochS'},
+  ],
+};
+
+/// Descriptor for `BootClock`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List bootClockDescriptor =
+    $convert.base64Decode('CglCb290Q2xvY2sSFwoHZXBvY2hfcxgBIAEoDVIGZXBvY2hT');
+
 @$core.Deprecated('Use repRecordDescriptor instead')
 const RepRecord$json = {
   '1': 'RepRecord',
@@ -122,6 +166,15 @@ const RepRecord$json = {
       '9': 0,
       '10': 'trace'
     },
+    {
+      '1': 'clock',
+      '3': 3,
+      '4': 1,
+      '5': 11,
+      '6': '.calypso.BootClock',
+      '9': 0,
+      '10': 'clock'
+    },
   ],
   '8': [
     {'1': 'body'},
@@ -131,8 +184,8 @@ const RepRecord$json = {
 /// Descriptor for `RepRecord`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List repRecordDescriptor = $convert.base64Decode(
     'CglSZXBSZWNvcmQSLwoHc3VtbWFyeRgBIAEoCzITLmNhbHlwc28uUmVwU3VtbWFyeUgAUgdzdW'
-    '1tYXJ5EisKBXRyYWNlGAIgASgLMhMuY2FseXBzby5UcmFjZUNodW5rSABSBXRyYWNlQgYKBGJv'
-    'ZHk=');
+    '1tYXJ5EisKBXRyYWNlGAIgASgLMhMuY2FseXBzby5UcmFjZUNodW5rSABSBXRyYWNlEioKBWNs'
+    'b2NrGAMgASgLMhIuY2FseXBzby5Cb290Q2xvY2tIAFIFY2xvY2tCBgoEYm9keQ==');
 
 @$core.Deprecated('Use traceRequestDescriptor instead')
 const TraceRequest$json = {
@@ -257,3 +310,22 @@ final $typed_data.Uint8List syncStatusDescriptor = $convert.base64Decode(
     '91dWlkGAIgASgMUg1vbGRlc3RSZXBVdWlkEiYKD25ld2VzdF9yZXBfdXVpZBgDIAEoDFINbmV3'
     'ZXN0UmVwVXVpZBIrChF0cmFjZV91bmF2YWlsYWJsZRgEIAEoCFIQdHJhY2VVbmF2YWlsYWJsZQ'
     '==');
+
+@$core.Deprecated('Use reportDescriptor instead')
+const Report$json = {
+  '1': 'Report',
+  '2': [
+    {
+      '1': 'kind',
+      '3': 1,
+      '4': 1,
+      '5': 14,
+      '6': '.calypso.ReportKind',
+      '10': 'kind'
+    },
+  ],
+};
+
+/// Descriptor for `Report`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List reportDescriptor = $convert.base64Decode(
+    'CgZSZXBvcnQSJwoEa2luZBgBIAEoDjITLmNhbHlwc28uUmVwb3J0S2luZFIEa2luZA==');

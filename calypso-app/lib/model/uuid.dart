@@ -25,9 +25,3 @@ Uint8List? uuidToBytes(String uuid) {
   }
   return bytes;
 }
-
-String uuidShort(String? uuid) {
-  if (uuid == null) return '????????';
-  final clean = uuid.replaceAll('-', '');
-  return clean.length < 8 ? clean : clean.substring(0, 8);
-}

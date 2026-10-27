@@ -114,8 +114,11 @@ struct Needs {
     values: bool,
     write: bool,
     read: bool,
-    /// The bare kinds a codec helper is needed for.
-    bare: BTreeSet<Bare>,
+    /// The bare kinds a codec helper is needed for, per direction: a value read off a characteristic is decoded,
+    /// one written to it is encoded, and a kind used one way must not emit the other — an unused `_decodeU32` is
+    /// an analyzer warning in every app that generates this file.
+    bare_read: BTreeSet<Bare>,
+    bare_written: BTreeSet<Bare>,
     utf8: bool,
 }
 
@@ -129,7 +132,12 @@ impl Needs {
             needs.write |= characteristic.is_written();
             needs.read |= characteristic.props.contains(&Prop::Read);
             if let ValueType::Bare(bare) = characteristic.value_type() {
-                needs.bare.insert(*bare);
+                if characteristic.props.contains(&Prop::Read) || subscribable {
+                    needs.bare_read.insert(*bare);
+                }
+                if characteristic.is_written() {
+                    needs.bare_written.insert(*bare);
+                }
                 needs.utf8 |= *bare == Bare::Utf8;
             }
         }
@@ -201,23 +209,30 @@ fn emit_link(out: &mut String, needs: &Needs) {
 /// bytes on the wire (so a stock client reads what it expects), which is why the
 /// encoding is spelled out here instead of coming from the message classes.
 fn emit_bare_codecs(out: &mut String, needs: &Needs) {
-    for bare in &needs.bare {
+    for bare in needs.bare_read.union(&needs.bare_written) {
         let Some((width, getter)) = bare_helper(*bare) else {
             continue;
         };
         let name = bare.name();
-        let get = format!("get{getter}");
-        let set = format!("set{getter}");
-        let _ = writeln!(
+        let mut members: Vec<String> = Vec::new();
+        if needs.bare_written.contains(bare) {
+            let set = format!("set{getter}");
+            members.push(format!(
+                "Uint8List _encode{name}(int value) {{\n  final data = ByteData({width})..{set}(0, value, Endian.little);\n  return data.buffer.asUint8List();\n}}"
+            ));
+        }
+        if needs.bare_read.contains(bare) {
+            let get = format!("get{getter}");
+            members.push(format!(
+                "int _decode{name}(Uint8List bytes) =>\n    ByteData.sublistView(bytes).{get}(0, Endian.little);"
+            ));
+        }
+        // One blank line between the members of a kind and one before whatever follows: the file is committed as
+        // `dart format` leaves it, so the spacing has to be the formatter's from here.
+        let _ = write!(
             out,
-            "\n// `gatt.{name}`: {width} raw bytes, little endian.\n\
-             Uint8List _encode{name}(int value) {{\n\
-             \x20 final data = ByteData({width})..{set}(0, value, Endian.little);\n\
-             \x20 return data.buffer.asUint8List();\n\
-             }}\n\
-             \n\
-             int _decode{name}(Uint8List bytes) =>\n\
-             \x20   ByteData.sublistView(bytes).{get}(0, Endian.little);"
+            "\n// `gatt.{name}`: {width} raw bytes, little endian.\n{}\n",
+            members.join("\n\n")
         );
     }
 }
@@ -300,26 +315,39 @@ fn emit_members(out: &mut String, characteristic: &Characteristic, config: &Conf
     let encode = encode_expression(characteristic, config, "value");
 
     if characteristic.is_subscribable() {
-        // The getter, as one line if `dart format` would keep it as one line and
-        // as a broken call chain if it would not: the file is committed and
-        // `dart format --set-exit-if-changed` is a gate on it.
-        let getter = format!("Stream<{value}> get {name}Updates => ");
-        let body = format!("_link.values({uuid_field}).map((bytes) => {decode});");
-        let updates = if 2 + getter.len() + body.len() <= MAX_WIDTH {
-            body
+        // Both of these are `=>` members, and the formatter lays one out in one of three
+        // ways: on the same line, broken after `=>`, or a call chain one link per line.
+        // Pick the first that fits. The file is committed and `dart format
+        // --set-exit-if-changed` is a gate on it, so this has to be what the formatter
+        // would have done, not merely something it would accept.
+        let getter = format!("  Stream<{value}> get {name}Updates =>");
+        // The continuation lines are the formatter's own indent: six spaces under a
+        // member's `=>`, and the chain broken there by one more.
+        let chain = format!("_link.values({uuid_field}).map((bytes) => {decode});");
+        let links = format!("_link\n      .values({uuid_field})\n      .map((bytes) => {decode});");
+        let updates = if getter.len() + 1 + chain.len() <= MAX_WIDTH {
+            format!("{getter} {chain}")
+        } else if 6 + chain.len() <= MAX_WIDTH {
+            format!("{getter}\n      {chain}")
         } else {
-            format!("_link\n      .values({uuid_field})\n      .map((bytes) => {decode});")
+            format!("{getter}\n      {links}")
         };
-        // `_link.subscribe(serviceUuid, levelUuid);` fits on its own line at this
-        // indent, so it stays one.
+
+        let subscribe = format!("  Future<void> subscribe{pascal}() =>");
+        let call = format!("_link.subscribe(serviceUuid, {uuid_field});");
+        let subscribe = if subscribe.len() + 1 + call.len() <= MAX_WIDTH {
+            format!("{subscribe} {call}")
+        } else {
+            format!("{subscribe}\n      {call}")
+        };
+
         let _ = writeln!(
             out,
             "\n  /// Subscribe to `{}`. Nothing arrives until this completes.\n\
-             \x20 Future<void> subscribe{pascal}() =>\n\
-             \x20     _link.subscribe(serviceUuid, {uuid_field});\n\
+             {subscribe}\n\
              \n\
              \x20 /// One `{description}` per notification.\n\
-             \x20 {getter}{updates}",
+             {updates}",
             characteristic.name
         );
     }
@@ -341,15 +369,33 @@ fn emit_members(out: &mut String, characteristic: &Characteristic, config: &Conf
         // that is the form which reports failure; the device can be asked for the
         // cheaper one by dropping WRITE from its declaration.
         let with_response = characteristic.props.contains(&Prop::Write);
+        // The file is committed as `dart format` leaves it, and the formatter lays a
+        // `=>` body out one of three ways: on the same line, on the next line, or
+        // argument per line when even that is too wide. Pick the first that fits.
+        let call = format!(
+            "_link.write(serviceUuid, {uuid_field}, {encode}, withResponse: {with_response})"
+        );
+        let head = format!("  Future<void> write{pascal}({value} value) =>");
+        let single = format!("{head} {call};");
+        // The continuation line is the call at the formatter's own indent.
+        let wrapped = format!("{head}\n      {call};");
+        let body = if single.chars().count() <= MAX_WIDTH {
+            single
+        } else if call.chars().count() + 7 <= MAX_WIDTH {
+            wrapped
+        } else {
+            format!(
+                "{head} _link.write(\n\
+                 \x20   serviceUuid,\n\
+                 \x20   {uuid_field},\n\
+                 \x20   {encode},\n\
+                 \x20   withResponse: {with_response},\n\
+                 \x20 );"
+            )
+        };
         let _ = writeln!(
             out,
-            "\n  /// Write a `{description}`{}.\n\
-             \x20 Future<void> write{pascal}({value} value) => _link.write(\n\
-             \x20   serviceUuid,\n\
-             \x20   {uuid_field},\n\
-             \x20   {encode},\n\
-             \x20   withResponse: {with_response},\n\
-             \x20 );",
+            "\n  /// Write a `{description}`{}.\n{body}",
             if with_response {
                 ""
             } else {

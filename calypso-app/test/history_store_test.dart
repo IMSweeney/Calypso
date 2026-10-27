@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:calypso/model/rep.dart';
+import 'package:fixnum/fixnum.dart';
 import 'package:calypso/model/uuid.dart';
 import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:calypso/store/history_store.dart';
@@ -23,18 +24,23 @@ List<int> _frameFor(GeneratedMessage record) {
   ];
 }
 
-pb.RepRecord summaryRecord(String uuid, {int pointCount = 10}) => pb.RepRecord(
+pb.RepRecord summaryRecord(
+  String uuid, {
+  int pointCount = 10,
+  int unixMs = 0,
+}) => pb.RepRecord(
   summary: pb.RepSummary(
     repUuid: uuidToBytes(uuid)!,
     traceLen: pointCount,
     chunkCount: (pointCount / 4).ceil(),
+    tUnixMs: Int64(unixMs),
   ),
 );
 
-Uint8List block(String uuid, {int pointCount = 10}) {
+Uint8List block(String uuid, {int pointCount = 10, int unixMs = 0}) {
   final points = tracePoints(pointCount);
   return Uint8List.fromList([
-    ..._frameFor(summaryRecord(uuid, pointCount: pointCount)),
+    ..._frameFor(summaryRecord(uuid, pointCount: pointCount, unixMs: unixMs)),
     for (final chunk in chunksFor(uuid, points))
       ..._frameFor(pb.RepRecord(trace: chunk)),
   ]);
@@ -89,53 +95,19 @@ void main() {
     expect(store.reps.length, 2);
   });
 
-  test(
-    'the log decides what is held, not the receipt times beside it',
-    () async {
-      await store.appendNew({
-        u(1): blockAt(1),
-      }, receivedAt: DateTime.utc(2026, 10, 18));
-      expect(store.contains(u(1)), isTrue);
-      expect(store.reps.single.receivedAt, isNotNull);
+  test('the log is the only thing that decides what is held', () async {
+    await store.appendNew({u(1): blockAt(1)});
+    expect(store.contains(u(1)), isTrue);
+    expect(store.contains(u(7)), isFalse);
 
-      await HistoryFiles(dir).receiptTimes.delete();
-
-      final reopened = HistoryStore(HistoryFiles(dir));
-      await reopened.load();
-      expect(reopened.reps, hasLength(1), reason: 'the rep is in the log');
-      expect(reopened.contains(u(1)), isTrue, reason: 'so it is still held');
-      expect(
-        reopened.reps.single.receivedAt,
-        isNull,
-        reason: 'only its time is gone',
-      );
-
-      expect(await reopened.appendNew({u(1): blockAt(1)}), 0);
-      expect(reopened.reps, hasLength(1));
-      expect(
-        File('${dir.path}/history.pblog').lengthSync(),
-        HistoryFiles(dir).records.lengthSync(),
-        reason: 'one file, one copy',
-      );
-    },
-  );
-
-  test(
-    'a receipt time for a rep the log does not hold does not make it exist',
-    () async {
-      final times = HistoryFiles(dir).receiptTimes;
-      await times.writeAsString('{"${u(7)}": "2026-10-18T00:00:00.000Z"}');
-
-      await store.load();
-      expect(store.contains(u(7)), isFalse);
-      expect(store.reps, isEmpty);
-      expect(
-        await times.readAsString(),
-        isNot(contains(u(7))),
-        reason: 'pruned on load, and the file follows the log',
-      );
-    },
-  );
+    expect(await store.appendNew({u(1): blockAt(1)}), 0);
+    expect(store.reps, hasLength(1));
+    expect(
+      File('${dir.path}/history.pblog').lengthSync(),
+      HistoryFiles(dir).records.lengthSync(),
+      reason: 'one file, one copy',
+    );
+  });
 
   test('the archive survives a reload and keeps growing', () async {
     await store.appendNew({u(1): blockAt(1)});
@@ -151,19 +123,24 @@ void main() {
     expect(third.reps.map((r) => r.uuid), [u(1), u(2)]);
   });
 
-  test('receipt times are recorded and survive a reload', () async {
-    final when = DateTime(2026, 3, 14, 9, 30);
-    await store.appendNew({u(1): blockAt(1)}, receivedAt: when);
-    expect(store.reps.single.receivedAt, when);
+  test('a rep keeps the time the device gave it, across a reload', () async {
+    // 2026-03-14T09:30:00Z, to the millisecond: what the device's clock record and the rep's uptime add up to.
+    const unixMs = 1_773_480_600_000;
+    await store.appendNew({u(1): block(u(1), unixMs: unixMs)});
+    expect(store.reps.single.recordedAt, DateTime.utc(2026, 3, 14, 9, 30));
 
     final reopened = HistoryStore(HistoryFiles(dir));
     await reopened.load();
     expect(
-      reopened.reps.single.receivedAt,
-      when,
-      reason:
-          'the device has no RTC, so receipt time is the only absolute time',
+      reopened.reps.single.recordedAt,
+      DateTime.utc(2026, 3, 14, 9, 30),
+      reason: 'the time is in the record, so nothing has to remember it',
     );
+  });
+
+  test('a rep stored before the device had a clock has no time', () async {
+    await store.appendNew({u(1): blockAt(1)});
+    expect(store.reps.single.recordedAt, isNull);
   });
 
   test('a torn tail is tolerated and does not lose earlier reps', () async {
@@ -195,8 +172,9 @@ void main() {
 
     for (final summary in summaries) {
       final points = await transport.trace(summary.uuid!);
+      // The summary goes in as it arrived: its time is part of the record the device sent.
       final records = <int>[
-        ..._frameFor(summaryRecord(summary.uuid!, pointCount: points.length)),
+        ..._frameFor(pb.RepRecord(summary: summary)),
         for (final chunk in chunksFor(summary.uuid!, points))
           ..._frameFor(pb.RepRecord(trace: chunk)),
       ];
@@ -206,6 +184,16 @@ void main() {
     expect(store.reps.length, 3);
     final trace = await store.trace(summaries[1].uuid!);
     expect(trace.length, summaries[1].traceLen);
+    expect(
+      store.reps.first.recordedAt,
+      isNotNull,
+      reason: "the fixture carries the clock its reps are dated by",
+    );
+    expect(
+      store.reps.first.recordedAt!.toUtc().year,
+      2026,
+      reason: "dated from the fixture's fixed epoch, not from when it was read",
+    );
   });
 
   test('a missing rep returns an empty trace, not an exception', () async {

@@ -36,6 +36,12 @@ abstract class GattClientLink {
   });
 }
 
+// `gatt.U32`: 4 raw bytes, little endian.
+Uint8List _encodeU32(int value) {
+  final data = ByteData(4)..setUint32(0, value, Endian.little);
+  return data.buffer.asUint8List();
+}
+
 /// `calypso.Sync`.
 ///
 /// Subscribe before listening, and hold the stream only while the link is up:
@@ -51,6 +57,12 @@ class SyncClient {
   /// `calypso.Sync.Calibration` -- read, calypso.CalibrationStatus.
   static const String calibrationUuid = '0000ca24-b0cd-11ec-871f-d45ddf138840';
 
+  /// `calypso.Sync.Reports` -- notify, calypso.Report.
+  static const String reportsUuid = '0000ca25-b0cd-11ec-871f-d45ddf138840';
+
+  /// `calypso.Sync.Time` -- write, gatt.U32.
+  static const String timeUuid = '0000ca23-b0cd-11ec-871f-d45ddf138840';
+
   /// `calypso.Sync.Requests` -- write-without-response, calypso.SyncRequest.
   static const String requestsUuid = '0000ca22-b0cd-11ec-871f-d45ddf138840';
 
@@ -62,6 +74,17 @@ class SyncClient {
     final bytes = await _link.read(serviceUuid, calibrationUuid);
     return pb.CalibrationStatus.fromBuffer(bytes);
   }
+
+  /// Subscribe to `Reports`. Nothing arrives until this completes.
+  Future<void> subscribeReports() => _link.subscribe(serviceUuid, reportsUuid);
+
+  /// One `calypso.Report` per notification.
+  Stream<pb.Report> get reportsUpdates =>
+      _link.values(reportsUuid).map((bytes) => pb.Report.fromBuffer(bytes));
+
+  /// Write a `gatt.U32`.
+  Future<void> writeTime(int value) =>
+      _link.write(serviceUuid, timeUuid, _encodeU32(value), withResponse: true);
 }
 
 /// Pipe `sync`: `pb.SyncRequest` in, `pb.SyncMessage` out.

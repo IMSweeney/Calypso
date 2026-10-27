@@ -3,6 +3,7 @@ library;
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:calypso/gatt/gatt_client.dart';
 import 'package:calypso/transport/ble_link.dart';
 
 class FakeBleLink implements BleLink {
@@ -21,11 +22,14 @@ class FakeBleLink implements BleLink {
   final List<String> discovered = [];
 
   /// What the device serves: the schema's tree, and nothing the schema does not declare (`proto/calypso_gatt.proto`).
+  /// Taken from the generated client, so the fake cannot fall behind the schema.
   List<DiscoveredService> services = const [
-    DiscoveredService('0000ca20-b0cd-11ec-871f-d45ddf138840', [
-      '0000ca21-b0cd-11ec-871f-d45ddf138840',
-      '0000ca22-b0cd-11ec-871f-d45ddf138840',
-      '0000ca24-b0cd-11ec-871f-d45ddf138840',
+    DiscoveredService(SyncClient.serviceUuid, [
+      SyncClient.messagesUuid,
+      SyncClient.requestsUuid,
+      SyncClient.calibrationUuid,
+      SyncClient.reportsUuid,
+      SyncClient.timeUuid,
     ]),
   ];
 
@@ -42,6 +46,9 @@ class FakeBleLink implements BleLink {
 
   /// Called as each write lands, for a fake device that answers as it happens.
   void Function(String characteristicUuid, Uint8List value)? onWrite;
+
+  /// Thrown by the next write, for a link that refuses one — a characteristic the device does not have, say.
+  Object? writeError;
 
   void Function(String deviceId, String? name)? _onScanResult;
   void Function(String deviceId, bool connected, String? error)?
@@ -155,6 +162,8 @@ class FakeBleLink implements BleLink {
   }) async {
     writes.add((characteristicUuid, value));
     writeResponses.add(withResponse);
+    final error = writeError;
+    if (error != null) throw error;
     onWrite?.call(characteristicUuid, value);
   }
 

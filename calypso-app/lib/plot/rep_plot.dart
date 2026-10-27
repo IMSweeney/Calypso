@@ -11,6 +11,10 @@ const Color _slowColour = Color(0xFF4C6EF5);
 const Color _midColour = Color(0xFF51CF66);
 const Color _fastColour = Color(0xFFFF6B35);
 
+const Color _xColour = Color(0xFFE03131);
+const Color _yColour = Color(0xFF2F9E44);
+const Color _zColour = Color(0xFF1971C2);
+
 Color colourForSpeed(double t) {
   final clamped = t.clamp(0.0, 1.0);
   if (clamped <= 0.5) {
@@ -76,9 +80,9 @@ class RepPlotPainter extends CustomPainter {
     );
     final length = bounds.halfExtent * 2;
     final axes = [
-      (Vector3(1, 0, 0), const Color(0xFFE03131)), // x
-      (Vector3(0, 1, 0), const Color(0xFF2F9E44)), // y
-      (Vector3(0, 0, 1), const Color(0xFF1971C2)), // z
+      (Vector3(1, 0, 0), _xColour),
+      (Vector3(0, 1, 0), _yColour),
+      (Vector3(0, 0, 1), _zColour),
     ];
     for (final (direction, colour) in axes) {
       final paint = Paint()
@@ -153,7 +157,7 @@ class RepPlotPainter extends CustomPainter {
     final quaternion = point.quaternion;
     final base = Vector3(point.px, point.py, point.pz);
 
-    const colours = [Color(0xFFE03131), Color(0xFF2F9E44), Color(0xFF1971C2)];
+    const colours = [_xColour, _yColour, _zColour];
     final axes = [Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)];
     for (var i = 0; i < 3; i++) {
       final rotated = _rotateByQuaternion(quaternion, axes[i]) * axisLength;
@@ -281,16 +285,73 @@ class RepPlotViewState extends State<RepPlotView> {
               final hit = projection.nearestPoint(_path, details.localPosition);
               if (hit != null) widget.onScrub!(hit);
             },
-      child: Container(
-        color: widget.background,
-        child: CustomPaint(
-          painter: RepPlotPainter(
-            path: _path,
-            camera: _camera,
-            scrubIndex: widget.scrubIndex,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Container(
+            color: widget.background,
+            child: CustomPaint(
+              painter: RepPlotPainter(
+                path: _path,
+                camera: _camera,
+                scrubIndex: widget.scrubIndex,
+              ),
+              size: Size.infinite,
+            ),
           ),
-          size: Size.infinite,
+          const Positioned(left: 12, bottom: 12, child: _AxisLegend()),
+        ],
+      ),
+    );
+  }
+}
+
+class _AxisLegend extends StatelessWidget {
+  const _AxisLegend();
+
+  @override
+  Widget build(BuildContext context) {
+    return const DecoratedBox(
+      decoration: BoxDecoration(
+        color: Color(0x59000000),
+        borderRadius: BorderRadius.all(Radius.circular(6)),
+      ),
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _AxisLabel(colour: _xColour, text: 'x along the bar'),
+            _AxisLabel(colour: _yColour, text: 'y forward/back'),
+            _AxisLabel(colour: _zColour, text: 'z up'),
+          ],
         ),
+      ),
+    );
+  }
+}
+
+class _AxisLabel extends StatelessWidget {
+  const _AxisLabel({required this.colour, required this.text});
+
+  final Color colour;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(width: 10, height: 10, color: colour),
+          const SizedBox(width: 8),
+          Text(
+            text,
+            style: const TextStyle(color: Color(0xFFD7DCE5), fontSize: 12),
+          ),
+        ],
       ),
     );
   }

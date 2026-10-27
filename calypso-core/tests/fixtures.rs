@@ -31,14 +31,26 @@ fn dump_round_trips_every_record() {
 
     let mut summaries = Vec::new();
     let mut chunks = Vec::new();
+    let mut clocks = Vec::new();
     for record in &records {
         match pb::decode_record(record).expect("record should decode") {
             Record::Summary(s) => summaries.push(s),
             Record::Trace(t) => chunks.push(t),
+            Record::Clock(c) => clocks.push(c),
         }
     }
+    assert_eq!(
+        clocks.len(),
+        1,
+        "a dump opens with the boot's clock, so its reps have a time"
+    );
+    assert_eq!(
+        clocks[0].epoch_s,
+        fixtures::FIXTURE_EPOCH_S,
+        "the epoch survives the framing"
+    );
     assert_eq!(summaries.len(), 2);
-    assert_eq!(chunks.len(), records.len() - 2);
+    assert_eq!(chunks.len(), records.len() - 3);
 
     for (i, summary) in summaries.iter().enumerate() {
         assert_eq!(pb::summary_uuid(summary), Some(fixture_uuid(i as u32)));

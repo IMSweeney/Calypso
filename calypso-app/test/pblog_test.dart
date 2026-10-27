@@ -2,6 +2,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:calypso/model/rep.dart';
+import 'package:calypso/model/uuid.dart';
+import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:calypso/protocol/pblog.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -9,6 +11,18 @@ import 'support/test_uuid.dart';
 
 Uint8List fixture(String name) =>
     File('assets/fixtures/$name.pblog').readAsBytesSync();
+
+/// One record in the dump framing: `[u32 LE length][record bytes]`.
+List<int> _framed(pb.RepRecord record) {
+  final bytes = record.writeToBuffer();
+  return [
+    bytes.length & 0xFF,
+    (bytes.length >> 8) & 0xFF,
+    (bytes.length >> 16) & 0xFF,
+    (bytes.length >> 24) & 0xFF,
+    ...bytes,
+  ];
+}
 
 void main() {
   test('a normal set decodes into three complete reps', () {
@@ -114,8 +128,66 @@ void main() {
     final result = readDump(fixture('truncated'));
 
     expect(result.truncated, isTrue);
-    expect(result.records.length, 4);
-    expect(summariesOf(result.records).single.uuid, u(0));
+    expect(
+      result.records.where((r) => r.hasClock()).length,
+      1,
+      reason: "a dump opens with the boot's clock, which is whole",
+    );
+    final summary = summariesOf(result.records).single;
+    expect(summary.uuid, u(0));
+    expect(
+      result.records.where((r) => r.hasTrace()).length,
+      lessThan(summary.chunkCount),
+      reason: 'the chunk being written is the one that was cut short',
+    );
+  });
+
+  test('a dump dates a rep from the newest clock record before it', () {
+    // The rule the device applies by record id, which a dump can only apply by order: the epoch in force when the
+    // summary was read dates it, and a boot that never had a clock cannot borrow the one before it.
+    const epochS = 1_767_225_600;
+    Uint8List dump(List<pb.RepRecord> records) =>
+        Uint8List.fromList([for (final record in records) ..._framed(record)]);
+    // A stored summary carries its uptime, not a time: the boot's epoch is what dates it.
+    pb.RepRecord rep(int tStartMs) => pb.RepRecord(
+      summary: pb.RepSummary(repUuid: uuidToBytes(u(0))!, tStartMs: tStartMs),
+    );
+
+    final beforeAnyClock = readDump(
+      dump([rep(0), pb.RepRecord(clock: pb.BootClock(epochS: 0))]),
+    );
+    expect(
+      summariesOf(beforeAnyClock.records).single.recordedAt,
+      isNull,
+      reason: 'no clock had been set when it was stored',
+    );
+
+    final dated = readDump(
+      dump([rep(0), pb.RepRecord(clock: pb.BootClock(epochS: epochS)), rep(0)]),
+    );
+    final times = summariesOf(dated.records).map((s) => s.recordedAt).toList();
+    expect(times.first, isNull, reason: 'stored before the clock was set');
+    expect(times.last, DateTime.utc(2026, 1, 1));
+
+    final laterBoot = readDump(
+      dump([
+        pb.RepRecord(clock: pb.BootClock(epochS: epochS)),
+        rep(4_000),
+        pb.RepRecord(clock: pb.BootClock(epochS: 0)),
+        rep(4_000),
+      ]),
+    );
+    final across = summariesOf(laterBoot.records).toList();
+    expect(
+      across.first.tUnixMs.toInt(),
+      epochS * 1000 + 4_000,
+      reason: 'the epoch plus the rep uptime, to the millisecond',
+    );
+    expect(
+      across.last.tUnixMs.toInt(),
+      0,
+      reason: 'the next boot had no clock of its own, and does not inherit one',
+    );
   });
 
   test('an empty dump is valid and empty', () {
