@@ -90,6 +90,14 @@ const RepSummary$json = {
     {'1': 'trace_len', '3': 13, '4': 1, '5': 13, '10': 'traceLen'},
     {'1': 'chunk_count', '3': 14, '4': 1, '5': 13, '10': 'chunkCount'},
     {'1': 'flags', '3': 15, '4': 1, '5': 13, '10': 'flags'},
+    {
+      '1': 'v0',
+      '3': 17,
+      '4': 1,
+      '5': 11,
+      '6': '.calypso.TraceOrigin',
+      '10': 'v0'
+    },
     {'1': 't_unix_ms', '3': 16, '4': 1, '5': 4, '10': 'tUnixMs'},
   ],
 };
@@ -104,8 +112,23 @@ final $typed_data.Uint8List repSummaryDescriptor = $convert.base64Decode(
     'xsTWluRGVnEiAKDHJvbGxfbWF4X2RlZxgKIAEoAlIKcm9sbE1heERlZxIiCg1waXRjaF9taW5f'
     'ZGVnGAsgASgCUgtwaXRjaE1pbkRlZxIiCg1waXRjaF9tYXhfZGVnGAwgASgCUgtwaXRjaE1heE'
     'RlZxIbCgl0cmFjZV9sZW4YDSABKA1SCHRyYWNlTGVuEh8KC2NodW5rX2NvdW50GA4gASgNUgpj'
-    'aHVua0NvdW50EhQKBWZsYWdzGA8gASgNUgVmbGFncxIaCgl0X3VuaXhfbXMYECABKARSB3RVbm'
-    'l4TXM=');
+    'aHVua0NvdW50EhQKBWZsYWdzGA8gASgNUgVmbGFncxIkCgJ2MBgRIAEoCzIULmNhbHlwc28uVH'
+    'JhY2VPcmlnaW5SAnYwEhoKCXRfdW5peF9tcxgQIAEoBFIHdFVuaXhNcw==');
+
+@$core.Deprecated('Use traceOriginDescriptor instead')
+const TraceOrigin$json = {
+  '1': 'TraceOrigin',
+  '2': [
+    {'1': 'vx', '3': 1, '4': 1, '5': 2, '10': 'vx'},
+    {'1': 'vy', '3': 2, '4': 1, '5': 2, '10': 'vy'},
+    {'1': 'vz', '3': 3, '4': 1, '5': 2, '10': 'vz'},
+  ],
+};
+
+/// Descriptor for `TraceOrigin`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List traceOriginDescriptor = $convert.base64Decode(
+    'CgtUcmFjZU9yaWdpbhIOCgJ2eBgBIAEoAlICdngSDgoCdnkYAiABKAJSAnZ5Eg4KAnZ6GAMgAS'
+    'gCUgJ2eg==');
 
 @$core.Deprecated('Use imuStateDescriptor instead')
 const ImuState$json = {

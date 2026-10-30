@@ -221,6 +221,7 @@ class RepSummary extends $pb.GeneratedMessage {
     $core.int? chunkCount,
     $core.int? flags,
     $fixnum.Int64? tUnixMs,
+    TraceOrigin? v0,
   }) {
     final result = RepSummary._();
     if (repUuid != null) result.repUuid = repUuid;
@@ -239,6 +240,7 @@ class RepSummary extends $pb.GeneratedMessage {
     if (chunkCount != null) result.chunkCount = chunkCount;
     if (flags != null) result.flags = flags;
     if (tUnixMs != null) result.tUnixMs = tUnixMs;
+    if (v0 != null) result.v0 = v0;
     return result;
   }
 
@@ -279,6 +281,8 @@ class RepSummary extends $pb.GeneratedMessage {
     ..a<$fixnum.Int64>(
         16, _omitFieldNames ? '' : 'tUnixMs', $pb.PbFieldType.OU6,
         defaultOrMaker: $fixnum.Int64.ZERO)
+    ..aOM<TraceOrigin>(17, _omitFieldNames ? '' : 'v0',
+        subBuilder: TraceOrigin.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -437,6 +441,9 @@ class RepSummary extends $pb.GeneratedMessage {
   ///   bit 0  DECIMATED   the trace was decimated to fit device memory
   ///   bit 1  CALIBRATED  the IMU's accelerometer was calibrated as well as its
   ///                      gyroscope when the rep was recorded
+  ///   bit 2  HAS_ORIGIN  the summary names the bar's velocity at the rep's
+  ///                      left edge (field 17), rather than leaving the app to
+  ///                      assume it started at rest
   ///
   /// Field 15 was `bool decimated` before this. A bool is a varint too, so a
   /// record written then still reads back here: bit 0 is the bit that bool was.
@@ -469,6 +476,104 @@ class RepSummary extends $pb.GeneratedMessage {
   $core.bool hasTUnixMs() => $_has(15);
   @$pb.TagNumber(16)
   void clearTUnixMs() => $_clearField(16);
+
+  /// The bar's velocity (m/s) at the rep's left edge, `MARGIN_MS` before motion
+  /// was declared. A rep mid-set starts already moving, and an integration that
+  /// assumes zero there reads its travel high. Present only when
+  /// `REP_FLAG_HAS_ORIGIN` is set, so a record written before this field existed
+  /// (no origin) is not read as a rep that started at rest.
+  @$pb.TagNumber(17)
+  TraceOrigin get v0 => $_getN(16);
+  @$pb.TagNumber(17)
+  set v0(TraceOrigin value) => $_setField(17, value);
+  @$pb.TagNumber(17)
+  $core.bool hasV0() => $_has(16);
+  @$pb.TagNumber(17)
+  void clearV0() => $_clearField(17);
+  @$pb.TagNumber(17)
+  TraceOrigin ensureV0() => $_ensure(16);
+}
+
+/// The bar's velocity at one instant, metres per second: a rep's left edge.
+class TraceOrigin extends $pb.GeneratedMessage {
+  factory TraceOrigin({
+    $core.double? vx,
+    $core.double? vy,
+    $core.double? vz,
+  }) {
+    final result = TraceOrigin._();
+    if (vx != null) result.vx = vx;
+    if (vy != null) result.vy = vy;
+    if (vz != null) result.vz = vz;
+    return result;
+  }
+
+  TraceOrigin._();
+
+  factory TraceOrigin.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      TraceOrigin()..mergeFromBuffer(data, registry);
+  factory TraceOrigin.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      TraceOrigin()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'TraceOrigin',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
+      createEmptyInstance: TraceOrigin.$_createMessage)
+    ..aD(1, _omitFieldNames ? '' : 'vx', fieldType: $pb.PbFieldType.OF)
+    ..aD(2, _omitFieldNames ? '' : 'vy', fieldType: $pb.PbFieldType.OF)
+    ..aD(3, _omitFieldNames ? '' : 'vz', fieldType: $pb.PbFieldType.OF)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  TraceOrigin clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  TraceOrigin copyWith(void Function(TraceOrigin) updates) =>
+      super.copyWith((message) => updates(message as TraceOrigin))
+          as TraceOrigin;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use TraceOrigin() / TraceOrigin.new instead')
+  static TraceOrigin create() => TraceOrigin._();
+  static $pb.GeneratedMessage $_createMessage() => TraceOrigin._();
+  @$core.override
+  TraceOrigin createEmptyInstance() => TraceOrigin._();
+  @$core.pragma('dart2js:noInline')
+  static TraceOrigin getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<TraceOrigin>(
+          TraceOrigin.$_createMessage);
+  static TraceOrigin? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.double get vx => $_getN(0);
+  @$pb.TagNumber(1)
+  set vx($core.double value) => $_setFloat(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasVx() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearVx() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.double get vy => $_getN(1);
+  @$pb.TagNumber(2)
+  set vy($core.double value) => $_setFloat(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasVy() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearVy() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.double get vz => $_getN(2);
+  @$pb.TagNumber(3)
+  set vz($core.double value) => $_setFloat(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasVz() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearVz() => $_clearField(3);
 }
 
 /// The IMU as the sampler last read it: the sample the rep detector is fed.

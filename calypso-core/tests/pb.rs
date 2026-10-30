@@ -4,7 +4,7 @@ use calypso_core::rep::TracePoint;
 use calypso_core::uuid::fixture_uuid;
 
 fn sample_summary() -> msg::RepSummary {
-    msg::RepSummary {
+    let mut summary = msg::RepSummary {
         t_start_ms: 12_345,
         t_end_ms: 13_800,
         duration_ms: 1455,
@@ -17,9 +17,15 @@ fn sample_summary() -> msg::RepSummary {
         pitch_min_deg: -0.8,
         pitch_max_deg: 3.1,
         trace_len: 145,
-        flags: calypso_core::rep::REP_FLAG_CALIBRATED,
+        flags: calypso_core::rep::REP_FLAG_CALIBRATED | calypso_core::rep::REP_FLAG_HAS_ORIGIN,
         ..Default::default()
-    }
+    };
+    summary.set_v0(msg::TraceOrigin {
+        vx: 0.12,
+        vy: -0.05,
+        vz: -0.31,
+    });
+    summary
 }
 
 fn sample_point(i: usize, t0: u32) -> TracePoint {
@@ -54,6 +60,11 @@ fn summary_round_trips() {
             assert_eq!(s.chunk_count, 4);
             assert!(!s.decimated());
             assert!(s.calibrated());
+            assert!(s.has_origin());
+            let origin = s.v0().expect("the origin survives the wire");
+            assert!((origin.vx - 0.12).abs() < 1e-6);
+            assert!((origin.vy - -0.05).abs() < 1e-6);
+            assert!((origin.vz - -0.31).abs() < 1e-6);
         }
         other => panic!("expected a summary, got {other:?}"),
     }

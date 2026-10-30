@@ -713,7 +713,9 @@ async fn main(spawner: Spawner) -> ! {
                         warn!("rep window unavailable (ring too short)");
                         report(msg::ReportKind::RepWindowUnavailable);
                     } else {
-                        let mut sum = compute_rep(&rep_window[..copied], &mut rep_trace);
+                        // The velocity the integration starts from: the detector's edge velocity for a real rep, zero for a synthetic one the fake-reps build fabricates wholesale.
+                        let v0 = if FAKE_REPS { [0.0; 3] } else { detector.rep_v0() };
+                        let mut sum = compute_rep(&rep_window[..copied], v0, &mut rep_trace);
                         if !sum.is_a_rep() {
                             info!(
                                 "rep discarded: {} m of travel, under the {} m a rep needs",

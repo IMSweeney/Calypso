@@ -48,7 +48,7 @@ fn worst_case_chunk_fits_a_transfer() {
 
 #[test]
 fn worst_case_summary_fits_a_transfer() {
-    let summary = msg::RepSummary {
+    let mut summary = msg::RepSummary {
         rep_uuid: pb::uuid_to_field(&fixture_uuid(3)),
         t_start_ms: u32::MAX,
         t_end_ms: u32::MAX,
@@ -58,14 +58,20 @@ fn worst_case_summary_fits_a_transfer() {
         mean_velocity: f32::MAX,
         peak_accel: f32::MIN,
         roll_min_deg: f32::MIN,
-        roll_max_deg: f32::MAX,
         pitch_min_deg: f32::MIN,
         pitch_max_deg: f32::MAX,
         trace_len: u32::MAX,
         chunk_count: u32::MAX,
         flags: calypso_core::rep::REP_FLAG_DECIMATED,
         t_unix_ms: u64::MAX,
+        ..Default::default()
     };
+    // The origin is a submessage, so its presence and its three floats each cost wire bytes: put a worst case in.
+    summary.set_v0(msg::TraceOrigin {
+        vx: f32::MAX,
+        vy: f32::MAX,
+        vz: f32::MAX,
+    });
     let (_, n) = wire(&summary_message(summary));
     assert!(n <= MESSAGE_MAX, "worst-case summary is {n} bytes");
 }

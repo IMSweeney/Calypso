@@ -70,6 +70,9 @@ message RepSummary {
   //   bit 0  DECIMATED   the trace was decimated to fit device memory
   //   bit 1  CALIBRATED  the IMU's accelerometer was calibrated as well as its
   //                      gyroscope when the rep was recorded
+  //   bit 2  HAS_ORIGIN  the summary names the bar's velocity at the rep's
+  //                      left edge (field 17), rather than leaving the app to
+  //                      assume it started at rest
   //
   // Field 15 was `bool decimated` before this. A bool is a varint too, so a
   // record written then still reads back here: bit 0 is the bit that bool was.
@@ -79,6 +82,12 @@ message RepSummary {
   // fabricates motion; the accelerometer's status wanders on its own, so a rep
   // taken while it was low is still a real rep, recorded with this bit clear.
   uint32 flags = 15;
+  // The bar's velocity (m/s) at the rep's left edge, `MARGIN_MS` before motion
+  // was declared. A rep mid-set starts already moving, and an integration that
+  // assumes zero there reads its travel high. Present only when
+  // `REP_FLAG_HAS_ORIGIN` is set, so a record written before this field existed
+  // (no origin) is not read as a rep that started at rest.
+  TraceOrigin v0 = 17;
   // The rep's wall-clock time, unix milliseconds, or 0 when the device had no
   // clock for the boot that recorded it.
   //
@@ -87,6 +96,13 @@ message RepSummary {
   // been written: a stored summary therefore carries its uptime (`t_start_ms`)
   // and the boot's clock travels as its own record (`BootClock`).
   uint64 t_unix_ms = 16;
+}
+
+// The bar's velocity at one instant, metres per second: a rep's left edge.
+message TraceOrigin {
+  float vx = 1;
+  float vy = 2;
+  float vz = 3;
 }
 
 // The IMU as the sampler last read it: the sample the rep detector is fed.

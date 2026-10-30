@@ -150,7 +150,7 @@ in time order; an unrack and a re-rack sit right next to a rep without being sto
 nobody pauses through still splits into all five of its reps — the reversal-based close is what
 kept it from merging into one span. The one blemish the probe surfaced is ROM fidelity: in a no-rest
 set every rep after the first reads high, because the velocity has not settled to zero between reps.
-That is a measurement to hand to the detector fix, not a number to bake into a pin.
+The fix is in: the integration starts from the bar's velocity at the rep's left edge, shipped as `RepSummary.v0` (a `TraceOrigin`) so a reader re-derives from the same origin, which cut the no-rest inflation from ~25 % to a ~9 % residual and left a set with rest between reps unchanged. The residual is a second-order edge effect (the reversal-based close emits the span a few tens of ms before the true turnaround) and is tracked, not fixed, here.
 
 ## Status
 
@@ -165,8 +165,9 @@ That is a measurement to hand to the detector fix, not a number to bake into a p
   `sim/tests/real_capture.rs`.
 - **Sets: done.** The `Set` generator is in `sim/src/motion.rs`, `sim/examples/set_probe.rs` prints
   the detected sequence, and `sim/tests/sets.rs` pins that a set comes back whole, in order, with the
-  unrack/re-rack unstored. The no-rest set splits correctly but its later reps read high ROM — a
-  fidelity note handed to the detector fix. The calibration transient (a roll, a fusion artifact
+  unrack/re-rack unstored. The no-rest set splits correctly, and its later reps read their travel now
+  that the integration is seeded from the bar's left-edge velocity (`RepSummary.v0`) — a small edge
+  residual remains. The calibration transient (a roll, a fusion artifact
   rather than a stroke) is still open.
 
 Throughout, a generated fixture is code, not a file: a scenario is built where it is used, so

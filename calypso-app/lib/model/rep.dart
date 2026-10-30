@@ -14,6 +14,7 @@ const int quatLsbPerUnit = 16384;
 /// `RepSummary.flags`, one bit per fact (`REP_FLAG_*` in the device's `calypso_core::rep`).
 const int repFlagDecimated = 1 << 0;
 const int repFlagCalibrated = 1 << 1;
+const int repFlagHasOrigin = 1 << 2;
 
 extension RepSummaryX on pb.RepSummary {
   String? get uuid => uuidFromBytes(repUuid);
@@ -26,6 +27,13 @@ extension RepSummaryX on pb.RepSummary {
   /// The device records on the gyroscope alone, so a rep without this was taken while the accelerometer's status
   /// was wandering — still a real rep, but one whose accel-derived numbers are worth less.
   bool get calibrated => flags & repFlagCalibrated != 0;
+
+  /// The summary names the bar's velocity at the rep's left edge ([v0]), so a rep that started mid-set is not
+  /// read as one that started at rest. Clear on a record written before that field existed.
+  bool get hasOrigin => flags & repFlagHasOrigin != 0;
+
+  /// The bar's velocity at the rep's left edge, or null when the record predates the origin field.
+  pb.TraceOrigin? get origin => hasOrigin ? v0 : null;
 
   double get rollRangeDeg => rollMaxDeg - rollMinDeg;
   double get pitchRangeDeg => pitchMaxDeg - pitchMinDeg;
