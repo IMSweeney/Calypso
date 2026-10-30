@@ -30,7 +30,7 @@ Everything runs through the real pipeline — `Detector`, `compute_rep`, the rea
 bug to fix, not an impairment to model; a suite that tolerated it would hide it. The
 calibration gate, the pipe and the app are out too.
 
-## 1. Detectability map
+## 1. Detectability map — done
 
 **What varies.** A rep is a class plus five numbers:
 
@@ -75,7 +75,7 @@ the unrack and re-rack either side. That turns "one rep" into "the thing the dev
 actually records", and it is the only way to test that one rep's motion does not merge
 with — or hide — its neighbours.
 
-## 2. Noise map
+## 2. Noise map — todo
 
 The same map with impairments injected into the synthetic motion — never into a captured
 rep — so a cell stops being a bit and becomes a rate over seeds. Brief for now: the axes
@@ -89,7 +89,7 @@ and what each does.
 | attitude drift while moving | 0 – 1 °/s | a leak that changes within the rep, which the endpoint detrend removes only partly | the gyro's zero-rate spec, and the fusion runs on the gyro while the bar moves |
 | constant body bias | 0 – 0.2 m/s² | nothing at all: the velocity detrend removes a constant acceleration exactly, which `constant_bias_is_fully_rejected` already pins | the measured rest offsets, 2–11 mg |
 
-## 3. False positives
+## 3. False positives — todo
 
 The same sweep aimed at motion that is not a rep: a bar being unracked (large acceleration,
 little travel), a re-rack, a hand on the rack, a wobble (oscillation with no net travel),
@@ -109,12 +109,16 @@ Two things it needs that the detectability map does not:
 
 ## Status
 
-Nothing here is built yet. When it is:
+- **Detectability map: done.** `sim/examples/detector_map.rs` draws the four slices (speed in
+  × speed out, travel × speed in, speed in × pause top, speed in × pause bottom) per class;
+  `sim/tests/detector_tolerance.rs` pins that each nominal is exactly one stored rep and that
+  the generated non-reps stay rejected.
+- **Noise map: todo.** `Rng` and `Impairments` exist in `sim/src/motion.rs`, but the noise
+  slice of the map and any noise pins are not written yet.
+- **False positives: todo.** `Push` and `Wobble` exist, but the inverse sweep — and phase
+  two's set motion — is not built. The captured non-rep is already pinned in
+  `sim/tests/real_capture.rs`.
 
-- the generators are in `sim/`, and a scenario is built from them where it is used — a
-  generated fixture is code, not a file;
-- the maps are `sim/examples/` commands — the noise map prints its seed so a run can be
-  repeated — and a map's *shape* is written down here; its numbers are not, because they
-  move with every tuning change;
-- `cargo test` pins the few deterministic points: each nominal scenario is one stored rep,
-  and the captured non-reps stay rejected.
+Throughout, a generated fixture is code, not a file: a scenario is built where it is used, so
+only the generators, the map example and the pins are committed. A map's *shape* is written
+down here; its numbers are not, because they move with every tuning change.
