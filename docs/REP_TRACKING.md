@@ -39,12 +39,25 @@ Flash log (ring of 4 KB sectors) ──► BLE sync to the app
 `calypso_core::rep::Detector`, fed one sample at a time:
 
 ```
-IDLE ──|a| > on-threshold for T_on──► MOVING ──|a| < rest-threshold for T_rest──► SETTLE
-SETTLE ──ZUPT (v := 0), close the rep, emit it──► IDLE
+IDLE ──|a| > on-threshold for T_on──► MOVING ──┬── |a| < rest-threshold for T_rest──► close, IDLE
+                                             └── second reversal of the bar ──────► close, IDLE
 ```
 
 Hysteresis between the two thresholds keeps a noisy rest from flapping. Tunables are
 constants at the top of `calypso-core/src/rep.rs`.
+
+**A rep ends where the bar turns around, and a pause is only one of the ways that
+happens.** Stillness alone is not enough to go by: a set nobody pauses through has none
+of it, and a detector that waits for one merges the whole set into a single span — which
+then exceeds `MAX_REP_MS` and is thrown away, taking every rep in it. The reversals come
+from the acceleration integrated into a velocity, whose bias is learned only while the
+bar is still.
+
+**And a rep has to have moved.** The detector closes on motion and rest, which a
+vibration or a hand on the rack satisfies; what it cannot see is how far anything went,
+because that costs two integrations. `MIN_ROM_M` (0.10 m) is the check on the computed
+rep: the one real capture had four spans of 0.03–0.09 m with peak accelerations of
+1.4–4.2 m/s² sitting among ten real reps, and this is what keeps them out of the log.
 
 ## Computing a rep
 
@@ -58,9 +71,29 @@ ring and calls `rep::compute_rep`, which:
    accumulating over a set. The result is displacement relative to the rep start, in
    metres — which is what a bar-path plot needs. Absolute position is not available
    from a MEMS IMU and is not attempted.
-3. Computes the summary stats: duration, ROM (peak-to-peak displacement on the
-   dominant axis), peak and mean velocity, peak acceleration, and roll/pitch min/max
-   in degrees.
+3. Computes the summary stats: duration, ROM (peak-to-peak **vertical** travel), peak
+   and mean velocity, peak acceleration, and roll/pitch min/max in degrees.
+
+**ROM is measured on Z, not on whichever axis moved furthest.** A barbell lift is the
+bar going up and down, and Z is the only axis that knows which way up is — it is pinned
+to gravity. X and Y are the mount's heading, fixed at power-up and drifting with yaw, so
+an excursion there is as likely to be the estimate's error as the bar: the endpoints are
+detrended to zero velocity, which cancels a *constant* bias, but an orientation that
+wanders during the rep (real reps in one capture swing 47–82° of pitch) leaves an
+acceleration the endpoint constraints cannot remove, and it double-integrates into
+metres. Five of the fourteen reps in one capture had a horizontal axis as the furthest
+from its start, so their ROM described a direction the bar never travelled. Picking the
+largest axis picks the error; the horizontal ranges are a check on the frame, not a
+range of motion.
+
+Z is not immune — the same capture's largest ROM, 1.28 m, is on Z, and the workout it
+came from was bench and deadlift, so the bar it describes travelled about 0.6 m. The
+difference is that Z is wrong about a real quantity and shows up in the number, while a
+right X is an accident that looks plausible. Where the extra travel comes from is the
+hole: that rep is missing 2.3 s of the 5.6 s it claims, and the integration bridges the
+gap as a single step, which adds 2.3 s of whatever acceleration sat on either side of it
+to the velocity at once. A gap is motion that was not measured — see `ROADMAP.md` and the
+can/must distinction this file's estimator does not yet make.
 
 The trace is capped at **512 points** (`TRACE_POINTS`). When a rep is longer than
 that, it is decimated and `RepSummary.decimated` is set. The decimation grid is

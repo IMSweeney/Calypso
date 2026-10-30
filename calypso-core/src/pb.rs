@@ -7,6 +7,7 @@
 
 use crate::calibration::Calibration;
 use crate::rep::TracePoint;
+use crate::sampler::Sample;
 use crate::uuid::{RepUuid, UUID_LEN};
 use micropb::MessageDecode;
 
@@ -74,14 +75,14 @@ pub fn chunk_uuid(c: &msg::TraceChunk) -> Option<RepUuid> {
     uuid_from_field(&c.rep_uuid)
 }
 
-/// Convert calibration levels into their wire form. `ready` is the device's own gate ([`Calibration::is_ready`]), not something the app re-derives.
+/// Convert calibration levels into their wire form. `ready` is the device's own gate ([`Calibration::can_record`]), not something the app re-derives.
 pub fn calibration_message(c: &Calibration) -> msg::CalibrationStatus {
     msg::CalibrationStatus {
         sys: c.sys as u32,
         accel: c.accel as u32,
         gyro: c.gyro as u32,
         mag: c.mag as u32,
-        ready: c.is_ready(),
+        ready: c.can_record(),
     }
 }
 
@@ -99,6 +100,22 @@ pub fn trace_sample_message(p: &TracePoint, t0_ms: u32) -> msg::TraceSample {
         qx: p.quat[1] as i32,
         qy: p.quat[2] as i32,
         qz: p.quat[3] as i32,
+    }
+}
+
+/// The last sample the sampler read, as the app's read of the `Imu` characteristic returns it.
+///
+/// The sample is the wire type already — the same fixed point, at the same scales, as one point of a stored trace — so this is the boundary and nothing is converted.
+pub fn imu_state_message(sample: &Sample) -> msg::ImuState {
+    msg::ImuState {
+        t_uptime_ms: sample.t_ms,
+        ax: sample.accel[0] as i32,
+        ay: sample.accel[1] as i32,
+        az: sample.accel[2] as i32,
+        qw: sample.quat[0] as i32,
+        qx: sample.quat[1] as i32,
+        qy: sample.quat[2] as i32,
+        qz: sample.quat[3] as i32,
     }
 }
 

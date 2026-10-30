@@ -21,9 +21,10 @@ class ReportKind extends $pb.ProtobufEnum {
   static const ReportKind REPORT_KIND_UNSPECIFIED =
       ReportKind._(0, _omitEnumNames ? '' : 'REPORT_KIND_UNSPECIFIED');
 
-  /// The rep log did not mount: nothing this boot is stored, and nothing will
-  /// ever be offered to sync. A bad partition table or a flash that will not
-  /// answer leaves this device a sensor with no record (docs/GOTCHAS.md).
+  /// The rep log did not mount, or could not be read: nothing this boot is
+  /// stored, and nothing will ever be offered to sync. A bad partition table or
+  /// a flash that will not answer leaves this device a sensor with no record
+  /// (docs/GOTCHAS.md).
   static const ReportKind REPORT_KIND_LOG_UNUSABLE =
       ReportKind._(1, _omitEnumNames ? '' : 'REPORT_KIND_LOG_UNUSABLE');
 
@@ -79,6 +80,12 @@ class ReportKind extends $pb.ProtobufEnum {
   static const ReportKind REPORT_KIND_RADIO_FAILED =
       ReportKind._(11, _omitEnumNames ? '' : 'REPORT_KIND_RADIO_FAILED');
 
+  /// The sampler stopped long enough to leave a gap in its timeline. A rep that
+  /// spans the gap was measured across motion nobody saw, so its travel can read
+  /// long, and a rep that happened inside the gap was never seen at all.
+  static const ReportKind REPORT_KIND_SAMPLER_HOLE =
+      ReportKind._(12, _omitEnumNames ? '' : 'REPORT_KIND_SAMPLER_HOLE');
+
   static const $core.List<ReportKind> values = <ReportKind>[
     REPORT_KIND_UNSPECIFIED,
     REPORT_KIND_LOG_UNUSABLE,
@@ -92,10 +99,11 @@ class ReportKind extends $pb.ProtobufEnum {
     REPORT_KIND_TRACE_UNREADABLE,
     REPORT_KIND_NOTIFY_FAILED,
     REPORT_KIND_RADIO_FAILED,
+    REPORT_KIND_SAMPLER_HOLE,
   ];
 
   static final $core.List<ReportKind?> _byValue =
-      $pb.ProtobufEnum.$_initByValueList(values, 11);
+      $pb.ProtobufEnum.$_initByValueList(values, 12);
   static ReportKind? valueOf($core.int value) =>
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 

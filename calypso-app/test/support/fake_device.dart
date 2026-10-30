@@ -80,6 +80,14 @@ class FakeDevice {
     link.readValues[SyncClient.calibrationUuid] = status.writeToBuffer();
   }
 
+  /// Put `state` in the table's IMU characteristic: the sample the device's sampler last read.
+  ///
+  /// The device republishes it ten times a second whether or not anybody is reading, so a test
+  /// serves one and the app reads it on its own schedule.
+  void servesImu(pb.ImuState state) {
+    link.readValues[SyncClient.imuUuid] = state.writeToBuffer();
+  }
+
   /// Put a fault on the `Reports` characteristic, which is how the device says something went wrong.
   ///
   /// One kind and no state behind it (`proto/calypso.proto`): the device sends it when it happens, so this is the whole of the device's side.

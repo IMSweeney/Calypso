@@ -23,3 +23,7 @@ target
 # Pre-built firmware images are build artifacts
 dist/**/*.bin
 .DS_Store
+
+# A session's log is a transcript of it, not an artifact worth keeping: the archive
+# beside it is the data.
+captures/*.log

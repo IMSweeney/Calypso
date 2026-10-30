@@ -157,7 +157,8 @@ class BleTransport implements RepTransport {
       debugPrint(
         'calypso: device offers ${_describe(services)}; '
         'want ${SyncClient.serviceUuid}[${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}, '
-        '${SyncClient.calibrationUuid}, ${SyncClient.reportsUuid}, ${SyncClient.timeUuid}]',
+        '${SyncClient.calibrationUuid}, ${SyncClient.reportsUuid}, ${SyncClient.timeUuid}, '
+        '${SyncClient.imuUuid}]',
       );
       if (!_offersSync(services) || _strangersIn(services).isNotEmpty) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -177,7 +178,8 @@ class BleTransport implements RepTransport {
         throw StateError(
           'device offers ${_describe(services)}, not all five characteristics of '
           '${SyncClient.serviceUuid} (${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}, '
-          '${SyncClient.calibrationUuid}, ${SyncClient.reportsUuid}, ${SyncClient.timeUuid})',
+          '${SyncClient.calibrationUuid}, ${SyncClient.reportsUuid}, '
+          '${SyncClient.timeUuid})',
         );
       }
       final strangers = _strangersIn(services);
@@ -252,6 +254,9 @@ class BleTransport implements RepTransport {
     await setClock();
     // Read the levels once now, so the hint is right from the first frame, and ask for them again on the app's own interval.
     await refreshCalibration();
+    // The sensor's own numbers once per session: what the device was seeing as the link came up,
+    // which is what a log gets read against when a rep looks wrong later. Nothing shows it yet.
+    await readImu();
     _calibrationTimer = Timer.periodic(
       calibrationPoll,
       (_) => refreshCalibration(),
@@ -288,9 +293,11 @@ class BleTransport implements RepTransport {
     }
   }
 
-  /// One fault from the device: the app's sentence for it, on its own line in the log.
+  /// One fault from the device: the kind and the app's sentence, on its own line in the log.
   void _onReport(pb.Report report) {
-    bleLog.warning('device: ${describeReport(report.kind)}');
+    bleLog.warning(
+      'device ${report.kind.name}: ${describeReport(report.kind)}',
+    );
     reports.add(report.kind);
   }
 
@@ -313,6 +320,28 @@ class BleTransport implements RepTransport {
       bleLog.warning('could not read the calibration status: $e');
     } finally {
       _calibrationReadInFlight = false;
+    }
+  }
+
+  /// The IMU as the sampler last read it: the sample the rep detector is fed.
+  ///
+  /// A read, not a subscription: the device republishes this ten times a second and a client that
+  /// wants to watch the sensor polls it, so this is whatever the table held at the moment of the
+  /// read. The numbers are the fixed point a stored trace carries (0.01 m/s^2, 1/2^14), and
+  /// `tUptimeMs` is when the sampler read the sensor — a value that stops moving while reps keep
+  /// arriving is a stalled sampler.
+  ///
+  /// Read once per connection and logged; nothing on screen uses it yet.
+  Future<pb.ImuState?> readImu() async {
+    final client = _client;
+    if (client == null) return null;
+    try {
+      final state = await client.readImu();
+      bleLog.fine('rx ${SyncClient.imuUuid} ${describeImuState(state)}');
+      return state;
+    } catch (e) {
+      bleLog.warning('could not read the IMU: $e');
+      return null;
     }
   }
 
@@ -356,6 +385,10 @@ class BleTransport implements RepTransport {
         // Required rather than optional: without it nothing this device sends can be dated, and the archive it
         // syncs into would keep those reps for ever (`proto/calypso_gatt.proto`).
         service.characteristics.any((c) => _sameUuid(c, SyncClient.timeUuid)),
+    // No clause for the IMU: it is a diagnostic, read for the log rather than for the screen, so a
+    // device from before it existed is still one reps sync from ([`readImu`] logs the failure and
+    // returns null). It must still be a *known* characteristic, which is the other half of this
+    // file's check — see [`_strangersIn`].
   );
 
   /// The sync service's characteristics that the schema does not declare.
@@ -369,7 +402,8 @@ class BleTransport implements RepTransport {
               !_sameUuid(characteristic, SyncClient.requestsUuid) &&
               !_sameUuid(characteristic, SyncClient.calibrationUuid) &&
               !_sameUuid(characteristic, SyncClient.reportsUuid) &&
-              !_sameUuid(characteristic, SyncClient.timeUuid))
+              !_sameUuid(characteristic, SyncClient.timeUuid) &&
+              !_sameUuid(characteristic, SyncClient.imuUuid))
             characteristic,
   ];
 

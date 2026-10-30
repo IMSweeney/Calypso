@@ -11,8 +11,21 @@ import 'uuid.dart';
 const int accelLsbPerMs2 = 100;
 const int quatLsbPerUnit = 16384;
 
+/// `RepSummary.flags`, one bit per fact (`REP_FLAG_*` in the device's `calypso_core::rep`).
+const int repFlagDecimated = 1 << 0;
+const int repFlagCalibrated = 1 << 1;
+
 extension RepSummaryX on pb.RepSummary {
   String? get uuid => uuidFromBytes(repUuid);
+
+  /// The trace was decimated to fit the device's buffer.
+  bool get decimated => flags & repFlagDecimated != 0;
+
+  /// The IMU's accelerometer was calibrated as well as its gyroscope when the rep was recorded.
+  ///
+  /// The device records on the gyroscope alone, so a rep without this was taken while the accelerometer's status
+  /// was wandering — still a real rep, but one whose accel-derived numbers are worth less.
+  bool get calibrated => flags & repFlagCalibrated != 0;
 
   double get rollRangeDeg => rollMaxDeg - rollMinDeg;
   double get pitchRangeDeg => pitchMaxDeg - pitchMinDeg;

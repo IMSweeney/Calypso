@@ -1,11 +1,11 @@
 mod common;
 
-use calypso_core::fixtures::{detect_and_trace, squat_set};
 use calypso_core::pb::msg;
 use calypso_core::rep::{TraceBuf, TracePoint};
 use calypso_core::sampler::{Sample, QUAT_SCALE};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::uuid::{fixture_uuid, RepUuid};
+use calypso_sim::fixtures::{detect_and_trace, squat_set};
 use common::{mount, BigFlash, MockFlash};
 
 const Q_ID: [i16; 4] = [QUAT_SCALE as i16, 0, 0, 0];

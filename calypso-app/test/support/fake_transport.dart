@@ -3,6 +3,7 @@ library;
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:calypso/model/rep.dart';
 import 'package:calypso/model/uuid.dart';
 
 import 'test_uuid.dart';
@@ -18,6 +19,7 @@ pb.RepSummary summary(
   int traceLen = 140,
   int chunkCount = 3,
   bool decimated = false,
+  bool calibrated = true,
 }) => pb.RepSummary(
   repUuid: uuidToBytes(testUuid(index)) ?? Uint8List(0),
   tStartMs: index * 10_000,
@@ -33,7 +35,8 @@ pb.RepSummary summary(
   pitchMaxDeg: 2,
   traceLen: traceLen,
   chunkCount: chunkCount,
-  decimated: decimated,
+  flags:
+      (decimated ? repFlagDecimated : 0) | (calibrated ? repFlagCalibrated : 0),
 );
 
 List<pb.TraceSample> tracePoints(int count, {int startMs = 0}) => [

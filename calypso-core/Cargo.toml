@@ -34,6 +34,8 @@ protoc-bin-vendored = "3"
 [dev-dependencies]
 # used by the synthetic fixture generators in tests/
 libm = "0.2"
+# `tests/rep_store.rs` replays synthetic reps through the store: the generators are tooling, so they live in the sim crate (which depends on this one; a dev-dependency may lean back).
+calypso-sim = { path = "../sim" }
 # `tests/pipe.rs` drives the device's session against the pipe's own app-side
 # state machine, rather than against a radio.
 gatt-pipe = { path = "../tools/gatt-pipe" }

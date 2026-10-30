@@ -219,7 +219,7 @@ class RepSummary extends $pb.GeneratedMessage {
     $core.double? pitchMaxDeg,
     $core.int? traceLen,
     $core.int? chunkCount,
-    $core.bool? decimated,
+    $core.int? flags,
     $fixnum.Int64? tUnixMs,
   }) {
     final result = RepSummary._();
@@ -237,7 +237,7 @@ class RepSummary extends $pb.GeneratedMessage {
     if (pitchMaxDeg != null) result.pitchMaxDeg = pitchMaxDeg;
     if (traceLen != null) result.traceLen = traceLen;
     if (chunkCount != null) result.chunkCount = chunkCount;
-    if (decimated != null) result.decimated = decimated;
+    if (flags != null) result.flags = flags;
     if (tUnixMs != null) result.tUnixMs = tUnixMs;
     return result;
   }
@@ -275,7 +275,7 @@ class RepSummary extends $pb.GeneratedMessage {
     ..aI(13, _omitFieldNames ? '' : 'traceLen', fieldType: $pb.PbFieldType.OU3)
     ..aI(14, _omitFieldNames ? '' : 'chunkCount',
         fieldType: $pb.PbFieldType.OU3)
-    ..aOB(15, _omitFieldNames ? '' : 'decimated')
+    ..aI(15, _omitFieldNames ? '' : 'flags', fieldType: $pb.PbFieldType.OU3)
     ..a<$fixnum.Int64>(
         16, _omitFieldNames ? '' : 'tUnixMs', $pb.PbFieldType.OU6,
         defaultOrMaker: $fixnum.Int64.ZERO)
@@ -337,6 +337,10 @@ class RepSummary extends $pb.GeneratedMessage {
   @$pb.TagNumber(4)
   void clearDurationMs() => $_clearField(4);
 
+  /// Peak-to-peak vertical travel: the range of motion, on Z. Z is the axis the
+  /// fusion pins to gravity; X and Y are the mount's heading and drift with yaw,
+  /// so the largest excursion is not the rep's range of motion and may be the
+  /// estimate's error rather than the bar.
   @$pb.TagNumber(5)
   $core.double get rom => $_getN(4);
   @$pb.TagNumber(5)
@@ -427,14 +431,28 @@ class RepSummary extends $pb.GeneratedMessage {
   @$pb.TagNumber(14)
   void clearChunkCount() => $_clearField(14);
 
+  /// One bit per fact about this rep, so a summary can grow one without paying
+  /// a tag and a byte for each bool (`REP_FLAG_*` in `calypso_core::rep`):
+  ///
+  ///   bit 0  DECIMATED   the trace was decimated to fit device memory
+  ///   bit 1  CALIBRATED  the IMU's accelerometer was calibrated as well as its
+  ///                      gyroscope when the rep was recorded
+  ///
+  /// Field 15 was `bool decimated` before this. A bool is a varint too, so a
+  /// record written then still reads back here: bit 0 is the bit that bool was.
+  ///
+  /// CALIBRATED is the fact the recording gate does not require. A rep is
+  /// recorded whenever the gyroscope is calibrated, because its drift is what
+  /// fabricates motion; the accelerometer's status wanders on its own, so a rep
+  /// taken while it was low is still a real rep, recorded with this bit clear.
   @$pb.TagNumber(15)
-  $core.bool get decimated => $_getBF(14);
+  $core.int get flags => $_getIZ(14);
   @$pb.TagNumber(15)
-  set decimated($core.bool value) => $_setBool(14, value);
+  set flags($core.int value) => $_setUnsignedInt32(14, value);
   @$pb.TagNumber(15)
-  $core.bool hasDecimated() => $_has(14);
+  $core.bool hasFlags() => $_has(14);
   @$pb.TagNumber(15)
-  void clearDecimated() => $_clearField(15);
+  void clearFlags() => $_clearField(15);
 
   /// The rep's wall-clock time, unix milliseconds, or 0 when the device had no
   /// clock for the boot that recorded it.
@@ -451,6 +469,156 @@ class RepSummary extends $pb.GeneratedMessage {
   $core.bool hasTUnixMs() => $_has(15);
   @$pb.TagNumber(16)
   void clearTUnixMs() => $_clearField(16);
+}
+
+/// The IMU as the sampler last read it: the sample the rep detector is fed.
+///
+/// Read, never notified, and a snapshot rather than a stream: the device republishes it
+/// ten times a second, so a client that wants to watch the sensor polls it.
+/// Fixed point at the same scales a `TraceSample` uses, so a readout can be compared with
+/// what a stored trace carries for the same moment.
+class ImuState extends $pb.GeneratedMessage {
+  factory ImuState({
+    $core.int? tUptimeMs,
+    $core.int? ax,
+    $core.int? ay,
+    $core.int? az,
+    $core.int? qw,
+    $core.int? qx,
+    $core.int? qy,
+    $core.int? qz,
+  }) {
+    final result = ImuState._();
+    if (tUptimeMs != null) result.tUptimeMs = tUptimeMs;
+    if (ax != null) result.ax = ax;
+    if (ay != null) result.ay = ay;
+    if (az != null) result.az = az;
+    if (qw != null) result.qw = qw;
+    if (qx != null) result.qx = qx;
+    if (qy != null) result.qy = qy;
+    if (qz != null) result.qz = qz;
+    return result;
+  }
+
+  ImuState._();
+
+  factory ImuState.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      ImuState()..mergeFromBuffer(data, registry);
+  factory ImuState.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      ImuState()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ImuState',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
+      createEmptyInstance: ImuState.$_createMessage)
+    ..aI(1, _omitFieldNames ? '' : 'tUptimeMs', fieldType: $pb.PbFieldType.OU3)
+    ..aI(2, _omitFieldNames ? '' : 'ax', fieldType: $pb.PbFieldType.OS3)
+    ..aI(3, _omitFieldNames ? '' : 'ay', fieldType: $pb.PbFieldType.OS3)
+    ..aI(4, _omitFieldNames ? '' : 'az', fieldType: $pb.PbFieldType.OS3)
+    ..aI(5, _omitFieldNames ? '' : 'qw', fieldType: $pb.PbFieldType.OS3)
+    ..aI(6, _omitFieldNames ? '' : 'qx', fieldType: $pb.PbFieldType.OS3)
+    ..aI(7, _omitFieldNames ? '' : 'qy', fieldType: $pb.PbFieldType.OS3)
+    ..aI(8, _omitFieldNames ? '' : 'qz', fieldType: $pb.PbFieldType.OS3)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ImuState clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ImuState copyWith(void Function(ImuState) updates) =>
+      super.copyWith((message) => updates(message as ImuState)) as ImuState;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ImuState() / ImuState.new instead')
+  static ImuState create() => ImuState._();
+  static $pb.GeneratedMessage $_createMessage() => ImuState._();
+  @$core.override
+  ImuState createEmptyInstance() => ImuState._();
+  @$core.pragma('dart2js:noInline')
+  static ImuState getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ImuState>(ImuState.$_createMessage);
+  static ImuState? _defaultInstance;
+
+  /// When the sampler read it, ms since boot. Read against a client's own idea of when the
+  /// read was issued: a value that stops moving while the rep log keeps growing is a
+  /// stalled sampler.
+  @$pb.TagNumber(1)
+  $core.int get tUptimeMs => $_getIZ(0);
+  @$pb.TagNumber(1)
+  set tUptimeMs($core.int value) => $_setUnsignedInt32(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasTUptimeMs() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearTUptimeMs() => $_clearField(1);
+
+  /// Linear acceleration (gravity removed), body frame: 0.01 m/s^2 per LSB.
+  @$pb.TagNumber(2)
+  $core.int get ax => $_getIZ(1);
+  @$pb.TagNumber(2)
+  set ax($core.int value) => $_setSignedInt32(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasAx() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearAx() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.int get ay => $_getIZ(2);
+  @$pb.TagNumber(3)
+  set ay($core.int value) => $_setSignedInt32(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasAy() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearAy() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.int get az => $_getIZ(3);
+  @$pb.TagNumber(4)
+  set az($core.int value) => $_setSignedInt32(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasAz() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearAz() => $_clearField(4);
+
+  /// Orientation: 1/2^14 per LSB, order [w, x, y, z], as `TraceSample` carries it.
+  @$pb.TagNumber(5)
+  $core.int get qw => $_getIZ(4);
+  @$pb.TagNumber(5)
+  set qw($core.int value) => $_setSignedInt32(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasQw() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearQw() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.int get qx => $_getIZ(5);
+  @$pb.TagNumber(6)
+  set qx($core.int value) => $_setSignedInt32(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasQx() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearQx() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.int get qy => $_getIZ(6);
+  @$pb.TagNumber(7)
+  set qy($core.int value) => $_setSignedInt32(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasQy() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearQy() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.int get qz => $_getIZ(7);
+  @$pb.TagNumber(8)
+  set qz($core.int value) => $_setSignedInt32(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasQz() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearQz() => $_clearField(8);
 }
 
 /// A slice of a rep's trace: as stored in the log, and as sent over BLE.

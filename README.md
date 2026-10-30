@@ -9,6 +9,7 @@ lifter who leaned forward, is visible afterwards.
 | `calypso-esp32/` | Firmware for the original ESP32 (Xtensa). Samples the IMU at 100 Hz, detects reps, stores them in flash, serves them over BLE. |
 | `calypso-core/` | All the platform-independent logic: sampling, rep detection, trace maths, wire format, flash log, GATT table. No embedded dependencies, so it compiles and is unit-tested on the host. |
 | `calypso-app/` | The Flutter client: syncs reps over BLE, lists them, plots one in 3D. |
+| `sim/` | Simulation and fixture tooling: synthetic motion through the real detector, and the `.pblog` fixtures the app is developed against. Depends on `calypso-core`; nothing depends on it. |
 | `proto/` | The single source of truth for the interface. `calypso.proto` is the wire format (messages and records), `calypso_gatt.proto` is the device's BLE table. The firmware generates Rust from both, the app generates Dart. |
 | `dist/` | Deployable firmware images, one folder per chip family, each with a `flash.sh`. Images are build artifacts, not committed. |
 
@@ -26,6 +27,7 @@ Then, per component (details in each component's README):
 
 ```sh
 cd calypso-core && cargo test
+cd sim && cargo test
 cd calypso-esp32 && cargo run  # builds, flashes and monitors the device
 cd calypso-app && flutter test
 ```

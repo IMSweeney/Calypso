@@ -30,6 +30,7 @@ class FakeBleLink implements BleLink {
       SyncClient.calibrationUuid,
       SyncClient.reportsUuid,
       SyncClient.timeUuid,
+      SyncClient.imuUuid,
     ]),
   ];
 

@@ -17,6 +17,19 @@ pub const MIN_REP_MS: u32 = 400;
 pub const MAX_REP_MS: u32 = 8000;
 /// Rest samples kept either side of the motion span so ZUPT has an at-rest window to anchor to, and the app can plot the rep's endpoints.
 pub const MARGIN_MS: u32 = 200;
+/// Smallest dominant-axis travel (metres) that counts as a rep. A hand on a rack, a bar being unracked, a bump: each crosses the motion thresholds, none of them moves the sensor far enough to be a rep.
+pub const MIN_ROM_M: f32 = 0.10;
+
+/// Speed (m/s) the bar must reach between reversals for a return to zero to be a reversal rather than noise.
+pub const VEL_MIN: f32 = 0.15;
+/// How long the bar's velocity must stay near zero for it to count as a reversal.
+pub const T_TURN_MS: u32 = 40;
+/// Time constant of the accelerometer's bias estimate. Longer than the slowest rep, so the rep is not taken out with the bias.
+const BIAS_TAU_S: f32 = 3.0;
+/// Longest integration step honoured, so a stalled sampler cannot turn a gap in the samples into a jump in velocity.
+const MAX_DT_S: f32 = 0.1;
+/// Time constant over which a velocity is pulled back to zero while the detector is idle and the bar is still — the velocity form of "it is not moving, so it is not going anywhere".
+const V_TAU_S: f32 = 0.5;
 
 /// Detector state (exposed for tests/logging).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,8 +55,11 @@ impl RepSpan {
 /// Motion/rest state machine:
 ///
 /// ```text
-/// IDLE ──|a| > ON for T_ON──► MOVING ──|a| < REST for T_REST──► emit span, IDLE
+/// IDLE ──|a| > ON for T_ON──► MOVING ──┬── |a| < REST for T_REST────────────► emit span, IDLE
+///                                     └── second reversal of the bar ────────► emit span, IDLE
 /// ```
+///
+/// **A rep is out and back, so it ends where the bar turns around, and a pause is only one of the ways that happens.** Stillness alone is not enough to go by: a set nobody pauses through has no stillness in it, and a detector that waits for one merges the whole set into a single span — which then exceeds [`MAX_REP_MS`] and is thrown away, taking every rep in it. The reversals are found from the velocity, which is zero at the bottom and at the top of every rep whether the bar dwells there or not.
 pub struct Detector {
     state: State,
     /// Time |a| first exceeded the on-threshold (candidate motion start).
@@ -52,6 +68,18 @@ pub struct Detector {
     below_since: Option<u32>,
     /// Motion start of the rep in progress.
     start_ms: u32,
+    /// Velocity of the bar, m/s: the acceleration integrated with its bias taken out (see [`Detector::integrate`]).
+    v: [f32; 3],
+    /// Slow estimate of the acceleration's bias, which is what would otherwise integrate into a velocity that never comes back to zero.
+    bias: [f32; 3],
+    /// Time the bar's velocity first fell to nothing, as a candidate reversal.
+    still_since: Option<u32>,
+    /// Whether the bar has moved since the last reversal. A return to zero only counts once it has.
+    moved: bool,
+    /// Reversals seen in this rep: out is one, back is two, and the second ends it.
+    turns: u8,
+    /// Timestamp of the previous sample, for the integration step.
+    prev_t_ms: u32,
 }
 
 impl Detector {
@@ -61,6 +89,12 @@ impl Detector {
             above_since: None,
             below_since: None,
             start_ms: 0,
+            v: [0.0; 3],
+            bias: [0.0; 3],
+            still_since: None,
+            moved: false,
+            turns: 0,
+            prev_t_ms: 0,
         }
     }
 
@@ -71,6 +105,7 @@ impl Detector {
     /// Feed one sample; returns the span when a rep closes.
     pub fn update(&mut self, s: &Sample) -> Option<RepSpan> {
         let mag = accel_magnitude(s);
+        self.advance(s, mag);
         match self.state {
             State::Idle => {
                 if mag > ACCEL_ON_THRESHOLD {
@@ -98,6 +133,9 @@ impl Detector {
                         self.state = State::Idle;
                         self.below_since = None;
                         self.above_since = None;
+                        self.turns = 0;
+                        self.moved = false;
+                        self.still_since = None;
                         if span.duration_ms() >= MIN_REP_MS && span.duration_ms() <= MAX_REP_MS {
                             return Some(span);
                         }
@@ -106,9 +144,66 @@ impl Detector {
                 } else {
                     self.below_since = None;
                 }
+                // The other way a rep ends: the bar has gone out and come back. Its velocity is zero at the top as surely as in a pause, and waiting for the pause is what merges a whole set into one span.
+                let speed =
+                    sqrtf(self.v[0] * self.v[0] + self.v[1] * self.v[1] + self.v[2] * self.v[2]);
+                if speed > VEL_MIN {
+                    self.moved = true;
+                    self.still_since = None;
+                } else if self.moved {
+                    let since = *self.still_since.get_or_insert(s.t_ms);
+                    if s.t_ms.saturating_sub(since) >= T_TURN_MS {
+                        self.turns += 1;
+                        self.moved = false;
+                        self.still_since = None;
+                        if self.turns >= 2 {
+                            let span = RepSpan {
+                                start_ms: self.start_ms,
+                                end_ms: since,
+                            };
+                            self.state = State::Idle;
+                            self.below_since = None;
+                            self.above_since = None;
+                            self.turns = 0;
+                            if span.duration_ms() >= MIN_REP_MS && span.duration_ms() <= MAX_REP_MS
+                            {
+                                return Some(span);
+                            }
+                            return None;
+                        }
+                    }
+                }
                 None
             }
         }
+    }
+
+    /// Advance the velocity by this sample's acceleration, with the accelerometer's bias taken out.
+    ///
+    /// A biased acceleration integrated over a rep is a velocity that never returns to zero, so the reversals this detector looks for would never arrive. Both corrections need the bar to be *still*, which is why neither runs while it is moving: a bias learned from motion is the rep, taken out of itself, and a velocity damped during a rep is the same mistake one step later — the set stops splitting the moment either one runs between two reps of a set nobody pauses through.
+    fn advance(&mut self, s: &Sample, mag: f32) {
+        let dt = self.step_ms(s);
+        if dt <= 0.0 {
+            return;
+        }
+        let a = s.accel_f32();
+        let quiet = mag < ACCEL_REST_THRESHOLD;
+        for k in 0..3 {
+            self.v[k] += (a[k] - self.bias[k]) * dt;
+            if quiet {
+                self.bias[k] += (a[k] - self.bias[k]) * (dt / BIAS_TAU_S);
+                if self.state == State::Idle {
+                    self.v[k] += (0.0 - self.v[k]) * (dt / V_TAU_S);
+                }
+            }
+        }
+    }
+
+    /// Seconds since the previous sample, bounded so a stall in the sampler cannot become a jump in velocity.
+    fn step_ms(&mut self, s: &Sample) -> f32 {
+        let dt = (s.t_ms.saturating_sub(self.prev_t_ms) as f32 / 1000.0).min(MAX_DT_S);
+        self.prev_t_ms = s.t_ms;
+        dt
     }
 }
 
@@ -224,6 +319,30 @@ impl<'a> TraceBuf<'a> {
     }
 }
 
+/// [`msg::RepSummary::flags`] bit 0: the trace was decimated to fit device memory.
+pub const REP_FLAG_DECIMATED: u32 = 1 << 0;
+/// [`msg::RepSummary::flags`] bit 1: the accelerometer was calibrated as well as the gyroscope when the rep was recorded.
+///
+/// The recording gate asks only for the gyroscope, so this is the bit that says the rest of the calibration was there.
+pub const REP_FLAG_CALIBRATED: u32 = 1 << 1;
+
+impl msg::RepSummary {
+    /// Whether this is a rep at all: the bar has to have gone up or down [`MIN_ROM_M`].
+    ///
+    /// The detector closes on motion and rest, which a vibration or a hand on the rack satisfies; what it cannot see is how far anything moved, because that costs two integrations. This is the check that costs nothing after the fact — and it is measured on the vertical, the only axis with a right answer.
+    pub fn is_a_rep(&self) -> bool {
+        self.rom >= MIN_ROM_M
+    }
+
+    pub const fn decimated(&self) -> bool {
+        self.flags & REP_FLAG_DECIMATED != 0
+    }
+
+    pub const fn calibrated(&self) -> bool {
+        self.flags & REP_FLAG_CALIBRATED != 0
+    }
+}
+
 /// Compute the ZUPT-anchored world-frame trace and summary for one rep.
 ///
 /// `samples` should be the detector's span plus margin at each end, so the integration can be anchored at zero velocity at both ends.
@@ -255,7 +374,9 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummar
     } else {
         n.div_ceil(capacity).max(1)
     };
-    summary.decimated = capacity > 0 && stride > 1;
+    if capacity > 0 && stride > 1 {
+        summary.flags |= REP_FLAG_DECIMATED;
+    }
     // Anchor the decimation grid at the *last* sample, so the rep's end is always stored (it is the most interesting point when plotting) and the count stays within capacity.
     let first = if capacity == 0 { 0 } else { (n - 1) % stride };
 
@@ -264,7 +385,7 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummar
     let total_dt = (t_end - t0) as f32 / 1000.0;
     let detrend = total_dt > 0.0;
 
-    // Pass 1: world-frame accel → raw velocity; keep v_end and summary stats.
+    // Pass 1: world-frame accel → raw velocity, for the endpoint the detrend takes out and for the summary stats.
     let mut v_raw = [0.0f32; 3];
     let mut prev_a = rotate_by_quat(samples[0].quat_f32(), samples[0].accel_f32());
     let mut a_max = 0.0f32;
@@ -286,30 +407,36 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummar
     }
     let v_end = v_raw;
 
-    // Pass 2: detrended velocity → raw position; keep p_end.
-    let mut p_raw = [0.0f32; 3];
-    let mut v_prev = detrended_velocity(samples, 0, v_end, t0, total_dt, detrend);
+    // Pass 2: detrended velocity → the position the detrend ends at.
+    let mut p_end = [0.0f32; 3];
     let mut v_max = 0.0f32;
-    for i in 1..n {
-        let v = detrended_velocity(samples, i, v_end, t0, total_dt, detrend);
-        let dt = (samples[i].t_ms - samples[i - 1].t_ms) as f32 / 1000.0;
-        for k in 0..3 {
-            p_raw[k] += 0.5 * (v_prev[k] + v[k]) * dt;
-            if absf(v[k]) > v_max {
-                v_max = absf(v[k]);
+    let mut walk = Velocity::new(samples, v_end, t0, total_dt, detrend);
+    let mut v_prev = [0.0f32; 3];
+    for i in 0..n {
+        let v = walk.step();
+        if i > 0 {
+            let dt = (samples[i].t_ms - samples[i - 1].t_ms) as f32 / 1000.0;
+            for k in 0..3 {
+                p_end[k] += 0.5 * (v_prev[k] + v[k]) * dt;
+                if absf(v[k]) > v_max {
+                    v_max = absf(v[k]);
+                }
             }
         }
         v_prev = v;
     }
-    let p_end = p_raw;
 
     // Pass 3: detrended position, emitting trace points and angle/ROM stats.
     let mut p = [0.0f32; 3];
-    v_prev = detrended_velocity(samples, 0, v_end, t0, total_dt, detrend);
+    let mut roll_offset = 0.0f32;
+    let mut roll_prev = 0.0f32;
+    let mut roll_seen = false;
+    let mut walk = Velocity::new(samples, v_end, t0, total_dt, detrend);
+    let mut v_prev = [0.0f32; 3];
     let mut lo = [f32::MAX; 3];
     let mut hi = [f32::MIN; 3];
     for i in 0..n {
-        let v = detrended_velocity(samples, i, v_end, t0, total_dt, detrend);
+        let v = walk.step();
         if i > 0 {
             let dt = (samples[i].t_ms - samples[i - 1].t_ms) as f32 / 1000.0;
             for k in 0..3 {
@@ -333,6 +460,19 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummar
             }
         }
         let (roll, pitch) = roll_pitch_deg(samples[i].quat_f32());
+        // Roll is reported in (-180, 180], so a rep that crosses the seam reads as a full turn between its minimum and
+        // its maximum. Unwrapping it first is what makes the range a rotation rather than an artefact of the branch cut.
+        if roll_seen {
+            let step = roll - roll_prev;
+            if step > 180.0 {
+                roll_offset -= 360.0;
+            } else if step < -180.0 {
+                roll_offset += 360.0;
+            }
+        }
+        roll_seen = true;
+        roll_prev = roll;
+        let roll = roll + roll_offset;
         if roll < summary.roll_min_deg {
             summary.roll_min_deg = roll;
         }
@@ -355,14 +495,10 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummar
         }
     }
 
-    let range = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
-    summary.rom = if range[0] >= range[1] && range[0] >= range[2] {
-        range[0]
-    } else if range[1] >= range[2] {
-        range[1]
-    } else {
-        range[2]
-    };
+    // Range of motion is the vertical travel, and Z is the only axis that can say what vertical is: the fusion pins it
+    // to gravity, while X and Y are the mount's heading and drift with yaw. Whichever axis moved furthest is not the
+    // same question — on the horizontal axes it is as often the estimate's error as the bar.
+    summary.rom = hi[2] - lo[2];
     summary.t_start_ms = t0;
     summary.t_end_ms = t_end;
     summary.duration_ms = t_end - t0;
@@ -373,36 +509,65 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummar
     summary
 }
 
-/// Velocity at sample `i`, detrended so it starts and ends at zero.
-fn detrended_velocity(
-    samples: &[Sample],
+/// The rep's velocity, integrated one sample at a time.
+///
+/// A pass over the rep costs one integration step per point, which is what keeps [`compute_rep`] linear: it needs the velocity at every point, and re-integrating from the start for each one is quadratic in the length of a rep.
+struct Velocity<'a> {
+    samples: &'a [Sample],
+    /// Index of the next sample to read.
     i: usize,
+    /// Raw velocity, before the endpoint drift is taken out.
+    v: [f32; 3],
+    prev_a: [f32; 3],
+    /// Raw velocity at the last sample: taking it out proportionally is what makes both ends read zero.
     v_end: [f32; 3],
     t0: u32,
     total_dt: f32,
     detrend: bool,
-) -> [f32; 3] {
-    // Re-integrate up to `i` (cheap: a rep is a few hundred samples).
-    let mut v = [0.0f32; 3];
-    let mut prev_a = rotate_by_quat(samples[0].quat_f32(), samples[0].accel_f32());
-    for j in 1..=i {
-        let a = rotate_by_quat(samples[j].quat_f32(), samples[j].accel_f32());
-        let dt = (samples[j].t_ms - samples[j - 1].t_ms) as f32 / 1000.0;
-        for k in 0..3 {
-            v[k] += 0.5 * (prev_a[k] + a[k]) * dt;
-        }
-        prev_a = a;
-    }
-    if detrend {
-        let f = (samples[i].t_ms - t0) as f32 / 1000.0 / total_dt;
-        for k in 0..3 {
-            v[k] -= v_end[k] * f;
+}
+
+impl<'a> Velocity<'a> {
+    fn new(samples: &'a [Sample], v_end: [f32; 3], t0: u32, total_dt: f32, detrend: bool) -> Self {
+        Velocity {
+            samples,
+            i: 0,
+            v: [0.0; 3],
+            prev_a: rotate_by_quat(samples[0].quat_f32(), samples[0].accel_f32()),
+            v_end,
+            t0,
+            total_dt,
+            detrend,
         }
     }
-    v
+
+    /// World-frame velocity at the next sample, oldest first.
+    fn step(&mut self) -> [f32; 3] {
+        let i = self.i;
+        self.i += 1;
+        let s = &self.samples[i];
+        let a = rotate_by_quat(s.quat_f32(), s.accel_f32());
+        if i > 0 {
+            let dt = (s.t_ms - self.samples[i - 1].t_ms) as f32 / 1000.0;
+            let (v, prev_a) = (self.v, self.prev_a);
+            self.v = trapezoid(v, prev_a, a, dt);
+        }
+        self.prev_a = a;
+        if self.detrend {
+            let f = (s.t_ms - self.t0) as f32 / 1000.0 / self.total_dt;
+            let (v, v_end) = (self.v, self.v_end);
+            core::array::from_fn(|k| v[k] - v_end[k] * f)
+        } else {
+            self.v
+        }
+    }
 }
 
 // --- small no_std helpers -------------------------------------------------
+
+/// One trapezoid step of the integration: `v + ½(a + b)·Δt`, on every axis.
+fn trapezoid(v: [f32; 3], a: [f32; 3], b: [f32; 3], dt: f32) -> [f32; 3] {
+    core::array::from_fn(|k| v[k] + 0.5 * (a[k] + b[k]) * dt)
+}
 
 fn sqrtf(x: f32) -> f32 {
     libm::sqrtf(x)

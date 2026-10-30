@@ -461,7 +461,8 @@ class _RepListScreenState extends State<RepListScreen> {
                           'peak ${s.peakVelocity.toStringAsFixed(2)} m/s · '
                           'tilt ${s.rollRangeDeg.toStringAsFixed(1)}° / '
                           '${s.pitchRangeDeg.toStringAsFixed(1)}°'
-                          '${s.decimated ? ' · decimated' : ''}',
+                          '${s.decimated ? ' · decimated' : ''}'
+                          '${s.calibrated ? '' : ' · not calibrated'}',
                         ),
                         trailing: _traceState(row.state),
                         // A rep still being fetched has nothing to plot yet, and the screen it opens would say so in more words.

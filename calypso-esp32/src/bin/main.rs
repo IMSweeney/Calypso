@@ -12,7 +12,7 @@
 use alloc::vec::Vec as AllocVec;
 use bt_hci::controller::ExternalController;
 use core::cell::RefCell;
-use defmt::{info, warn};
+use defmt::{error, info, warn};
 use embassy_executor::Spawner;
 use embassy_futures::join::join3;
 use embassy_futures::select::{Either, select};
@@ -41,7 +41,8 @@ use calypso_core::calibration::Calibration;
 use calypso_core::clock::{self, Boots};
 use calypso_core::flashlog::{self, FlashLog};
 use calypso_core::gatt::{
-    CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncCalibrationValue, SyncReportsValue,
+    CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncCalibrationValue, SyncImuValue,
+    SyncReportsValue,
 };
 use calypso_core::pb::msg;
 use calypso_core::pipe::{self, Session, Stalled};
@@ -106,6 +107,12 @@ static BOOT_FROM_ID: AtomicU32 = AtomicU32::new(0);
 static REPORTS: critical_section::Mutex<RefCell<Latch>> =
     critical_section::Mutex::new(RefCell::new(Latch::new()));
 
+/// The last sample the sampler read, for the app's read of the `Imu` characteristic.
+///
+/// A critical-section mutex for the reason [`REPORTS`] is one: the sampler writes it a hundred times a second and the BLE task copies it out on its tick, and a sample assembled from two different reads — an acceleration from one tick beside a quaternion from the next — would be a reading the sensor never gave.
+static LAST_SAMPLE: critical_section::Mutex<RefCell<Option<Sample>>> =
+    critical_section::Mutex::new(RefCell::new(None));
+
 /// Room for one `BootClock` record: a varint field, its tag, and the record envelope (`proto/calypso.proto`).
 const CLOCK_RECORD_BYTES: usize = 16;
 
@@ -128,6 +135,9 @@ const SAMPLE_RING_LEN: usize = REP_WINDOW_SAMPLES + 3 * SAMPLE_RATE_HZ as usize;
 /// The sampler's sample window, on the heap (leaked at startup): [`SAMPLE_RING_LEN`] samples is too much for the DRAM static region.
 /// The sampler task both fills it and runs the rep detector over it.
 type SampleWindow = RefCell<SampleRing<'static>>;
+
+/// Longest gap between two samples that is still this loop being busy rather than stopped: ten times the tick, and well past the tens of ms a flash write in this loop costs.
+const SAMPLER_HOLE_MS: u32 = 500;
 
 /// The flash peripheral, and the scratch a partition lookup needs.
 ///
@@ -395,8 +405,9 @@ async fn main(spawner: Spawner) -> ! {
                     conn.raw().att_mtu(),
                     pipe::frame_ceiling(conn.raw().att_mtu() as usize)
                 );
-                // A read returns the last value published, so it is published before a client can ask for it.
+                // A read returns the last value published, so both are published before a client can ask for them.
                 publish_calibration(&gatt);
+                publish_imu(&gatt);
 
                 // Sync state: how many summaries this subscriber has been sent, the batch they are read from, and the clock the pipe's timeouts are measured against.
                 //
@@ -409,11 +420,19 @@ async fn main(spawner: Spawner) -> ! {
                 batch.reset();
                 sync.session.reset();
 
+                let mut ticks: u32 = 0;
                 loop {
-                    // Service GATT events; once a second, keep the table's copy of the IMU's calibration levels current, which is what the app reads to turn its hint into progress.
-                    let event = match select(conn.next(), Timer::after(Duration::from_secs(1))).await {
+                    // Service GATT events; on every tenth tick (a second), keep the table's copy of the IMU's calibration levels current, which is what the app reads to turn its hint into progress.
+                    //
+                    // The tick itself is 100 ms because the app's read of the `Imu` characteristic is a snapshot of the sensor: at a second it would show a rep's whole stroke as one frame. Everything else in this arm is a second's business.
+                    let event = match select(conn.next(), Timer::after(Duration::from_millis(100))).await {
                         Either::First(event) => event,
                         Either::Second(()) => {
+                            ticks = ticks.wrapping_add(1);
+                            publish_imu(&gatt);
+                            if !ticks.is_multiple_of(10) {
+                                continue;
+                            }
                             let now = now_ms(start);
                             publish_calibration(&gatt);
                             // Who is listening, asked of the server rather than inferred from a notify result, because a notify result says nothing (see `is_subscribed`). Once a tick is often enough to say when it changes.
@@ -589,6 +608,7 @@ async fn main(spawner: Spawner) -> ! {
             let mut detector = Detector::new();
             let mut reps: u32 = 0;
             let mut n: u32 = 0;
+            let mut last_t_ms: Option<u32> = None;
             // Said once, in bench mode, so a session cannot be mistaken for a real one.
             let mut logged_fake_reps = false;
             // The IMU's calibration levels, refreshed once a second — and logged only when they change, so "paused until the IMU is calibrated" is printed when it becomes true rather than 3,600 times an hour.
@@ -600,16 +620,28 @@ async fn main(spawner: Spawner) -> ! {
             loop {
                 ticker.next().await;
                 let t_ms = boot.elapsed().as_millis() as u32;
+                // A hole is invisible in the numbers it distorts: `compute_rep` bridges it as one integration step, so a rep measured across it reports travel that never happened.
+                // Logged where it is made, on the same clock as the flash and link lines, because the cause is whichever of them was running.
+                if let Some(last) = last_t_ms {
+                    let gap = t_ms.saturating_sub(last);
+                    if gap > SAMPLER_HOLE_MS {
+                        error!("sampler hole: {} ms without a sample", gap);
+                        report(msg::ReportKind::SamplerHole);
+                    }
+                }
+                last_t_ms = Some(t_ms);
 
                 // 1 Hz: read the calibration levels, publish them for the BLE task, and save the profile the first time they are good enough.
                 //
                 // Before this tick's sample, for two reasons: the detector's gate is never a state behind, and the save switches the chip's mode for ~40 ms, after which the first sample read back can be odd.
                 if n.is_multiple_of(SAMPLE_RATE_HZ) {
+                    let was_ready = calibration.can_record();
                     let (updated, saved) =
                         poll_calibration(&mut bno055, &mut delay, store).await;
                     calibration = updated;
-                    if saved {
+                    if saved || (was_ready && !calibration.can_record()) {
                         // Drop the detector's state so the post-mode-switch sample cannot close a rep around itself. It re-arms from the next real rest.
+                        // The same goes for the gate closing: the detector is not fed while it is shut, so a rep it was mid-way through would otherwise be closed against a start the ring can no longer reach — a rep lost with only a window error to show for it.
                         detector = Detector::new();
                     }
                 }
@@ -635,6 +667,7 @@ async fn main(spawner: Spawner) -> ! {
                     ],
                 };
                 samples.borrow_mut().push(sample);
+                critical_section::with(|cs| *LAST_SAMPLE.borrow(cs).borrow_mut() = Some(sample));
 
                 // Detect reps; on close, slice the window out of the ring and compute the ZUPT-anchored trace + summary, then persist it.
                 //
@@ -663,7 +696,7 @@ async fn main(spawner: Spawner) -> ! {
                     } else {
                         None
                     }
-                } else if calibration.is_ready() {
+                } else if calibration.can_record() {
                     detector.update(&sample)
                 } else {
                     None
@@ -680,53 +713,70 @@ async fn main(spawner: Spawner) -> ! {
                         warn!("rep window unavailable (ring too short)");
                         report(msg::ReportKind::RepWindowUnavailable);
                     } else {
-                        reps += 1;
-                        let rep_uuid = {
-                            let mut rand = || rng.random();
-                            uuid::new_uuid(&mut rand)
-                        };
                         let mut sum = compute_rep(&rep_window[..copied], &mut rep_trace);
-                        // Identity is minted when the rep closes, so it is set here rather than computed with the stats.
-                        sum.rep_uuid = calypso_core::pb::uuid_to_field(&rep_uuid);
-                        // Persist the rep (summary + trace chunks). This happens right after the rest debounce, i.e. while the sensor is at rest, so the tens of ms an erase takes here can't land in the middle of a rep.
-                        let stored = {
-                            let mut guard = store.lock().await;
-                            flash_window("rep append", || {
-                                store_rep(&mut guard, rec_buf, &mut sum, &rep_trace)
-                            })
-                        };
-                        match stored {
-                            Ok(n) => info!(
-                                "rep {} stored as {} log records",
-                                UuidShort(Some(&rep_uuid)),
-                                n
-                            ),
-                            Err(e) => {
-                                warn!(
-                                    "rep {} could not be stored: {}",
-                                    UuidShort(Some(&rep_uuid)),
-                                    e
-                                );
-                                report(msg::ReportKind::RepNotStored);
+                        if !sum.is_a_rep() {
+                            info!(
+                                "rep discarded: {} m of travel, under the {} m a rep needs",
+                                sum.rom,
+                                calypso_core::rep::MIN_ROM_M
+                            );
+                        } else {
+                            reps += 1;
+                            let rep_uuid = {
+                                let mut rand = || rng.random();
+                                uuid::new_uuid(&mut rand)
+                            };
+                            // Identity is minted when the rep closes, so it is set here rather than computed with the stats.
+                            sum.rep_uuid = calypso_core::pb::uuid_to_field(&rep_uuid);
+                            // The gate asks only for the gyroscope, so whether the accelerometer was calibrated too is a fact only the summary can carry — the app has no other way to weigh the reps taken while it wandered.
+                            if calibration.accel_calibrated() {
+                                sum.flags |= calypso_core::rep::REP_FLAG_CALIBRATED;
                             }
+                            // Persist the rep (summary + trace chunks). This happens right after the rest debounce, i.e. while the sensor is at rest, so the tens of ms an erase takes here can't land in the middle of a rep.
+                            let stored = {
+                                let mut guard = store.lock().await;
+                                flash_window("rep append", || {
+                                    store_rep(&mut guard, rec_buf, &mut sum, &rep_trace)
+                                })
+                            };
+                            match stored {
+                                Ok(n) => info!(
+                                    "rep {} stored as {} log records",
+                                    UuidShort(Some(&rep_uuid)),
+                                    n
+                                ),
+                                Err(e) => {
+                                    warn!(
+                                        "rep {} could not be stored: {}",
+                                        UuidShort(Some(&rep_uuid)),
+                                        e
+                                    );
+                                    report(msg::ReportKind::RepNotStored);
+                                }
+                            }
+                            info!(
+                                "rep {}: {}..{} ms ({} ms), {} trace pts{}{}, rom {=f32} m, peak v {=f32} m/s, mean v {=f32} m/s, peak a {=f32} m/s^2, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
+                                UuidShort(Some(&rep_uuid)),
+                                span.start_ms,
+                                span.end_ms,
+                                sum.duration_ms,
+                                sum.trace_len,
+                                if sum.decimated() { " (decimated)" } else { "" },
+                                if sum.calibrated() {
+                                    ""
+                                } else {
+                                    " (accel not calibrated)"
+                                },
+                                sum.rom,
+                                sum.peak_velocity,
+                                sum.mean_velocity,
+                                sum.peak_accel,
+                                sum.roll_min_deg,
+                                sum.roll_max_deg,
+                                sum.pitch_min_deg,
+                                sum.pitch_max_deg,
+                            );
                         }
-                        info!(
-                            "rep {}: {}..{} ms ({} ms), {} trace pts{}, rom {=f32} m, peak v {=f32} m/s, mean v {=f32} m/s, peak a {=f32} m/s^2, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
-                            UuidShort(Some(&rep_uuid)),
-                            span.start_ms,
-                            span.end_ms,
-                            sum.duration_ms,
-                            sum.trace_len,
-                            if sum.decimated { " (decimated)" } else { "" },
-                            sum.rom,
-                            sum.peak_velocity,
-                            sum.mean_velocity,
-                            sum.peak_accel,
-                            sum.roll_min_deg,
-                            sum.roll_max_deg,
-                            sum.pitch_min_deg,
-                            sum.pitch_max_deg,
-                        );
                     }
                 }
 
@@ -758,7 +808,7 @@ async fn main(spawner: Spawner) -> ! {
                             let r = samples.borrow();
                             (r.len(), r.pushed())
                         };
-                        if calibration.is_ready() {
+                        if calibration.can_record() {
                             info!(
                                 "sampler: {} Hz, ring {}/{} samples, {} pushed, {} reps, imu {} (recording), stack {}, heap free {} B",
                                 SAMPLE_RATE_HZ,
@@ -1594,11 +1644,10 @@ async fn poll_calibration(
     };
     CALIBRATION_BITS.store(calibration.to_bits(), Ordering::Relaxed);
 
-    if !calibration.is_ready() || CALIBRATION_SAVED.load(Ordering::Relaxed) {
+    // The accelerometer as well as the gyroscope, which is not the recording rule: a rep is recorded on the gyroscope alone, but the profile's offsets are the part that cannot be re-derived, so it is only worth writing once the accelerometer has settled. `sys` and `mag` are deliberately not asked for — IMU mode never calibrates the magnetometer and the aggregate counts it, so waiting on them is waiting for a number that cannot arrive.
+    if !calibration.profile_worth_saving() || CALIBRATION_SAVED.load(Ordering::Relaxed) {
         return (calibration, false);
     }
-
-    // `is_ready`, not `is_fully_calibrated`: the magnetometer is unused in IMU mode, its level never reaches 3 there, and the aggregate `sys` counts it — so readiness is the accelerometer and gyroscope, and the rest would be waiting for a number that cannot arrive (see `calypso_core::calibration`).
     let Ok(profile) = bno055.calibration_profile(delay) else {
         warn!("could not read the calibration profile back");
         return (calibration, false);
@@ -1609,7 +1658,7 @@ async fn poll_calibration(
     };
     if saved {
         CALIBRATION_SAVED.store(true, Ordering::Relaxed);
-        info!("IMU calibration saved; reps will be recorded");
+        info!("IMU calibration saved");
     }
     (calibration, saved)
 }
@@ -1675,8 +1724,23 @@ async fn push_report(
     }
 }
 
-/// Put the IMU's calibration state in the table, where a client reads it.
+/// Put the last sample the sampler read into the table, which is what the app's read of the `Imu` characteristic returns.
 ///
+/// Called on connection and every 100 ms after, so a client polling the read sees the sensor moving rather than a rep's stroke in one frame.
+fn publish_imu(gatt: &CalypsoGatt<'_>) {
+    let Some(sample) = critical_section::with(|cs| *LAST_SAMPLE.borrow(cs).borrow()) else {
+        return;
+    };
+    match SyncImuValue::encode(&calypso_core::pb::imu_state_message(&sample)) {
+        Some(value) => {
+            if gatt.set(&gatt.sync.imu, &value).is_err() {
+                warn!("imu: the table refused the sample");
+            }
+        }
+        None => warn!("imu: the sample is larger than the characteristic"),
+    }
+}
+
 /// The characteristic is a value rather than a pipe message, so this end only keeps the table's copy current; called on connection and once a second after, the levels being the chip's own 1 Hz poll ([`CALIBRATION_BITS`]).
 ///
 /// A message too large for the characteristic's `max_len` is `None` rather than a truncation, and nothing this device holds can be.

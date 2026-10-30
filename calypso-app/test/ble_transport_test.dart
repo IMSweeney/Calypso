@@ -615,6 +615,40 @@ void main() {
     },
   );
 
+  test('the IMU read is the sample the device\'s sampler last took', () async {
+    final link = FakeBleLink();
+    // Served before connecting: the transport reads it while bringing the link up, the way it
+    // reads the calibration levels.
+    FakeDevice(link).servesImu(
+      pb.ImuState(
+        tUptimeMs: 123456,
+        ax: 100,
+        ay: -50,
+        az: 981,
+        qw: 16384,
+        qz: 4096,
+      ),
+    );
+    final transport = await connectedTransport(link);
+
+    final state = await transport.readImu();
+
+    expect(state, isNotNull);
+    expect(
+      state!.tUptimeMs,
+      123456,
+      reason: 'when the sampler read the sensor',
+    );
+    expect(
+      [state.ax, state.ay, state.az],
+      [100, -50, 981],
+      reason: 'the fixed point a stored trace carries, unchanged',
+    );
+    expect([state.qw, state.qx, state.qy, state.qz], [16384, 0, 0, 4096]);
+
+    await transport.disconnect();
+  });
+
   test('a device that cannot report faults is refused, named', () async {
     final link = FakeBleLink()
       ..services = const [

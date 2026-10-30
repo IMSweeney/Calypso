@@ -1,0 +1,13 @@
+[package]
+name         = "calypso-sim"
+edition      = "2021"
+rust-version = "1.88"
+version      = "0.1.0"
+publish      = false
+description  = "Synthetic motion and fixture generation for Calypso: tooling only, never built into the firmware."
+
+[dependencies]
+# The detector, the trace maths and the record encoders are the real ones: simulation drives the same pipeline the device runs.
+calypso-core = { path = "../calypso-core" }
+# The synthetic motion is a cosine, so fixtures stay byte-identical on every machine.
+libm = "0.2"

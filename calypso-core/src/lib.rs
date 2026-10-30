@@ -10,7 +10,6 @@ extern crate alloc;
 pub mod ble;
 pub mod calibration;
 pub mod clock;
-pub mod fixtures;
 pub mod flashlog;
 /// The BLE GATT table the device serves, generated from `proto/calypso_gatt.proto` by `gatt-gen` (see `tool/gen_gatt.sh`) and committed.
 ///

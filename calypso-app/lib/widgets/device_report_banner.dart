@@ -11,10 +11,10 @@ import '../state/device_reports.dart';
 /// one line and a count: a fault that has happened four times is a device that is still
 /// failing, and one that has happened once may already be over.
 ///
-/// There is nothing to dismiss. The device keeps no state to dismiss — it sends a fault
-/// when it happens and never says "and it is fine now" — so a banner that could be closed
-/// would come back on the next report anyway, and would be lying about a state nobody
-/// knows.
+/// Closing it lasts for the kind on screen and until the link comes up again
+/// ([DeviceReports.dismiss]): the device repeats a fault that is still happening once a
+/// second, so a banner a repeat could reopen is a banner that cannot be closed. Every
+/// arrival is in the app's log whether or not it was on screen.
 class DeviceReportBanner extends StatelessWidget {
   const DeviceReportBanner({
     super.key,
@@ -68,6 +68,13 @@ class DeviceReportBanner extends StatelessWidget {
                       ],
                     ],
                   ),
+                ),
+                IconButton(
+                  onPressed: reports.dismiss,
+                  icon: const Icon(Icons.close, size: 18),
+                  color: scheme.onErrorContainer,
+                  tooltip: 'Dismiss',
+                  visualDensity: VisualDensity.compact,
                 ),
               ],
             ),

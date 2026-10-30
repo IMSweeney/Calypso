@@ -60,6 +60,21 @@ String describeCalibrationStatus(CalibrationStatus status) =>
     'calibration sys=${status.sys} accel=${status.accel} '
     'gyro=${status.gyro} mag=${status.mag} ready=${status.ready}';
 
+/// What the IMU's own values say, for a log line: the sample the detector is fed, in the units a
+/// trace carries it. Acceleration is m/s² (0.01 per LSB), the quaternion is unit (1/2^14 per LSB).
+String describeImuState(ImuState state) {
+  const a = 100.0;
+  const q = 16384.0;
+  return 'imu t=${state.tUptimeMs} ms '
+      'a=(${(state.ax / a).toStringAsFixed(2)}, '
+      '${(state.ay / a).toStringAsFixed(2)}, '
+      '${(state.az / a).toStringAsFixed(2)}) m/s^2 '
+      'q=(${(state.qw / q).toStringAsFixed(3)}, '
+      '${(state.qx / q).toStringAsFixed(3)}, '
+      '${(state.qy / q).toStringAsFixed(3)}, '
+      '${(state.qz / q).toStringAsFixed(3)})';
+}
+
 /// The summaries a dump holds, each dated by the boot that recorded it.
 ///
 /// A stored summary carries only its uptime: the time is the boot's, and it travels as a `BootClock` record —

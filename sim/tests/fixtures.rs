@@ -1,8 +1,8 @@
-use calypso_core::fixtures::{self, push_record, push_rep, read_dump, squat_dump, squat_set};
 use calypso_core::pb::{self, msg, Record};
 use calypso_core::rep::{compute_rep, TraceBuf, TracePoint};
 use calypso_core::store::RECORD_BUF_BYTES;
 use calypso_core::uuid::fixture_uuid;
+use calypso_sim::fixtures::{self, push_record, push_rep, read_dump, squat_dump, squat_set};
 
 #[test]
 fn squat_set_is_detected_and_traced() {
@@ -14,7 +14,7 @@ fn squat_set_is_detected_and_traced() {
     for (summary, trace) in &reps {
         assert!(!trace.is_empty());
         assert_eq!(summary.trace_len, trace.len() as u32);
-        assert!(!summary.decimated);
+        assert!(!summary.decimated());
         assert!(
             (summary.rom - 0.4).abs() < 0.15,
             "rom {} for a 0.4 m squat",
@@ -122,7 +122,7 @@ fn decimation_keeps_the_last_point() {
     let mut storage = vec![TracePoint::ZERO; 512];
     let mut trace = TraceBuf::new(&mut storage);
     let summary = compute_rep(window, &mut trace);
-    assert!(summary.decimated);
+    assert!(summary.decimated());
     assert_eq!(summary.trace_len, 512);
     assert_eq!(
         trace.get(trace.len() - 1).unwrap().t_ms,

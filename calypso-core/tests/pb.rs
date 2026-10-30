@@ -17,7 +17,7 @@ fn sample_summary() -> msg::RepSummary {
         pitch_min_deg: -0.8,
         pitch_max_deg: 3.1,
         trace_len: 145,
-        decimated: false,
+        flags: calypso_core::rep::REP_FLAG_CALIBRATED,
         ..Default::default()
     }
 }
@@ -52,7 +52,8 @@ fn summary_round_trips() {
             assert!((s.pitch_max_deg - summary.pitch_max_deg).abs() < 1e-6);
             assert_eq!(s.trace_len, summary.trace_len);
             assert_eq!(s.chunk_count, 4);
-            assert!(!s.decimated);
+            assert!(!s.decimated());
+            assert!(s.calibrated());
         }
         other => panic!("expected a summary, got {other:?}"),
     }

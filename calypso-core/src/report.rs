@@ -84,7 +84,7 @@ mod tests {
     /// A generated enum is an open newtype with no runtime list of its values, so this is
     /// the one place a new kind has to be added by hand for the tests to cover it.
     fn all_kinds() -> impl Iterator<Item = msg::ReportKind> {
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
             .into_iter()
             .map(msg::ReportKind)
     }

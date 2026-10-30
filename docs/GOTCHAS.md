@@ -248,6 +248,62 @@ re-derives that from stillness) and `accel` at 0 — which reads as "the save is
 rather than "the save never ran". When a save looks broken, first check that whatever
 triggers it can actually happen.
 
+### A rep only counts if it ends in a pause
+
+**Symptom.** A set of reps stores one rep, or none, and the reps that survive are 3–8 s
+long. Nothing in the app or in either log says a rep was discarded, so the set looks like
+it was never done. **Find it with a test, not with a session**: the one real capture that
+looked like this had stored nothing at all for two and a half hours, which was the
+calibration gate and not the detector ("The recording gate" in `ROADMAP.md`). The
+mechanism below is real and reproducible — a no-pause set is one span — but a missing set
+on hardware is more often the gate, because the gate leaves no reps to look at.
+
+**Cause.** A rep closed only after `|a|` stayed under 0.25 m/s² for 250 ms. A set nobody
+pauses through never produces that, so the span stayed open and ran from the first rep
+into the next: three reps of motion are already past `MAX_REP_MS` (8 s), and a span that
+long was `return None` — thrown away whole, with no report and no log line. The one rep
+per set that did arrive was whichever closure landed inside 8 s.
+
+**Fix.** A rep is out and back, so it ends where the bar turns around, and a pause is
+only one of the ways that happens. The detector integrates the acceleration into a
+velocity and closes on the end of the out-and-back as well as on the rest. Two details
+make that work: the accelerometer's bias is learned **only while the bar is still**
+(otherwise the bias estimate eats the rep it is measuring), and so is the velocity
+damping — either one running between two reps of a no-pause set quietly merges them
+again.
+
+**The gate had the same shape of bug.** The detector is not fed while the calibration
+gate is shut, but was not reset, so the span after a flap was measured from a timestamp
+the ring no longer held. One `RepWindowUnavailable` landed 1.1 s after the gate reopened,
+and every other flap cost a rep silently. Closing the gate now resets the detector, as
+saving a profile already did.
+
+**Test it against a set that never pauses.** `calypso-core/tests/rep.rs` has five reps
+back to back with rest only after the last: before the change it was one span of the
+whole set, now it is five. That test also had to fix its own motion model — a sine is a
+push that never comes back, and a detector tuned on one has nothing to learn about reps.
+
+### A hole in the timeline is bridged as one step
+
+**Symptom.** A stored rep reports travel the bar cannot have made — one capture's largest
+ROM is 1.28 m off a deadlift — and its trace times jump 2–4 s, then a burst of samples
+1–7 ms apart, then the normal spacing.
+
+**Cause.** Something in the sampler loop blocked. `Ticker::every` advances its deadline by
+one period rather than resetting it to now, so every deadline missed while the loop was
+stopped fires the instant it resumes: the burst is that catch-up, and the jump is the gap
+it leaves behind. `compute_rep` integrates the gap as one trapezoid, which adds seconds of
+acceleration to the velocity at once; that rep climbs about 1 m in the 1.1 s after its
+gap. Nothing downstream can see the gap — `Sample` carries a timestamp and no count of
+what should have been there.
+
+**Fix.** The sampler logs `sampler hole: … ms without a sample` where the gap is made, on
+the boot clock, so the flash windows and link events above it are the candidate causes,
+and raises `REPORT_KIND_SAMPLER_HOLE` so the phone says a rep from then may read long
+while the person is still in the gym. What the integration should do with the time is
+still open (`ROADMAP.md`): read a rep that spans a hole as short, or as unusable, or
+remove the holes.
+
 ## The radio
 
 ### The BLE controller has its own task and stack
@@ -537,9 +593,24 @@ own ack arrived, and each re-send made the device *restart* the trace it was str
 The acks the app did receive read as `Acked.ignored`, because by then it had aborted the
 transfer they were about.
 
+**Still true with the sizes right.** The framing that made that wait ~3 s is gone — a
+chunk is ~8 notifications of 244 bytes now, not ~150 of 14 — and the acknowledgement
+still lands a median 5 s after the write, which is the whole `XFER_TIMEOUT_MS` budget.
+Most requests in the real session were re-sent for it. What a re-send costs is no longer
+the trace: the device answers the second request, streams it, and a second first chunk is
+dropped by the reassembler. What it costs is the seconds — the wait before the first
+chunk was 40% of the time the traces took, and the device acts on the write and replies
+at once, so the seconds are on the air or in the phone, not in the protocol.
+
 **Fix.** The schema's number on both sides — `SyncPipe.xferTimeoutMs`, the same
 `--xfer-timeout` the device was generated with. A budget shorter than the peer's patience
 is a request re-sent into work that is still happening; longer is only slower.
+
+**What the number cannot fix.** A budget long enough to outlast a slow acknowledgement
+is a trace that starts late by construction, and the wait has nothing to do with the
+trace: the device streams as soon as the write lands, so a chunk for the rep being asked
+for is already proof the request arrived. The ack is wanted to know the *request* was
+received, and the answer to that question arrives twice — once as the ack, once as data.
 
 **Related.** This is the same shape of bug as the window (127) and the frame size (23): a
 number written by hand in one end that the schema already declares for both. When a
@@ -563,9 +634,11 @@ for anything.
 
 *The frame.* Each chunk was sized from `conn.raw().att_mtu()`, and this link reports
 **23** — the spec's default, which trouble-host keeps until an Exchange MTU Request
-arrives, and **macOS never sends one** (`connection_manager.rs`:
+arrives, and **macOS never sends one unasked** (`connection_manager.rs`:
 `storage.att_mtu = 23` when a connection is set up). Fourteen bytes of payload per
 notification is what that number means, so a 2 KB trace chunk was ~150 notifications.
+The app asks for one now (`BleLink.requestMtu`) and the link reports 247, so 23 is only
+what a client that says nothing gets.
 
 The two together sent those 150 as one blast. The phone's writes queue behind it,
 including the acknowledgements the device was waiting for: thirty-five seconds of

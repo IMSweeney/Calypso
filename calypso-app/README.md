@@ -137,10 +137,10 @@ checked in:
 what wraps it: scanning, connecting, reassembly and the timeouts a schema cannot
 describe.
 
-Fixtures are generated from the core crate, not written by hand:
+Fixtures are generated from the sim crate, not written by hand:
 
 ```sh
-cd .. && cargo run -p calypso-core --example gen_fixtures
+cd ../sim && cargo run --example gen_fixtures
 ```
 
 See [`docs/FIXTURES.md`](../docs/FIXTURES.md) for what each fixture is for, and

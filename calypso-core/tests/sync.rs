@@ -63,7 +63,7 @@ fn worst_case_summary_fits_a_transfer() {
         pitch_max_deg: f32::MAX,
         trace_len: u32::MAX,
         chunk_count: u32::MAX,
-        decimated: true,
+        flags: calypso_core::rep::REP_FLAG_DECIMATED,
         t_unix_ms: u64::MAX,
     };
     let (_, n) = wire(&summary_message(summary));

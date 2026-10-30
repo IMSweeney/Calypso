@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:calypso/logging/setup.dart';
 import 'package:calypso/gatt/gatt_client.dart';
+import 'package:calypso/protocol/calypso.pb.dart' as pb;
+import 'package:calypso/state/device_reports.dart';
 import 'package:calypso/transport/ble_transport.dart';
 import 'package:calypso/transport/transport.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -152,6 +154,68 @@ void main() {
       await logging.close();
     });
   });
+
+  test('a fault from the device is in the app log, and named', () async {
+    final records = captureLogs();
+    final link = FakeBleLink();
+    final device = FakeDevice(link)
+      ..servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2));
+    final transport = BleTransport(
+      link,
+      traceTimeout: const Duration(milliseconds: 50),
+    );
+
+    final connecting = transport.connect();
+    await pumpEventQueue();
+    link.seeDevice('device-1', 'Calypso');
+    await connecting;
+
+    device.sendReport(pb.ReportKind.REPORT_KIND_SAMPLER_HOLE);
+    await pumpEventQueue();
+    await transport.close();
+
+    final kind = pb.ReportKind.REPORT_KIND_SAMPLER_HOLE;
+    final fault = records.singleWhere((r) => r.message.contains(kind.name));
+    expect(fault.level, Level.WARNING);
+    expect(fault.loggerName, 'ble');
+    expect(
+      fault.message,
+      contains(describeReport(kind)),
+      reason: 'the sentence on screen and the one in the log are the same one',
+    );
+  });
+
+  test(
+    'the IMU read is in the app log, in the units the sample carries',
+    () async {
+      final records = captureLogs();
+      final link = FakeBleLink();
+      FakeDevice(link)
+        ..servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2))
+        ..servesImu(pb.ImuState(tUptimeMs: 123456, az: 981, qw: 16384));
+      final transport = BleTransport(
+        link,
+        traceTimeout: const Duration(milliseconds: 50),
+      );
+
+      final connecting = transport.connect();
+      await pumpEventQueue();
+      link.seeDevice('device-1', 'Calypso');
+      await connecting;
+      await transport.close();
+
+      final line = records.singleWhere(
+        (r) => r.message.contains(SyncClient.imuUuid),
+      );
+      expect(line.level, Level.FINE);
+      expect(line.message, contains('t=123456 ms'));
+      expect(
+        line.message,
+        contains('a=(0.00, 0.00, 9.81) m/s^2'),
+        reason: 'scaled out of the fixed point, so the log is readable',
+      );
+    },
+  );
 
   test('the transport reports the session, and every message in it', () async {
     final records = captureLogs();

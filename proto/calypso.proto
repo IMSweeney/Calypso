@@ -50,7 +50,11 @@ message RepSummary {
   uint32 t_start_ms = 2;
   uint32 t_end_ms = 3;
   uint32 duration_ms = 4;
-  float rom = 5;  // peak-to-peak displacement on the dominant axis
+  // Peak-to-peak vertical travel: the range of motion, on Z. Z is the axis the
+  // fusion pins to gravity; X and Y are the mount's heading and drift with yaw,
+  // so the largest excursion is not the rep's range of motion and may be the
+  // estimate's error rather than the bar.
+  float rom = 5;
   float peak_velocity = 6;
   float mean_velocity = 7;
   float peak_accel = 8;
@@ -60,7 +64,21 @@ message RepSummary {
   float pitch_max_deg = 12;
   uint32 trace_len = 13;    // trace points stored across all chunks
   uint32 chunk_count = 14;  // TraceChunk records following this summary
-  bool decimated = 15;      // trace was decimated to fit device memory
+  // One bit per fact about this rep, so a summary can grow one without paying
+  // a tag and a byte for each bool (`REP_FLAG_*` in `calypso_core::rep`):
+  //
+  //   bit 0  DECIMATED   the trace was decimated to fit device memory
+  //   bit 1  CALIBRATED  the IMU's accelerometer was calibrated as well as its
+  //                      gyroscope when the rep was recorded
+  //
+  // Field 15 was `bool decimated` before this. A bool is a varint too, so a
+  // record written then still reads back here: bit 0 is the bit that bool was.
+  //
+  // CALIBRATED is the fact the recording gate does not require. A rep is
+  // recorded whenever the gyroscope is calibrated, because its drift is what
+  // fabricates motion; the accelerometer's status wanders on its own, so a rep
+  // taken while it was low is still a real rep, recorded with this bit clear.
+  uint32 flags = 15;
   // The rep's wall-clock time, unix milliseconds, or 0 when the device had no
   // clock for the boot that recorded it.
   //
@@ -69,6 +87,28 @@ message RepSummary {
   // been written: a stored summary therefore carries its uptime (`t_start_ms`)
   // and the boot's clock travels as its own record (`BootClock`).
   uint64 t_unix_ms = 16;
+}
+
+// The IMU as the sampler last read it: the sample the rep detector is fed.
+//
+// Read, never notified, and a snapshot rather than a stream: the device republishes it
+// ten times a second, so a client that wants to watch the sensor polls it.
+// Fixed point at the same scales a `TraceSample` uses, so a readout can be compared with
+// what a stored trace carries for the same moment.
+message ImuState {
+  // When the sampler read it, ms since boot. Read against a client's own idea of when the
+  // read was issued: a value that stops moving while the rep log keeps growing is a
+  // stalled sampler.
+  uint32 t_uptime_ms = 1;
+  // Linear acceleration (gravity removed), body frame: 0.01 m/s^2 per LSB.
+  sint32 ax = 2;
+  sint32 ay = 3;
+  sint32 az = 4;
+  // Orientation: 1/2^14 per LSB, order [w, x, y, z], as `TraceSample` carries it.
+  sint32 qw = 5;
+  sint32 qx = 6;
+  sint32 qy = 7;
+  sint32 qz = 8;
 }
 
 // A slice of a rep's trace: as stored in the log, and as sent over BLE.
@@ -273,4 +313,8 @@ enum ReportKind {
   // The radio's own machinery failed: the HCI runner errored, or advertising
   // could not be started. The device may be invisible or unreachable.
   REPORT_KIND_RADIO_FAILED = 11;
+  // The sampler stopped long enough to leave a gap in its timeline. A rep that
+  // spans the gap was measured across motion nobody saw, so its travel can read
+  // long, and a rep that happened inside the gap was never seen at all.
+  REPORT_KIND_SAMPLER_HOLE = 12;
 }

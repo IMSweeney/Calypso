@@ -18,6 +18,7 @@ Service `0000ca20-b0cd-11ec-871f-d45ddf138840` — advertised, so a scan can fil
 | `0000ca24-…` | read | the IMU's calibration state, as a `CalibrationStatus` |
 | `0000ca25-…` | notify | the device's own faults, as a `Report` |
 | `0000ca23-…` | write | the device's clock, as unix seconds — the app sets it on every connection |
+| `0000ca26-…` | read | the IMU as the sampler last read it, as an `ImuState` |
 
 **One characteristic each way for messages, and that is the design.** The body of the
 message says what it is — a `summary` or a `trace` chunk — so nothing here
@@ -51,6 +52,19 @@ summaries it exists to date, because the device holds this boot's summaries unti
 has a clock — see [Time](#time). It is required at connect like the rest — a device
 missing any of the five is refused, by name, before anything is read or written — and
 the clock and the faults are the two whose absence would otherwise be silent.
+
+The IMU's own values are the one **diagnostic** in the table: the sample the rep
+detector is fed — linear acceleration, quaternion, and when the sampler read it — at
+the fixed point a stored trace carries, so a readout can be compared against a rep's
+own numbers. The device republishes it ten times a second, so a reader gets the most
+recent sample whenever it asks, and `t_uptime_ms` says how recent.
+
+The app reads it once per connection and logs it; **nothing on screen shows it yet**.
+A generic BLE client — nRF Connect and the like, or a script on a laptop — is the
+other reader, and gets the same value. The characteristic is known to the app rather
+than required: one a build does not know makes every attribute past it a different
+table's, which is why adding one to the firmware needs an app that already names it,
+while a device from before it existed still syncs reps.
 
 GAP is the other service: `0x2A00` (the device name) and `0x2A01` (the appearance),
 both **read only**. The name is a compile-time constant in the firmware. The
@@ -194,6 +208,14 @@ a `ReportKind` and nothing else.
   back: there is no "and it is now fine" message, and a latest-one-you-can-read would
   be a state the device would have to call current. What the app shows is the latest
   fault of this connection and how many have arrived.
+- **Closing one closes its kind.** The banner has a close button, and what it closes is
+  the class of failure rather than the single arrival: the device repeats a fault that
+  is still happening once a second, so a dismissal a repeat could undo would undo
+  itself. A different kind opens it again, and so does a new connection.
+- **Every arrival is in the app log**, as `device REPORT_KIND_…: <sentence>` — the kind
+  name so that a line here can be matched to a firmware log or a bug report, and the
+  sentence so the log reads without the app in front of you. Closing the banner stops
+  neither.
 - **Once a second, however often it happens.** A fault is latched at the source and
   coalesced per kind (`calypso_core::report`), so an IMU that has stopped answering at
   100 Hz is one line a second rather than a hundred, and a *different* kind is news at
@@ -254,3 +276,11 @@ truth for what the app shows**:
   second file to keep in step with it. The list is ordered by that time rather than
   by the order the archive was written in, which is what makes a catch-up land in
   the order it happened rather than in the order it arrived.
+- **What else a rep carries is in `RepSummary.flags`, one bit each.** `DECIMATED`
+  says the trace was thinned to fit the device's buffer; `CALIBRATED` says the IMU's
+  accelerometer was calibrated as well as its gyroscope when the rep was recorded.
+  The device records a rep on the gyroscope alone ([`CALIBRATION.md`](CALIBRATION.md)),
+  so a rep with that bit clear is a real rep taken while the accelerometer's status
+  was wandering, and the list says so on the row. The bits are constants in
+  `calypso_core::rep` and mirrored in the app's `model/rep.dart`; the field was a
+  single `bool` before, so a record written then reads back as the `DECIMATED` bit.

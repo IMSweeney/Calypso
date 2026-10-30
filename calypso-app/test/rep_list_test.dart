@@ -525,6 +525,51 @@ void _dayBoundary() {
     await ble.close();
   });
 
+  testWidgets('a real capture lists on its own day, whole', (tester) async {
+    // A fixture of what a device actually recorded, rather than of what a generator thinks motion looks like:
+    // three reps an hour apart on 27 October, two of them decimated, all of them dated.
+    final archive = MemoryArchive();
+    final ble = BleTransport(
+      FakeBleLink(),
+      traceTimeout: const Duration(milliseconds: 50),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RepListScreen(
+          archive: archive,
+          ble: ble,
+          fixture: 'real-reps',
+          clock: fixtureNow,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ListTile), findsNWidgets(3));
+    expect(archive.reps.length, 3);
+    await ble.close();
+    expect(
+      archive.reps.every((r) => r.recordedAt != null),
+      isTrue,
+      reason: 'a real rep carries the time the device stamped on it',
+    );
+    expect(find.text('Today'), findsNothing);
+    expect(
+      find.textContaining(RegExp(r'^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}')),
+      findsOneWidget,
+      reason: 'the list opens on the day the fixture happened',
+    );
+    expect(rowTitles(tester), hasLength(3));
+    expect(
+      rowTitles(tester).toSet(),
+      hasLength(3),
+      reason: 'three reps at three times, not three rows saying the same thing',
+    );
+    // This capture was recorded before `CALIBRATED` existed, so not one of its reps claims it. That is the
+    // compatibility story in one assertion: the old records still read, and the bit they never wrote is clear.
+    expect(find.textContaining('not calibrated'), findsNWidgets(3));
+  });
+
   testWidgets('a rep the device could not date is on no page', (tester) async {
     final archive = MemoryArchive();
     final (_, device, ble) = await connectedList(tester, archive: archive);

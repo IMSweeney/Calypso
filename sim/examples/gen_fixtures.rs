@@ -1,19 +1,21 @@
 //! Writes the client's test fixtures to `calypso-app/assets/fixtures/`.
-//! Fixtures are `.pblog` log dumps from the firmware's own encoders (see `calypso_core::fixtures`), so they cannot drift from the wire format.
+//! Fixtures are `.pblog` log dumps from the firmware's own encoders (see `calypso_sim::fixtures`), so they cannot drift from the wire format.
 //!
-//! Run from the repo root: `cargo run -p calypso-core --example gen_fixtures`
+//! Run from this crate: `cargo run --example gen_fixtures`
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use calypso_core::fixtures::{self, push_record, push_rep, squat_set};
 use calypso_core::pb::{self, msg};
-use calypso_core::rep::{compute_rep, TraceBuf, TracePoint};
+use calypso_core::rep::{
+    compute_rep, TraceBuf, TracePoint, REP_FLAG_CALIBRATED, REP_FLAG_DECIMATED,
+};
 use calypso_core::store::RECORD_BUF_BYTES;
 use calypso_core::uuid::fixture_uuid;
+use calypso_sim::fixtures::{self, push_record, push_rep, squat_set};
 
 fn repo_root() -> PathBuf {
-    // <repo>/calypso-core/examples/gen_fixtures.rs -> <repo>
+    // <repo>/sim/examples/gen_fixtures.rs -> <repo>
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("calypso-core lives in the repo root")
@@ -52,13 +54,14 @@ fn main() -> std::io::Result<()> {
             t_end_ms: 1_100,
             duration_ms: 200,
             trace_len: 1,
+            flags: REP_FLAG_CALIBRATED,
             ..Default::default()
         };
         push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();
         write(&dir, "single-point.pblog", &dump)?;
     }
 
-    // 3. A long rep as the device would store it: more trace points than the device's 512-point buffer, so the trace comes back decimated with `decimated = true`.
+    // 3. A long rep as the device would store it: more trace points than the device's 512-point buffer, so the trace comes back with the decimated flag set.
     //
     //    Built by running the trace computation directly rather than through the detector: a smooth 5 s squat has a peak acceleration of ~0.5 m/s^2, under the detector's 0.6 m/s^2 start threshold.
     //    Real long reps are jerky (that is why a long rep can overflow the device buffer at all), but a smooth synthetic one cannot trip the detector.
@@ -73,12 +76,13 @@ fn main() -> std::io::Result<()> {
         let mut trace = TraceBuf::new(&mut storage);
         let mut summary = compute_rep(window, &mut trace);
         assert!(
-            summary.decimated,
+            summary.decimated(),
             "a 10 s rep should exceed the 512-point buffer"
         );
         assert_eq!(summary.trace_len, 512);
 
         summary.rep_uuid = pb::uuid_to_field(&fixture_uuid(1));
+        summary.flags |= REP_FLAG_CALIBRATED;
         let mut dump = fixtures::new_dump(&mut rec_buf);
         push_rep(&mut dump, &mut rec_buf, &mut summary, trace.as_slice()).unwrap();
         write(&dir, "long-decimated.pblog", &dump)?;
@@ -96,6 +100,7 @@ fn main() -> std::io::Result<()> {
             peak_velocity: 0.7,
             trace_len: 140,
             chunk_count: 3,
+            flags: REP_FLAG_CALIBRATED,
             ..Default::default()
         };
         let n = pb::encode_summary(&summary, &mut rec_buf).unwrap();
@@ -128,7 +133,7 @@ fn main() -> std::io::Result<()> {
             pitch_min_deg: f32::MIN,
             pitch_max_deg: f32::MAX,
             trace_len: trace.len() as u32,
-            decimated: true,
+            flags: REP_FLAG_DECIMATED,
             ..Default::default()
         };
         push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();

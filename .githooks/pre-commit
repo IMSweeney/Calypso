@@ -45,6 +45,7 @@ check_rust() {
 
 check_rust calypso-core
 check_rust calypso-esp32
+check_rust sim
 check_rust tools/gatt-gen
 check_rust tools/gatt-pipe
 

@@ -18,6 +18,9 @@ fn sample(t_ms: u32, accel: [f32; 3], quat: [i16; 4]) -> Sample {
     }
 }
 
+/// `reps` out-and-backs of `up_ms` each, `rest_ms` of stillness between them, over a sensor that reads a small bias while it is still.
+///
+/// The acceleration is a cosine, so the velocity is zero where the bar turns around as well as at the ends: a rep that travels out and never comes back is a push, and a detector tuned on one has nothing to learn about reps.
 fn squat_set(
     reps: usize,
     up_ms: u32,
@@ -38,7 +41,7 @@ fn squat_set(
         let steps = up_ms / DT_MS;
         for i in 0..steps {
             let phase = i as f32 / steps as f32;
-            let a = peak_accel * libm::sinf(2.0 * core::f32::consts::PI * phase);
+            let a = peak_accel * libm::cosf(2.0 * core::f32::consts::PI * phase);
             out.push(sample(t, [0.0, 0.0, a], Q_ID));
             t += DT_MS;
         }
@@ -80,6 +83,85 @@ fn detector_finds_each_rep_in_a_set() {
         );
     }
     assert_eq!(det.state(), State::Idle);
+}
+
+/// A set nobody pauses through: the reps run back to back, and the only rest in the whole thing is after the last one.
+fn no_pause_set(reps: usize, up_ms: u32, peak_accel: f32) -> (Vec<Sample>, Vec<RepSpan>) {
+    let (mut samples, spans) = squat_set(reps, up_ms, 0, peak_accel);
+    let mut t = samples.last().expect("a set has samples").t_ms + DT_MS;
+    for _ in 0..(2 * HZ) {
+        samples.push(sample(t, [0.01, 0.0, 0.0], Q_ID));
+        t += DT_MS;
+    }
+    (samples, spans)
+}
+
+#[test]
+fn detector_finds_each_rep_in_a_set_nobody_pauses_through() {
+    let (samples, expected) = no_pause_set(5, 1500, 3.0);
+    let mut det = Detector::new();
+    let mut found = Vec::new();
+    for s in &samples {
+        if let Some(span) = det.update(s) {
+            found.push(span);
+        }
+    }
+    assert_eq!(
+        found.len(),
+        expected.len(),
+        "five reps with no rest between them are five reps, not {:?}",
+        found
+    );
+    for (got, want) in found.iter().zip(expected.iter()) {
+        // Symmetric, because nothing stops between the reps: the bar is moving at the boundary, so the first sample of a rep can be one either side of it.
+        assert!(
+            (got.start_ms as i64 - want.start_ms as i64).abs() <= 250,
+            "start {:?} vs {:?}",
+            got,
+            want
+        );
+        assert!(
+            (got.end_ms as i64 - want.end_ms as i64).abs() <= 250,
+            "end {:?} vs {:?}",
+            got,
+            want
+        );
+        assert!(
+            got.duration_ms() >= 1000 && got.duration_ms() <= 2000,
+            "a rep that lasts {:?} is not one of five",
+            got
+        );
+    }
+}
+
+/// What the one real capture was full of: acceleration enough to start and stop a rep, on a sensor that never went anywhere — 0.03-0.09 m of travel against 0.21 m for the smallest real rep.
+#[test]
+fn a_wobble_is_not_a_rep() {
+    let mut samples = Vec::new();
+    let mut t = 0;
+    for _ in 0..30 {
+        samples.push(sample(t, [0.01, 0.0, 0.0], Q_ID));
+        t += DT_MS;
+    }
+    // Three seconds of a 6 Hz shake: acceleration to spare, and nowhere to go — 2.5 m/s^2 at that rate is 3 mm of travel.
+    for _ in 0..300 {
+        let a = 2.5 * libm::sinf(2.0 * core::f32::consts::PI * 6.0 * t as f32 / 1000.0);
+        samples.push(sample(t, [0.0, 0.0, a], Q_ID));
+        t += DT_MS;
+    }
+    for _ in 0..100 {
+        samples.push(sample(t, [0.01, 0.0, 0.0], Q_ID));
+        t += DT_MS;
+    }
+    let mut storage = [TracePoint::ZERO; TRACE_CAP];
+    let mut trace = TraceBuf::new(&mut storage);
+    let sum = compute_rep(&samples, &mut trace);
+    assert!(!sum.is_a_rep(), "{} m of wobble was called a rep", sum.rom);
+
+    let (samples, _) = squat_set(1, 3000, 800, 3.0);
+    let mut trace = TraceBuf::new(&mut storage);
+    let sum = compute_rep(&samples, &mut trace);
+    assert!(sum.is_a_rep(), "a real rep was thrown away: {} m", sum.rom);
 }
 
 #[test]
@@ -190,6 +272,37 @@ fn peak_to_peak_z(buf: &TraceBuf<'_>) -> f32 {
     hi - lo
 }
 
+/// A rep that swung sideways further than it went up: what the range of motion must not be measured on.
+#[test]
+fn rom_is_the_vertical_travel_not_the_biggest_excursion() {
+    let vertical = 0.4f32;
+    let mut samples = known_motion(vertical, 1500, MARGIN_MS);
+    // A sideways push of five times the vertical acceleration: same shape, five times the excursion, so the largest
+    // range in the trace is on X and the answer has to ignore it.
+    for s in samples.iter_mut() {
+        s.accel[0] = s.accel[2] * 5;
+    }
+    let mut storage = [TracePoint::ZERO; TRACE_CAP];
+    let mut buf = TraceBuf::new(&mut storage);
+    let sum = compute_rep(&samples, &mut buf);
+
+    let range = |f: &dyn Fn(&TracePoint) -> f32| {
+        let values: Vec<f32> = buf.as_slice().iter().map(f).collect();
+        values.iter().cloned().fold(f32::MIN, f32::max)
+            - values.iter().cloned().fold(f32::MAX, f32::min)
+    };
+    let lateral = range(&|p| p.pos[0]);
+    assert!(
+        lateral > 2.0 * vertical,
+        "the test's own sideways excursion is bigger: {lateral}"
+    );
+    assert!(
+        (sum.rom - vertical).abs() < 0.3 * vertical,
+        "rom {} for {vertical} m of lift and {lateral} m of swing",
+        sum.rom
+    );
+}
+
 #[test]
 fn compute_rep_recovers_known_displacement() {
     let a = 0.4f32;
@@ -198,7 +311,7 @@ fn compute_rep_recovers_known_displacement() {
     let mut buf = TraceBuf::new(&mut storage);
     let sum = compute_rep(&samples, &mut buf);
 
-    assert!(!sum.decimated);
+    assert!(!sum.decimated());
     assert_eq!(sum.trace_len, samples.len() as u32);
     assert_eq!(sum.duration_ms, 1500 + 2 * MARGIN_MS);
     let peak_to_peak = peak_to_peak_z(&buf);
@@ -240,7 +353,7 @@ fn trace_is_decimated_when_it_does_not_fit() {
     let mut storage = [TracePoint::ZERO; 64];
     let mut buf = TraceBuf::new(&mut storage);
     let sum = compute_rep(&samples, &mut buf);
-    assert!(sum.decimated);
+    assert!(sum.decimated());
     assert!(sum.trace_len <= 64);
     assert!(sum.trace_len >= 50, "trace_len {}", sum.trace_len);
     assert_eq!(

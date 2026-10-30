@@ -31,6 +31,7 @@ const ReportKind$json = {
     {'1': 'REPORT_KIND_TRACE_UNREADABLE', '2': 9},
     {'1': 'REPORT_KIND_NOTIFY_FAILED', '2': 10},
     {'1': 'REPORT_KIND_RADIO_FAILED', '2': 11},
+    {'1': 'REPORT_KIND_SAMPLER_HOLE', '2': 12},
   ],
 };
 
@@ -43,7 +44,7 @@ final $typed_data.Uint8List reportKindDescriptor = $convert.base64Decode(
     'VF9LSU5EX0NMT0NLX05PVF9QRVJTSVNURUQQBhIiCh5SRVBPUlRfS0lORF9UUkFOU0ZFUl9BQk'
     'FORE9ORUQQBxIfChtSRVBPUlRfS0lORF9SRVFVRVNUX1JFRlVTRUQQCBIgChxSRVBPUlRfS0lO'
     'RF9UUkFDRV9VTlJFQURBQkxFEAkSHQoZUkVQT1JUX0tJTkRfTk9USUZZX0ZBSUxFRBAKEhwKGF'
-    'JFUE9SVF9LSU5EX1JBRElPX0ZBSUxFRBAL');
+    'JFUE9SVF9LSU5EX1JBRElPX0ZBSUxFRBALEhwKGFJFUE9SVF9LSU5EX1NBTVBMRVJfSE9MRRAM');
 
 @$core.Deprecated('Use traceSampleDescriptor instead')
 const TraceSample$json = {
@@ -88,7 +89,7 @@ const RepSummary$json = {
     {'1': 'pitch_max_deg', '3': 12, '4': 1, '5': 2, '10': 'pitchMaxDeg'},
     {'1': 'trace_len', '3': 13, '4': 1, '5': 13, '10': 'traceLen'},
     {'1': 'chunk_count', '3': 14, '4': 1, '5': 13, '10': 'chunkCount'},
-    {'1': 'decimated', '3': 15, '4': 1, '5': 8, '10': 'decimated'},
+    {'1': 'flags', '3': 15, '4': 1, '5': 13, '10': 'flags'},
     {'1': 't_unix_ms', '3': 16, '4': 1, '5': 4, '10': 'tUnixMs'},
   ],
 };
@@ -103,8 +104,29 @@ final $typed_data.Uint8List repSummaryDescriptor = $convert.base64Decode(
     'xsTWluRGVnEiAKDHJvbGxfbWF4X2RlZxgKIAEoAlIKcm9sbE1heERlZxIiCg1waXRjaF9taW5f'
     'ZGVnGAsgASgCUgtwaXRjaE1pbkRlZxIiCg1waXRjaF9tYXhfZGVnGAwgASgCUgtwaXRjaE1heE'
     'RlZxIbCgl0cmFjZV9sZW4YDSABKA1SCHRyYWNlTGVuEh8KC2NodW5rX2NvdW50GA4gASgNUgpj'
-    'aHVua0NvdW50EhwKCWRlY2ltYXRlZBgPIAEoCFIJZGVjaW1hdGVkEhoKCXRfdW5peF9tcxgQIA'
-    'EoBFIHdFVuaXhNcw==');
+    'aHVua0NvdW50EhQKBWZsYWdzGA8gASgNUgVmbGFncxIaCgl0X3VuaXhfbXMYECABKARSB3RVbm'
+    'l4TXM=');
+
+@$core.Deprecated('Use imuStateDescriptor instead')
+const ImuState$json = {
+  '1': 'ImuState',
+  '2': [
+    {'1': 't_uptime_ms', '3': 1, '4': 1, '5': 13, '10': 'tUptimeMs'},
+    {'1': 'ax', '3': 2, '4': 1, '5': 17, '10': 'ax'},
+    {'1': 'ay', '3': 3, '4': 1, '5': 17, '10': 'ay'},
+    {'1': 'az', '3': 4, '4': 1, '5': 17, '10': 'az'},
+    {'1': 'qw', '3': 5, '4': 1, '5': 17, '10': 'qw'},
+    {'1': 'qx', '3': 6, '4': 1, '5': 17, '10': 'qx'},
+    {'1': 'qy', '3': 7, '4': 1, '5': 17, '10': 'qy'},
+    {'1': 'qz', '3': 8, '4': 1, '5': 17, '10': 'qz'},
+  ],
+};
+
+/// Descriptor for `ImuState`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List imuStateDescriptor = $convert.base64Decode(
+    'CghJbXVTdGF0ZRIeCgt0X3VwdGltZV9tcxgBIAEoDVIJdFVwdGltZU1zEg4KAmF4GAIgASgRUg'
+    'JheBIOCgJheRgDIAEoEVICYXkSDgoCYXoYBCABKBFSAmF6Eg4KAnF3GAUgASgRUgJxdxIOCgJx'
+    'eBgGIAEoEVICcXgSDgoCcXkYByABKBFSAnF5Eg4KAnF6GAggASgRUgJxeg==');
 
 @$core.Deprecated('Use traceChunkDescriptor instead')
 const TraceChunk$json = {

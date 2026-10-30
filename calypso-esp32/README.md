@@ -97,3 +97,9 @@ bracketed with its duration (flash and the radio share the chip), and a
 `BLE disconnected` line names the reason the link ended. A drop on the phone side
 — `The connection has timed out unexpectedly` — is one of those durations, which is
 what the stamp is for.
+
+The same clock is what reads a `sampler hole: … ms without a sample` error against
+the rest: the sampler task stopped for that long, and the lines leading up to it —
+a flash write's duration, a link event — are what it stopped behind. Any rep whose
+window spans the gap has that time bridged by the trace integration, and the app is
+told the same thing as a `REPORT_KIND_SAMPLER_HOLE`.

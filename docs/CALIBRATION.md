@@ -19,13 +19,20 @@ meaning fully calibrated.
 
 ## The rule
 
-`Calibration::is_ready()` is `accel == 3 && gyro == 3` (`calypso-core::calibration`),
-and that is the gate reps are held behind. `sys` and `mag` are reported for the
-console only, and neither can reach 3 on this device.
+`Calibration::can_record()` is `gyro == 3` (`calypso-core::calibration`), and that is
+the gate reps are held behind. The gyroscope is the level that has to be trusted — its
+drift is what fabricates motion — while the accelerometer's status wanders on its own
+while the chip sits still, and waiting for it costs reps at random. `sys` and `mag` are
+reported for the console only, and neither can reach 3 on this device.
 
-The same gate triggers the profile save, so a gate that never opens never saves one.
-Whether a *restored* profile comes back as calibrated is open — see
-[`../ROADMAP.md`](../ROADMAP.md).
+A rep stores whether the accelerometer was calibrated too, as the `CALIBRATED` bit of
+`RepSummary.flags` (`proto/calypso.proto`), so the reps taken while it was low are still
+recorded and are marked as such rather than being lost.
+
+The **profile save** still wants `accel == 3` as well: the accelerometer's offsets are
+the part that cannot be re-derived, so a profile saved without them restores nothing.
+That is the one place the accelerometer is waited for. Whether a *restored* profile
+comes back as calibrated is open — see [`../ROADMAP.md`](../ROADMAP.md).
 
 ## The calibration profile
 
@@ -35,4 +42,5 @@ a reboot.
 
 - Stored in the `nvs` partition at offset `0x00`, in the first sector — the only
   thing in there.
-- Saved **once per boot**, on the transition to `is_ready()`, not at boot.
+- Saved **once per boot**, on the transition to `profile_worth_saving()` — gyroscope
+  and accelerometer both at 3 — not at boot.

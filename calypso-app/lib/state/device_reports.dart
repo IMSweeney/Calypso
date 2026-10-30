@@ -15,6 +15,7 @@ import '../protocol/calypso.pb.dart' as pb;
 /// glitch from a device that is still failing.
 class DeviceReports extends ChangeNotifier {
   pb.ReportKind? _latest;
+  pb.ReportKind? _dismissed;
   int _count = 0;
 
   /// The most recent fault this connection, or `null` for a device that has not
@@ -24,10 +25,25 @@ class DeviceReports extends ChangeNotifier {
   /// How many faults have arrived since the app connected.
   int get count => _count;
 
-  /// The latest fault as a sentence, or `null` when there has not been one.
+  /// The latest fault as a sentence, or `null` when there has not been one or it has
+  /// been [dismiss]ed.
   String? get message {
     final latest = _latest;
-    return latest == null ? null : describeReport(latest);
+    if (latest == null || latest == _dismissed) return null;
+    return describeReport(latest);
+  }
+
+  /// Close the fault on screen.
+  ///
+  /// It closes the **kind**, not the one arrival: a device that is still failing repeats
+  /// its fault once a second, so a dismissal a repeat could undo would undo itself on the
+  /// next tick. A different kind is news and reopens it, and so does a new connection
+  /// ([clear]) — the same sentence, on a link that has not heard it yet.
+  void dismiss() {
+    final latest = _latest;
+    if (latest == null || latest == _dismissed) return;
+    _dismissed = latest;
+    notifyListeners();
   }
 
   void add(pb.ReportKind kind) {
@@ -39,6 +55,7 @@ class DeviceReports extends ChangeNotifier {
   void clear() {
     if (_latest == null && _count == 0) return;
     _latest = null;
+    _dismissed = null;
     _count = 0;
     notifyListeners();
   }
@@ -76,5 +93,8 @@ String describeReport(pb.ReportKind kind) => switch (kind) {
     'The device could not send a notification.',
   pb.ReportKind.REPORT_KIND_RADIO_FAILED =>
     'The device\'s radio reported a failure: it may be hard to reach.',
+  pb.ReportKind.REPORT_KIND_SAMPLER_HOLE =>
+    'The device stopped sampling for a moment: a rep from then may show more '
+        'travel than it made.',
   _ => 'The device reported a problem (#${kind.value}).',
 };

@@ -3,27 +3,25 @@
 //! A dump is the `RepRecord` messages the device stores, framed as `[u32 little-endian length][record bytes]`.
 //! Records come from the same `pb::encode_*` calls the firmware uses, so a fixture cannot drift from the wire format.
 //!
-//! Tooling support — the firmware never calls it. Used by `examples/gen_fixtures.rs` and the store tests.
+//! The firmware never calls any of this: the generators live outside `calypso-core` so that the device's library carries nothing it does not use.
 
-use alloc::vec::Vec;
-
-use crate::pb::{self, msg};
-use crate::rep::{compute_rep, Detector, RepSpan, TraceBuf, TracePoint, MARGIN_MS};
-use crate::sampler::{quantize, Sample, SampleRing, ACCEL_SCALE, QUAT_SCALE};
-use crate::store::RECORD_BUF_BYTES;
-use crate::uuid;
+use calypso_core::pb::{self, msg};
+use calypso_core::rep::{compute_rep, Detector, RepSpan, TraceBuf, TracePoint, MARGIN_MS};
+use calypso_core::sampler::{quantize, Sample, SampleRing, ACCEL_SCALE, QUAT_SCALE};
+use calypso_core::store::RECORD_BUF_BYTES;
+use calypso_core::uuid;
 
 /// Sample interval used by the synthetic fixtures (100 Hz, like the device).
 pub const SAMPLE_DT_MS: u32 = 10;
 
 /// The wall clock the fixtures are dated from: 2026-01-01T00:00:00Z.
 ///
-/// A fixed second rather than the time of generation, so a regenerated fixture is byte-identical, and one late enough that the device would believe it (`crate::clock::EARLIEST_S`).
+/// A fixed second rather than the time of generation, so a regenerated fixture is byte-identical, and one late enough that the device would believe it (`calypso_core::clock::EARLIEST_S`).
 pub const FIXTURE_EPOCH_S: u32 = 1_767_225_600;
 
 /// A dump that starts the way a log does: with the boot's clock.
 ///
-/// Every boot writes one at mount (`crate::clock`), so a dump without one is a log whose reps can never be dated — and the app labels and orders its list by that time.
+/// Every boot writes one at mount (`calypso_core::clock`), so a dump without one is a log whose reps can never be dated — and the app labels and orders its list by that time.
 pub fn new_dump(rec_buf: &mut [u8]) -> Vec<u8> {
     let mut dump = Vec::new();
     let n =
@@ -86,16 +84,16 @@ pub fn squat_set(reps: usize, t_ms: u32, rest_ms: u32, a: f32) -> (Vec<Sample>, 
 }
 
 /// Replay samples through the sampler pipeline the firmware runs: ring buffer, detector, then the ZUPT-anchored trace per detected rep.
-/// `trace_capacity` caps stored trace points as on the device, so a long rep comes back decimated with `summary.decimated == true`.
+/// `trace_capacity` caps stored trace points as on the device, so a long rep comes back with the decimated flag set.
 pub fn detect_and_trace(
     samples: &[Sample],
     trace_capacity: usize,
 ) -> Vec<(msg::RepSummary, Vec<TracePoint>)> {
-    let mut ring_buf = alloc::vec![Sample::ZERO; REPLAY_RING];
+    let mut ring_buf = vec![Sample::ZERO; REPLAY_RING];
     let mut ring = SampleRing::new(&mut ring_buf);
     let mut det = Detector::new();
-    let mut window = alloc::vec![Sample::ZERO; WINDOW_SAMPLES];
-    let mut storage = alloc::vec![TracePoint::ZERO; trace_capacity];
+    let mut window = vec![Sample::ZERO; WINDOW_SAMPLES];
+    let mut storage = vec![TracePoint::ZERO; trace_capacity];
     let mut out = Vec::new();
 
     for s in samples {
@@ -112,7 +110,9 @@ pub fn detect_and_trace(
                 continue;
             }
             let mut trace = TraceBuf::new(&mut storage);
-            let summary = compute_rep(&window[..n], &mut trace);
+            let mut summary = compute_rep(&window[..n], &mut trace);
+            // Synthetic motion is fully calibrated by construction, and a fixture that read as "recorded while the accelerometer wandered" would put that caveat on every row of a demo.
+            summary.flags |= calypso_core::rep::REP_FLAG_CALIBRATED;
             out.push((summary, trace.as_slice().to_vec()));
         }
     }

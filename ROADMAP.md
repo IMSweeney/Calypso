@@ -17,7 +17,8 @@ Where Calypso is and what is left. Feature documentation lives in
 - **A chunked pipe over one characteristic each way** — messages larger than one
   value are framed, chunked and reassembled by both ends, so a stored trace chunk
   is one transfer rather than three points per notification. Written and tested on
-  both ends; no bench session yet (see Open).
+  both ends, and exercised end to end by a real session — every trace whole, none
+  abandoned — but no controlled bench session yet (see Open).
 - **A generated BLE interface** — `proto/calypso_gatt.proto` declares the service
   and its characteristics; `gatt-gen` writes the device's table
   (`calypso-core/src/gatt.rs`) and the app's typed client
@@ -36,9 +37,12 @@ Where Calypso is and what is left. Feature documentation lives in
   reached has no clock, and its reps are never offered. **Not yet run on
   hardware.** See [docs/APP_SYNC.md](docs/APP_SYNC.md).
 - **Diagnostics that can be read back** — the app logs every BLE message to a
-  rotating file, and the firmware's boot log carries the heap and stack figures.
-  See [calypso-app/README.md](calypso-app/README.md) and
-  [docs/GOTCHAS.md](docs/GOTCHAS.md).
+  rotating file, the firmware's boot log carries the heap and stack figures, and the
+  IMU's own last sample — linear acceleration, quaternion, and when the sampler read
+  it — is a `read` on its own characteristic, in the fixed point a stored trace
+  carries. The app reads it once per connection and logs it (nothing on screen shows
+  it yet), and any BLE client can read it. **Not yet run on hardware.** See
+  [docs/APP_SYNC.md](docs/APP_SYNC.md).
 - **The device's own faults reach the app** — a failed mount, a rep that could not be
   stored, an IMU that stopped answering, a transfer the link dropped: each is now a
   `Report` kind pushed on its own characteristic, raised once a second however often it
@@ -49,37 +53,41 @@ Where Calypso is and what is left. Feature documentation lives in
 - **A day at a time** — the rep list opens on today and an arrow either side walks it
   back a day per press, headed by the date, so the archive is browsable instead of
   only the current day being reachable. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
+- **Recording survives the accelerometer's status** — a rep is gated on the gyroscope
+  alone, so a chip whose `acc` level wanders no longer stops recording at random, and
+  each rep carries whether the accelerometer was calibrated anyway (a bit on
+  `RepSummary.flags`) instead of the reps being thrown away. The profile save still
+  wants both, because its offsets are the part that cannot be re-derived. **Not yet
+  run on hardware.** See [docs/CALIBRATION.md](docs/CALIBRATION.md).
 
 ## Open
 
 ### The recording gate
 
-- [ ] **Decide what "calibrated" means, because `accel == 3` is not reliable.**
-      The BNO055's accelerometer status wanders while the device sits still: a
-      hardware log reads `acc:3 → acc:1 → acc:0 → acc:0 → acc:1 → acc:3` over
-      ~100 s, with the stored profile applied and verified byte-for-byte at boot.
-      Rep recording is gated on `accel == 3 && gyro == 3`, so it paused and
-      resumed on its own through that window — every dip is a rep not recorded,
-      with no explanation on screen. The options, roughly in order of preference:
-
-      1. gate on the gyroscope only (it is the stable one, and its drift is what
-         fabricates motion);
-      2. treat a profile that read back byte-for-byte as good enough and accept
-         `accel < 3`;
-      3. keep `accel == 3` and accept that a still device stops recording at random.
-
-      The app's hint and [docs/CALIBRATION.md](docs/CALIBRATION.md) both state the
-      rule, so they change with it.
 - [ ] **Settle whether the saved calibration is what the chip wants.** Applying
       the profile reads back byte-for-byte, yet `acc` reads 0 afterwards while
       `gyro` returns to 3 on its own, so either the profile is not the thing the
-      chip derives `ACC` from or the restore is not complete. `accel < 3` is
-      harmless if the gate stops depending on it (above).
+      chip derives `ACC` from or the restore is not complete. Recording no longer
+      waits on `acc` at all, so this now costs the flag on a rep rather than the
+      rep; what still waits on it is the profile save, so a chip that never reports
+      `acc == 3` never has its offsets written.
 
 ### Sync over the pipe
 
-- [ ] **A bench session** for what no host replaces: negotiation, subscription,
-      throughput, and whether the trace latency below is actually gone.
+- [ ] **A trace waits on an acknowledgement it does not need.** Streaming is not
+      the slow part: a chunk is ~8 notifications of 244 bytes and a ten-chunk trace
+      ~78, the framing no longer retries, and every rep in the real session arrived
+      whole. The hop before it is what costs — the request's acknowledgement lands
+      a median 5 s after the write, which is the whole `xferTimeoutMs` budget often
+      enough that most requests were re-sent, and the wait before the first chunk is
+      ~40% of the time a trace takes. The device acts on the write immediately and
+      replies at once, so the seconds are on the air or in the phone. The fix
+      wanted is not a bigger number: a chunk for the rep being asked for is proof
+      the request arrived, so the app should never wait on a round trip it can
+      already see past. Naming which end holds the seconds needs the device's log,
+      which stamps milliseconds.
+- [ ] **A bench session** for what no host replaces: negotiation, subscription and
+      throughput on a link this repo controls.
 
 ### BLE link stability
 
@@ -94,14 +102,19 @@ Where Calypso is and what is left. Feature documentation lives in
       the duration of every erase and write, and the reason a disconnect gives —
       `Connection Timeout` is the supervision timer expiring over a radio that
       heard nothing, which is a flash window being felt, while `Remote User
-      Terminated Connection` is the app letting go. What is left is the other one:
-      does it still drop without `--features fake-reps`?
-- [ ] **Measure trace latency now that the sizes are right.** A window of 127 that
-      sent a whole trace chunk in one blast, and framing from an ATT MTU of 23
-      (macOS never sends the exchange), made a chunk ~150 notifications of 14
-      bytes. It is now ~8 notifications of 244, paced by acknowledgements every 4
-      chunks — a ten-chunk trace should be ~80 notifications instead of ~1500.
-      Watch for `sync … unanswered` warnings and the app's `raw` line lengths.
+      Terminated Connection` is the app letting go. Answered for a real session with
+      no `--features fake-reps`: it still drops, four times inside an hour and a
+      half, and none of them with a transfer in flight — so the flash window is not
+      the one being felt. The sizes are no longer a candidate either: a trace chunk
+      is ~8 notifications of 244 bytes now, and a measure of trace latency found the
+      framing healthy end to end (see Sync over the pipe).
+- [ ] **A device that goes quiet is invisible for minutes.** In the same session the
+      device stopped answering GATT reads and the app went on asking, once a second
+      for six minutes, every read failing `characteristicNotFound`, with its own
+      status still saying connected — iOS only reported the disconnect at the end
+      of it. Nothing on screen said anything was wrong. The app needs a failure it
+      can believe: a read that cannot reach the device, unanswered often enough, is
+      a dead link whatever CoreBluetooth thinks.
 - [ ] **`universal_ble` throws an unhandled `TimeoutException`** when a command is
       issued against a link that has already gone (our code logs its side as
       `trace …: request failed: TimeoutException`), and nothing the caller can
@@ -109,22 +122,41 @@ Where Calypso is and what is left. Feature documentation lives in
       down.
 - [ ] **Values that arrive between a teardown and the next subscribe are dropped**
       by the transport: 507 of 2422 `raw` summary values in one session. Harmless
-      today, because the summaries are re-streamed. The pipe changes the shape — a
-      dropped value becomes a chunk the pipe retries — which is one more reason to
-      do the bench session before tuning this.
+      today, because the summaries are re-streamed. Not seen since the pipe — the
+      real session forwarded every notification it received — but the transport is
+      unchanged, so this is unanswered rather than fixed.
 
 ### First real device capture
 
-- [ ] Run the app against the hardware and check in a capture as a fixture.
-      Hardware rep detection already works (a 4,150 ms squat-shaped rep with 416
-      trace points has been stored and read back), so what is missing is the
-      capture. It is also what settles the frame a trace is in — a real squat should
-      travel down the trace's Z, the axis the plot draws upward, and land the right
-      way up (see [docs/REP_TRACKING.md](docs/REP_TRACKING.md)).
-- [ ] **Re-check the summary stats on real motion.** `mean_velocity` is the mean
+- [ ] **A capture is in the fixtures; what is left is more of one.** Three real reps
+      and one real wobble are checked in from a single bench session and asserted from
+      both ends ([docs/FIXTURES.md](docs/FIXTURES.md)). A second session, with the set
+      count known on the day, is what would make the detector's own numbers testable
+      rather than merely reproducible.
+- [ ] **Whether the frame can be trusted, now that a rep is measured on it.** ROM is
+      the vertical travel on Z rather than the biggest excursion, because Z is the only
+      axis pinned to gravity — a rep's horizontal range is the estimate's error, not the
+      bar. That makes the horizontal ranges a check that nothing is measuring: on the
+      real reps pitch swings 47–82° inside one rep and roll crosses ±180° (the wrap is
+      fixed, the instability is not), and five reps have less vertical travel than
+      sideways. Either the clip turns during a rep or the fusion's orientation is poor,
+      and either way it is the frame that has to be fixed before ROM means anything.
+      Still open: whether a squat lands the right way up
+      (see [docs/REP_TRACKING.md](docs/REP_TRACKING.md)).
+- [ ] **What a rep does with the time it was not sampled.** A hole is motion nobody
+      measured, and the trace integration bridges it as one step: the capture's most
+      extreme rep is missing 2.3 s of the 5.6 s it claims, and the bridged gap lifts the
+      position ~1 m in the 1.1 s after it, which is most of its 1.28 m "ROM" — for a
+      deadlift, whose bar travels about 0.6 m. Three ways to answer it and the choice is
+      not obvious: cap the step (what the detector already does) and a rep reads short
+      instead of long — measured on that capture, five of fourteen fall under `MIN_ROM_M`
+      and are lost; treat a gapped window as unusable and lose the rep outright; or fix
+      the holes above and leave the integration alone.
+- [ ] **The summary stats disagree on real motion.** `mean_velocity` is the mean
       of the *raw* speed while `peak_velocity` is the peak of the *detrended* one,
-      so a mean above the peak means a large DC component rather than a maths bug.
-      Either make the two comparable or document the difference.
+      so a mean above the peak means a large DC component rather than a maths bug —
+      and real reps have it, on the order of five times over. Either make the two
+      comparable or document the difference.
 
 ### Protocol gaps
 
@@ -158,14 +190,50 @@ Where Calypso is and what is left. Feature documentation lives in
       the gauge reports the charger's curve, so it wants to be a hint ("this is going
       to die mid-set") rather than a measurement the app reasons from.
 
+### Detector tests
+
+- [ ] **A tolerance suite for the detector, driven by synthetic reps.** One motion per
+      lift profile — bench, deadlift, squat — described by travel, speed in, speed out and
+      a pause at each end, swept so each class's boundary of detectability is a curve
+      rather than the few shapes that were captured. The first map measures `is_a_rep`
+      alone (would this motion be stored); the noise map adds the impairments the one
+      capture showed; the false-positive map aims the same sweep at motion that is not a
+      rep. The maps run by hand, `cargo test` pins the deterministic points, and the
+      labelled capture stays the reference rather than being replaced. Plan:
+      [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
+
 ### Firmware
 
+- [ ] **A rep's timeline has a hole in it.** Nine of the fourteen reps in one capture
+      carry a ~2.2 s jump in their stored sample times, and each jump is followed by a
+      burst of samples 1–7 ms apart before the normal spacing resumes. The point count
+      is that of a whole window, so the samples were taken and it is the *timestamps*
+      that are wrong — which puts every number derived from the timeline on a distorted
+      axis: duration, peak and mean velocity, ROM, the 0.4–8 s span bounds and the
+      0.10 m travel check. The sampler now logs `sampler hole: … ms without a sample`
+      at the gap and raises `REPORT_KIND_SAMPLER_HOLE`, so the boot log says when it
+      happened, the flash windows and link events around that line say what was running,
+      and the app says a rep from then may read long. What to do about a rep that spans
+      one is still open, and is the item above.
 - [ ] **OTA code updates** — the app partition is 1.5 MB with headroom; dual
       slots would mean shrinking the log partition.
 - [ ] On-device tests with [`embedded-test`](https://crates.io/crates/embedded-test):
       the flash partition layer first, then the radio path.
-- [ ] Tune the detector's thresholds against real reps (`calypso-core/src/rep.rs`);
-      they are fitted to synthetic motion.
+- [ ] **Tune the detector against real reps.** A rep now ends where the bar turns
+      around rather than at a pause, which is what a set nobody pauses through needed
+      (`docs/GOTCHAS.md`), and a synthetic five-rep set with no rest in it is the test
+      for that. What is still fitted to generated motion is the rest: the on and rest
+      thresholds, their debounces, and the speed a reversal must reach. Nothing here
+      has been checked against a set whose rep count is known on the day.
+- [ ] **A rep paused at the top is stored as less than a rep.** The detector closes a
+      span wherever magnitude sits under the rest threshold for `T_REST_MS`, so a bench
+      rep held at lockout arrives as a drive of about 0.10 m and a lowering of about
+      0.08 m: one at the edge of `MIN_ROM_M`, one under it, and the real rep gone. On
+      synthetic motion of that shape the split is exact and repeatable. Which end of a
+      rep a lifter pauses at is what decides whether a set is captured at all, and the
+      one labelled capture cannot say, because the reps that survived are the ones that
+      were not paused. The tolerance suite pins the behaviour; what to change (close on
+      the return rather than on rest, or a longer rest debounce) is open.
 - [ ] **Trim the static heap region if the deepest stack figure ever asks for it.**
       The 64 KB `heap_allocator!` region is what the linker stack competes with
       most, and its surplus is stack the linker cannot use. Each byte trimmed moves
@@ -175,11 +243,7 @@ Where Calypso is and what is left. Feature documentation lives in
 
 ### Client
 
-- [ ] **A rep archived without its trace stays traceless for ever.** The trace
-      fetch failing (a dropped link, say) archives the summary anyway — right, it
-      is real data — but `contains()` then reports that we hold it, so the next
-      sync skips it. Re-requesting traces for archived-but-traceless reps on each
-      sync would turn a transient drop into a retry.
+- [ ] **Plot performance** - camera panning is super laggy in the rep plot view 
 - [ ] **Session grouping** — deliberately skipped for v1: the device log is
       undifferentiated, and grouping reps into sets is a judgement better made with
       real data on screen. The list is flat, a day at a time, newest first.

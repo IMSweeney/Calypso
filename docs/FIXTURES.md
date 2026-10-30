@@ -31,8 +31,14 @@ report that rather than ignore it, and still return the records before it.
 
 ## Generating them
 
+The generators are a crate of their own, `sim`, which depends on `calypso-core` and
+nothing else does. They drive the real detector, the real trace maths and the real
+encoders, so a fixture is the pipeline's own output — and the firmware's library never
+carries a generator it does not call.
+
 ```sh
-cargo run -p calypso-core --example gen_fixtures   # from the repo root
+cd sim
+cargo run --example gen_fixtures
 ```
 
 ## Reading them
@@ -54,9 +60,9 @@ In the app, fixtures are consumed through:
 
 ## Adding to the set
 
-1. Add or extend a generator in `calypso-core/src/fixtures.rs` (or build the record
+1. Add or extend a generator in `sim/src/fixtures.rs` (or build the record
    by hand for a degenerate case, as the single-point fixture does).
-2. Add it to `examples/gen_fixtures.rs`, with a comment saying what it is for.
+2. Add it to `sim/examples/gen_fixtures.rs`, with a comment saying what it is for.
 3. Run the generator and commit the `.pblog` — fixtures are checked in deliberately.
 4. Assert on it from the Rust and/or Dart suite, so it is load-bearing rather than a
    file nobody reads.
@@ -64,3 +70,30 @@ In the app, fixtures are consumed through:
 **A real capture**: with the app connected to a device, the archive file
 (`history.pblog` in the app support directory) *is* a `.pblog`. Copy it into
 `assets/fixtures/` and commit.
+
+A session is far more interesting than a whole file is small, so a fixture is usually a
+few reps pulled out of one:
+
+```sh
+cd sim
+cargo run --example extract_capture -- \
+  history.pblog ../calypso-app/assets/fixtures/real-reps.pblog 0f64b98f a64bfad6 0dd91dac
+```
+
+Every record is copied byte for byte, so a fixture made this way carries the same bytes
+the device wrote. Each prefix must match a rep or the command fails.
+
+Two of these are checked in, from one session (a workout of bench and deadlift):
+
+- `real-reps` — three reps chosen for different shapes: the shortest drive (1.4 s), the
+  slowest (5.1 s, decimated) and the longest (8.2 s, decimated).
+- `real-wobble` — a rep the detector closed on a sensor that moved 3 cm, which is what
+  `MIN_ROM_M` exists to keep out of the log ([`REP_TRACKING.md`](REP_TRACKING.md)). The
+  app is never sent one; it is here so the shape of a non-rep is pinned by a test.
+
+Both predate `RepSummary.flags`' `CALIBRATED` bit, so their reps read as uncalibrated —
+which is what a record written before that bit existed says.
+
+**Replaying one through the detector**: from `sim/`, `cargo run --example replay_dump
+-- <path.pblog>` prints the spans today's detector finds in each stored window, and
+whether `MIN_ROM_M` would store them.
