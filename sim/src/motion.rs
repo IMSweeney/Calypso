@@ -104,13 +104,44 @@ impl Rep {
         }
     }
 
+    /// The rep's motion only — drive, top pause, return, bottom pause — appended after `from_ms`,
+    /// leaving the lead-in rest to the caller. Returns the timestamp after the rep. A set builds
+    /// several of these end to end with a single lead-in; [`Rep::samples`] is this plus that.
+    pub fn strokes(&self, out: &mut Vec<Sample>, from_ms: u32) -> u32 {
+        let mut t = stroke(out, from_ms, self.travel, self.speed_in, 1.0);
+        t = push_rest(out, t, self.pause_top_ms);
+        t = stroke(out, t, self.travel, self.speed_out, -1.0);
+        push_rest(out, t, self.pause_bottom_ms)
+    }
+
     pub fn samples(&self) -> Vec<Sample> {
         let mut out = Vec::new();
-        let mut t = push_rest(&mut out, 0, LEAD_IN_MS);
-        t = stroke(&mut out, t, self.travel, self.speed_in, 1.0);
-        t = push_rest(&mut out, t, self.pause_top_ms);
-        t = stroke(&mut out, t, self.travel, self.speed_out, -1.0);
-        push_rest(&mut out, t, self.pause_bottom_ms);
+        let t = push_rest(&mut out, 0, LEAD_IN_MS);
+        self.strokes(&mut out, t);
+        out
+    }
+}
+
+/// A one-way push that never comes back down: the unrack, a re-rack, a bump.
+#[derive(Debug, Clone, Copy)]
+pub struct Push {
+    pub travel: f32,
+    pub speed: f32,
+    pub hold_ms: u32,
+}
+
+impl Push {
+    /// The push's motion only, appended after `from_ms`: one stroke, then the hold at the top.
+    /// Returns the timestamp after the hold.
+    pub fn strokes(&self, out: &mut Vec<Sample>, from_ms: u32) -> u32 {
+        let t = stroke(out, from_ms, self.travel, self.speed, 1.0);
+        push_rest(out, t, self.hold_ms)
+    }
+
+    pub fn samples(&self) -> Vec<Sample> {
+        let mut out = Vec::new();
+        let t = push_rest(&mut out, 0, LEAD_IN_MS);
+        self.strokes(&mut out, t);
         out
     }
 }
@@ -120,11 +151,7 @@ impl Rep {
 pub enum Motion {
     Rep(Rep),
     /// The unrack, a re-rack, a bump: one push that never comes back down.
-    Push {
-        travel: f32,
-        speed: f32,
-        hold_ms: u32,
-    },
+    Push(Push),
     /// Oscillation with no net travel: a hand on the rack.
     Wobble {
         travel: f32,
@@ -137,27 +164,20 @@ impl Motion {
     pub fn samples(&self) -> Vec<Sample> {
         match *self {
             Motion::Rep(r) => r.samples(),
-            Motion::Push {
-                travel,
-                speed,
-                hold_ms,
-            } => {
-                let mut out = Vec::new();
-                let mut t = push_rest(&mut out, 0, LEAD_IN_MS);
-                t = stroke(&mut out, t, travel, speed, 1.0);
-                push_rest(&mut out, t, hold_ms);
-                out
-            }
+            Motion::Push(p) => p.samples(),
             Motion::Wobble { travel, hz, ms } => {
-                // z = (travel/2)·sin(2πft), so accel = -(travel/2)·(2πf)²·sin(2πft): oscillation
-                // of full swing `travel` with no net displacement.
+                // z = (travel/2)·(1 − cos(2πft)), so accel = +(travel/2)·(2πf)²·cos(2πft): an
+                // oscillation of full swing `travel` that starts at rest and ends where it began.
+                // The cosine phase is what matters: a sine at phase zero already moves at `amp·ω`
+                // the moment it starts, and integrating that from rest leaves a velocity that never
+                // sits still, so the displacement drifts instead of oscillating about a centre.
                 let amp = travel / 2.0;
                 let peak = amp * (2.0 * PI * hz) * (2.0 * PI * hz);
                 let mut out = Vec::new();
                 let mut t = push_rest(&mut out, 0, LEAD_IN_MS);
                 for i in 0..(ms / SAMPLE_DT_MS) {
                     let tau = i as f32 * SAMPLE_DT_MS as f32 / 1000.0;
-                    let accel = -peak * libm::sinf(2.0 * PI * hz * tau);
+                    let accel = peak * libm::cosf(2.0 * PI * hz * tau);
                     out.push(at(t, [0.0, 0.0, accel]));
                     t += SAMPLE_DT_MS;
                 }
@@ -170,9 +190,57 @@ impl Motion {
     pub fn travel(&self) -> f32 {
         match *self {
             Motion::Rep(r) => r.travel,
-            Motion::Push { travel, .. } | Motion::Wobble { travel, .. } => travel,
+            Motion::Push(p) => p.travel,
+            Motion::Wobble { travel, .. } => travel,
         }
     }
+}
+
+/// A set: the unrack, several reps separated by the set's rest, and the re-rack, assembled into
+/// one timestamp-continuous stream. This is the thing the device actually records, so it is the
+/// only place one rep's motion can merge with, or hide, its neighbours.
+#[derive(Debug, Clone, Copy)]
+pub struct Set {
+    /// The per-rep template (travel, speeds, top pause).
+    pub rep: Rep,
+    /// How many reps in the set.
+    pub reps: u32,
+    /// The rest between reps, applied as each rep's bottom pause; it overrides the template's
+    /// `pause_bottom_ms`.
+    pub inter_rep_rest_ms: u32,
+    /// The bar lifted off the rack, before the first rep.
+    pub unrack: Option<Push>,
+    /// The bar put back on the rack, after the last rep.
+    pub rerack: Option<Push>,
+}
+
+impl Set {
+    pub fn samples(&self) -> Vec<Sample> {
+        let mut out = Vec::new();
+        let mut t = push_rest(&mut out, 0, LEAD_IN_MS);
+        if let Some(p) = self.unrack {
+            t = p.strokes(&mut out, t);
+        }
+        let mut rep = self.rep;
+        rep.pause_bottom_ms = self.inter_rep_rest_ms;
+        for _ in 0..self.reps {
+            t = rep.strokes(&mut out, t);
+        }
+        if let Some(p) = self.rerack {
+            p.strokes(&mut out, t);
+        }
+        out
+    }
+}
+
+/// A shortcut: [`detect_and_trace`] a set's samples and keep only the summaries that clear
+/// [`MIN_ROM_M`], the same "would the device store it" question [`stored`] asks of a single motion.
+pub fn stored_set(set: &Set) -> Vec<msg::RepSummary> {
+    detect_and_trace(&set.samples(), TRACE_POINTS)
+        .into_iter()
+        .map(|(summary, _)| summary)
+        .filter(|s| s.is_a_rep())
+        .collect()
 }
 
 /// The summaries the device would store for this motion — the ones that clear [`MIN_ROM_M`].

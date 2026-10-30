@@ -70,10 +70,9 @@ the nominal pauses, speed in × pause top at the nominal travel and speeds, and 
 output is a boundary per class, not a score, and the interesting part is how far each
 nominal sits inside it.
 
-**Phase two: motion around the rep.** Several reps with the set's rest between them, and
-the unrack and re-rack either side. That turns "one rep" into "the thing the device
-actually records", and it is the only way to test that one rep's motion does not merge
-with — or hide — its neighbours.
+**Phase two** — the unrack, the set's reps, and the re-rack assembled into one stream — is
+its own section, §4 Sets: it is where one rep's motion can merge with, or hide, its
+neighbours.
 
 ## 2. Noise map — todo
 
@@ -89,7 +88,7 @@ and what each does.
 | attitude drift while moving | 0 – 1 °/s | a leak that changes within the rep, which the endpoint detrend removes only partly | the gyro's zero-rate spec, and the fusion runs on the gyro while the bar moves |
 | constant body bias | 0 – 0.2 m/s² | nothing at all: the velocity detrend removes a constant acceleration exactly, which `constant_bias_is_fully_rejected` already pins | the measured rest offsets, 2–11 mg |
 
-## 3. False positives — todo
+## 3. False positives — done
 
 The same sweep aimed at motion that is not a rep: a bar being unracked (large acceleration,
 little travel), a re-rack, a hand on the rack, a wobble (oscillation with no net travel),
@@ -99,13 +98,59 @@ no size threshold can reject.
 Same five knobs, different classes, and the same measurement inverted: how often is
 something stored that is not a rep. With the noise map on top it becomes a rate.
 
+**What the first sweep found.** The generator is `sim/examples/false_positive_map.rs`, two
+slices over `Motion::Push` and `Motion::Wobble`. A one-way push is nearly never stored:
+the velocity detrend halves the ROM of a stroke that never comes back, so an unrack has to
+travel about twice `MIN_ROM_M` to register, and only in a band of speeds where the stroke is
+long enough to be a rep but still fast enough to start one. A clean oscillation is stored
+only while it is slow enough to rest at each turnaround; a fast shake never dwells below the
+reversal threshold and produces no span at all.
+
 Two things it needs that the detectability map does not:
 
 - **The captured non-reps**, checked in as they are, so a change that starts admitting one
   fails in `cargo test` rather than in the field. `real-wobble` is the first (0.029 m of
   travel over 4.9 s).
-- **Phase two's sets**, because the motion *between* reps is where a false positive
-  comes from: an unrack, a re-rack, or a partial drive that never came back down.
+- **§4 Sets**, because the motion *between* reps is where a false positive comes from: an
+  unrack, a re-rack, or a partial drive that never came back down.
+
+## 4. Sets — done
+
+One rep in isolation cannot answer the question that matters on the day: whether a set comes
+back as a set. A set is the unrack, several reps separated by the set's rest, and the re-rack —
+one continuous stream, replayed through the real pipeline. It is the only place two things can be
+seen:
+
+- **A rep's neighbours.** One rep's motion can merge with, or hide, its neighbour. A merged span
+  exceeds `MAX_REP_MS` and is thrown away, taking every rep in it; the real 5×5 sessions captured
+  at most one rep per set.
+- **The motion between reps.** The unrack and the re-rack are the false positives that live *next
+  to* a rep rather than on their own.
+
+The generator is a `Set` that assembles segments into one timestamp-continuous stream with a
+single lead-in at the start:
+
+```
+Set { rep, reps, inter_rep_rest_ms, unrack: Option<Push>, rerack: Option<Push> }
+```
+
+The lead-in rest is pulled out of the per-rep generator (a `Rep`/`Push` then emits its strokes
+without it), the set's rest between reps is each rep's `pause_bottom`, and the unrack/re-rack are
+one-way pushes — direction is irrelevant to a detector that keys on magnitude.
+
+**What is measured.** For each assembled set, the stored summaries are judged on four things, not
+on `is_a_rep` alone: the **count** (N reps in, N reps out), the **order** (they come back in time
+order), the **ROM** (each still reads its travel, the neighbours not having skewed it), and the
+**edges** (neither the unrack nor the re-rack is stored). This is pins plus a `set_probe` example
+that prints the detected sequence — not a 2-D map, because the result is a discrete "N in → N out",
+not a boundary.
+
+**What the probe found.** The set is measured, not fixed. A comfortable set comes back whole and
+in time order; an unrack and a re-rack sit right next to a rep without being stored; and a set
+nobody pauses through still splits into all five of its reps — the reversal-based close is what
+kept it from merging into one span. The one blemish the probe surfaced is ROM fidelity: in a no-rest
+set every rep after the first reads high, because the velocity has not settled to zero between reps.
+That is a measurement to hand to the detector fix, not a number to bake into a pin.
 
 ## Status
 
@@ -115,9 +160,14 @@ Two things it needs that the detectability map does not:
   the generated non-reps stay rejected.
 - **Noise map: todo.** `Rng` and `Impairments` exist in `sim/src/motion.rs`, but the noise
   slice of the map and any noise pins are not written yet.
-- **False positives: todo.** `Push` and `Wobble` exist, but the inverse sweep — and phase
-  two's set motion — is not built. The captured non-rep is already pinned in
+- **False positives: done.** `sim/examples/false_positive_map.rs` sweeps `Push` (the
+  unrack/re-rack/bump) and `Wobble` (the oscillation). The captured non-rep stays pinned in
   `sim/tests/real_capture.rs`.
+- **Sets: done.** The `Set` generator is in `sim/src/motion.rs`, `sim/examples/set_probe.rs` prints
+  the detected sequence, and `sim/tests/sets.rs` pins that a set comes back whole, in order, with the
+  unrack/re-rack unstored. The no-rest set splits correctly but its later reps read high ROM — a
+  fidelity note handed to the detector fix. The calibration transient (a roll, a fusion artifact
+  rather than a stroke) is still open.
 
 Throughout, a generated fixture is code, not a file: a scenario is built where it is used, so
 only the generators, the map example and the pins are committed. A map's *shape* is written

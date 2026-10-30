@@ -5,7 +5,7 @@
 //! the sweep examples (the maps). The maps are broad and read by eye; these are the one-sentence
 //! invariants that must not regress.
 
-use calypso_sim::motion::{stored, Motion, Rep, Rng};
+use calypso_sim::motion::{stored, Motion, Push, Rep, Rng};
 
 /// Each nominal scenario is exactly one stored rep, and its ROM tracks the asked-for travel.
 ///
@@ -37,18 +37,19 @@ fn each_nominal_is_exactly_one_stored_rep() {
     }
 }
 
-/// The generated non-reps — a one-way push and a no-net-travel wobble — stay rejected. The
-/// captured wobble is pinned separately in `real_capture.rs`; these are the synthetic versions,
-/// and the travel is deliberately below [`calypso_core::rep::MIN_ROM_M`] so the rejection is the
-/// size gate doing its job, not a lucky integration result.
+/// The generated non-reps — a one-way push and an oscillation — stay rejected. The captured
+/// wobble is pinned separately in `real_capture.rs`; these are the synthetic versions. The push
+/// is under [`calypso_core::rep::MIN_ROM_M`] outright; the oscillation never even closes a span.
+/// The harder cases — a full-height push (whose ROM the velocity detrend halves) or an oscillation
+/// big enough to matter — are what the false-positive map sweeps, not these two points.
 #[test]
 fn generated_non_reps_stay_rejected() {
     for motion in [
-        Motion::Push {
+        Motion::Push(Push {
             travel: 0.04,
             speed: 1.0,
             hold_ms: 500,
-        },
+        }),
         Motion::Wobble {
             travel: 0.03,
             hz: 3.0,
