@@ -17,6 +17,10 @@ pub const MIN_REP_MS: u32 = 400;
 pub const MAX_REP_MS: u32 = 8000;
 /// Rest samples kept either side of the motion span so ZUPT has an at-rest window to anchor to, and the app can plot the rep's endpoints.
 pub const MARGIN_MS: u32 = 200;
+/// Sample times and velocities the detector keeps, so a rep can name the bar's velocity at its
+/// *left edge* — `MARGIN_MS` before the motion, not the zero a detector that only knows "it is
+/// moving now" would assume. The edge is that far behind motion being declared, plus headroom.
+const VEL_HISTORY: usize = 48;
 /// Smallest dominant-axis travel (metres) that counts as a rep. A hand on a rack, a bar being unracked, a bump: each crosses the motion thresholds, none of them moves the sensor far enough to be a rep.
 pub const MIN_ROM_M: f32 = 0.10;
 
@@ -80,6 +84,12 @@ pub struct Detector {
     turns: u8,
     /// Timestamp of the previous sample, for the integration step.
     prev_t_ms: u32,
+    /// Recent sample times and velocities, for [`Detector::velocity_at`].
+    hist_t: [u32; VEL_HISTORY],
+    hist_v: [[f32; 3]; VEL_HISTORY],
+    hist_head: usize,
+    /// The bar's velocity at the rep's left edge (`start_ms - MARGIN_MS`), captured as it began.
+    v0: [f32; 3],
 }
 
 impl Detector {
@@ -95,11 +105,20 @@ impl Detector {
             moved: false,
             turns: 0,
             prev_t_ms: 0,
+            hist_t: [0; VEL_HISTORY],
+            hist_v: [[0.0; 3]; VEL_HISTORY],
+            hist_head: 0,
+            v0: [0.0; 3],
         }
     }
 
     pub fn state(&self) -> State {
         self.state
+    }
+
+    /// The bar's velocity at the left edge of the rep that just closed, captured when it began.
+    pub fn rep_v0(&self) -> [f32; 3] {
+        self.v0
     }
 
     /// Feed one sample; returns the span when a rep closes.
@@ -112,6 +131,7 @@ impl Detector {
                     let since = *self.above_since.get_or_insert(s.t_ms);
                     if s.t_ms.saturating_sub(since) >= T_ON_MS {
                         self.start_ms = since;
+                        self.v0 = self.velocity_at(since.saturating_sub(MARGIN_MS));
                         self.state = State::Moving;
                         self.above_since = None;
                         self.below_since = None;
@@ -197,6 +217,22 @@ impl Detector {
                 }
             }
         }
+        self.hist_t[self.hist_head] = s.t_ms;
+        self.hist_v[self.hist_head] = self.v;
+        self.hist_head = (self.hist_head + 1) % VEL_HISTORY;
+    }
+
+    /// The velocity at the newest sample at or before `t_ms`, or zero if it predates the ring
+    /// (the session's start, where the bar was still).
+    fn velocity_at(&self, t_ms: u32) -> [f32; 3] {
+        let mut newest = None;
+        for i in 0..VEL_HISTORY {
+            let t = self.hist_t[i];
+            if t <= t_ms && newest.map_or(true, |(bt, _)| t > bt) {
+                newest = Some((t, self.hist_v[i]));
+            }
+        }
+        newest.map_or([0.0; 3], |(_, v)| v)
     }
 
     /// Seconds since the previous sample, bounded so a stall in the sampler cannot become a jump in velocity.
@@ -345,12 +381,14 @@ impl msg::RepSummary {
 
 /// Compute the ZUPT-anchored world-frame trace and summary for one rep.
 ///
-/// `samples` should be the detector's span plus margin at each end, so the integration can be anchored at zero velocity at both ends.
-/// Any number of samples is accepted; if more than `N` are supplied the trace is decimated uniformly to fit.
+/// `samples` should be the detector's span plus margin at each end, and `v0` the bar's velocity
+/// at the first sample (the detector's [`Detector::rep_v0`]), so the integration starts from the
+/// true velocity rather than a forced zero. Any number of samples is accepted; if more than `N`
+/// are supplied the trace is decimated uniformly to fit.
 ///
-/// Each sample's linear acceleration is rotated into the world frame by its quaternion, integrated to velocity and position by trapezoid, then the linear drift is removed so both start and end at rest.
+/// Each sample's linear acceleration is rotated into the world frame by its quaternion, integrated to velocity and position by trapezoid, then the linear drift is removed so the rep ends at rest.
 /// That rejects constant bias exactly and bounds the remaining position error to within one rep, which is what bar-path plotting needs.
-pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummary {
+pub fn compute_rep(samples: &[Sample], v0: [f32; 3], out: &mut TraceBuf<'_>) -> msg::RepSummary {
     out.clear();
     let mut summary = msg::RepSummary {
         roll_min_deg: f32::MAX,
@@ -386,7 +424,7 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummar
     let detrend = total_dt > 0.0;
 
     // Pass 1: world-frame accel → raw velocity, for the endpoint the detrend takes out and for the summary stats.
-    let mut v_raw = [0.0f32; 3];
+    let mut v_raw = v0;
     let mut prev_a = rotate_by_quat(samples[0].quat_f32(), samples[0].accel_f32());
     let mut a_max = 0.0f32;
     let mut v_sum = 0.0f32;
@@ -410,7 +448,7 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummar
     // Pass 2: detrended velocity → the position the detrend ends at.
     let mut p_end = [0.0f32; 3];
     let mut v_max = 0.0f32;
-    let mut walk = Velocity::new(samples, v_end, t0, total_dt, detrend);
+    let mut walk = Velocity::new(samples, v_end, t0, total_dt, detrend, v0);
     let mut v_prev = [0.0f32; 3];
     for i in 0..n {
         let v = walk.step();
@@ -431,7 +469,7 @@ pub fn compute_rep(samples: &[Sample], out: &mut TraceBuf<'_>) -> msg::RepSummar
     let mut roll_offset = 0.0f32;
     let mut roll_prev = 0.0f32;
     let mut roll_seen = false;
-    let mut walk = Velocity::new(samples, v_end, t0, total_dt, detrend);
+    let mut walk = Velocity::new(samples, v_end, t0, total_dt, detrend, v0);
     let mut v_prev = [0.0f32; 3];
     let mut lo = [f32::MAX; 3];
     let mut hi = [f32::MIN; 3];
@@ -527,11 +565,18 @@ struct Velocity<'a> {
 }
 
 impl<'a> Velocity<'a> {
-    fn new(samples: &'a [Sample], v_end: [f32; 3], t0: u32, total_dt: f32, detrend: bool) -> Self {
+    fn new(
+        samples: &'a [Sample],
+        v_end: [f32; 3],
+        t0: u32,
+        total_dt: f32,
+        detrend: bool,
+        v0: [f32; 3],
+    ) -> Self {
         Velocity {
             samples,
             i: 0,
-            v: [0.0; 3],
+            v: v0,
             prev_a: rotate_by_quat(samples[0].quat_f32(), samples[0].accel_f32()),
             v_end,
             t0,

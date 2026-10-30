@@ -121,7 +121,7 @@ fn decimation_keeps_the_last_point() {
 
     let mut storage = vec![TracePoint::ZERO; 512];
     let mut trace = TraceBuf::new(&mut storage);
-    let summary = compute_rep(window, &mut trace);
+    let summary = compute_rep(window, [0.0; 3], &mut trace);
     assert!(summary.decimated());
     assert_eq!(summary.trace_len, 512);
     assert_eq!(

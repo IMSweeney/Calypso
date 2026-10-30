@@ -155,7 +155,7 @@ fn main() {
                 n += 1;
             }
             let mut trace = TraceBuf::new(&mut storage);
-            let sum = compute_rep(&window_buf[..n], &mut trace);
+            let sum = compute_rep(&window_buf[..n], [0.0; 3], &mut trace);
             if sum.is_a_rep() {
                 kept.push(format!(
                     "{}+{}ms rom {:.2}m",

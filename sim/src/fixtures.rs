@@ -110,7 +110,7 @@ pub fn detect_and_trace(
                 continue;
             }
             let mut trace = TraceBuf::new(&mut storage);
-            let mut summary = compute_rep(&window[..n], &mut trace);
+            let mut summary = compute_rep(&window[..n], det.rep_v0(), &mut trace);
             // Synthetic motion is fully calibrated by construction, and a fixture that read as "recorded while the accelerometer wandered" would put that caveat on every row of a demo.
             summary.flags |= calypso_core::rep::REP_FLAG_CALIBRATED;
             out.push((summary, trace.as_slice().to_vec()));

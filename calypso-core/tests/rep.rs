@@ -155,12 +155,12 @@ fn a_wobble_is_not_a_rep() {
     }
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut trace = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, &mut trace);
+    let sum = compute_rep(&samples, [0.0; 3], &mut trace);
     assert!(!sum.is_a_rep(), "{} m of wobble was called a rep", sum.rom);
 
     let (samples, _) = squat_set(1, 3000, 800, 3.0);
     let mut trace = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, &mut trace);
+    let sum = compute_rep(&samples, [0.0; 3], &mut trace);
     assert!(sum.is_a_rep(), "a real rep was thrown away: {} m", sum.rom);
 }
 
@@ -284,7 +284,7 @@ fn rom_is_the_vertical_travel_not_the_biggest_excursion() {
     }
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, &mut buf);
+    let sum = compute_rep(&samples, [0.0; 3], &mut buf);
 
     let range = |f: &dyn Fn(&TracePoint) -> f32| {
         let values: Vec<f32> = buf.as_slice().iter().map(f).collect();
@@ -309,7 +309,7 @@ fn compute_rep_recovers_known_displacement() {
     let samples = known_motion(a, 1500, MARGIN_MS);
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, &mut buf);
+    let sum = compute_rep(&samples, [0.0; 3], &mut buf);
 
     assert!(!sum.decimated());
     assert_eq!(sum.trace_len, samples.len() as u32);
@@ -341,7 +341,7 @@ fn constant_bias_is_fully_rejected() {
     }
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, &mut buf);
+    let sum = compute_rep(&samples, [0.0; 3], &mut buf);
     assert!(sum.rom < 1e-3, "rom {}", sum.rom);
     assert!(peak_to_peak_z(&buf) < 1e-3);
     assert!(sum.peak_velocity < 1e-3);
@@ -352,7 +352,7 @@ fn trace_is_decimated_when_it_does_not_fit() {
     let samples = known_motion(0.4, 3000, MARGIN_MS);
     let mut storage = [TracePoint::ZERO; 64];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, &mut buf);
+    let sum = compute_rep(&samples, [0.0; 3], &mut buf);
     assert!(sum.decimated());
     assert!(sum.trace_len <= 64);
     assert!(sum.trace_len >= 50, "trace_len {}", sum.trace_len);
@@ -378,7 +378,7 @@ fn roll_pitch_range_is_reported_in_summary() {
     }
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, &mut buf);
+    let sum = compute_rep(&samples, [0.0; 3], &mut buf);
     assert!(
         sum.roll_min_deg.abs() < 1.0,
         "roll min {}",
@@ -415,7 +415,7 @@ fn detect_then_compute_from_the_ring_pipeline() {
             assert!(window[0].t_ms + 50 >= span.start_ms.saturating_sub(MARGIN_MS));
             let mut storage = [TracePoint::ZERO; TRACE_CAP];
             let mut buf = TraceBuf::new(&mut storage);
-            rep = Some(compute_rep(&window[..n], &mut buf));
+            rep = Some(compute_rep(&window[..n], det.rep_v0(), &mut buf));
             assert!(rep.is_some());
             assert!(!buf.is_empty());
         }
@@ -435,7 +435,7 @@ fn detect_then_compute_from_the_ring_pipeline() {
 fn empty_input_is_handled() {
     let mut storage = [TracePoint::ZERO; 64];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&[], &mut buf);
+    let sum = compute_rep(&[], [0.0; 3], &mut buf);
     assert_eq!(sum.trace_len, 0);
     assert!(buf.is_empty());
     assert_eq!(sum.duration_ms, 0);
