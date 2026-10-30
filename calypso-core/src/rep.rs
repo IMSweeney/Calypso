@@ -361,8 +361,6 @@ pub const REP_FLAG_DECIMATED: u32 = 1 << 0;
 ///
 /// The recording gate asks only for the gyroscope, so this is the bit that says the rest of the calibration was there.
 pub const REP_FLAG_CALIBRATED: u32 = 1 << 1;
-/// [`msg::RepSummary::flags`] bit 2: the summary names the bar's velocity at the rep's left edge, rather than leaving it to be read as a rep that started at rest.
-pub const REP_FLAG_HAS_ORIGIN: u32 = 1 << 2;
 
 impl msg::RepSummary {
     /// Whether this is a rep at all: the bar has to have gone up or down [`MIN_ROM_M`].
@@ -378,10 +376,6 @@ impl msg::RepSummary {
 
     pub const fn calibrated(&self) -> bool {
         self.flags & REP_FLAG_CALIBRATED != 0
-    }
-
-    pub const fn has_origin(&self) -> bool {
-        self.flags & REP_FLAG_HAS_ORIGIN != 0
     }
 }
 
@@ -557,7 +551,6 @@ pub fn compute_rep(samples: &[Sample], v0: [f32; 3], out: &mut TraceBuf<'_>) -> 
         vy: v0[1],
         vz: v0[2],
     });
-    summary.flags |= REP_FLAG_HAS_ORIGIN;
     summary
 }
 

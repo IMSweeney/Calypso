@@ -441,9 +441,6 @@ class RepSummary extends $pb.GeneratedMessage {
   ///   bit 0  DECIMATED   the trace was decimated to fit device memory
   ///   bit 1  CALIBRATED  the IMU's accelerometer was calibrated as well as its
   ///                      gyroscope when the rep was recorded
-  ///   bit 2  HAS_ORIGIN  the summary names the bar's velocity at the rep's
-  ///                      left edge (field 17), rather than leaving the app to
-  ///                      assume it started at rest
   ///
   /// Field 15 was `bool decimated` before this. A bool is a varint too, so a
   /// record written then still reads back here: bit 0 is the bit that bool was.
@@ -479,9 +476,9 @@ class RepSummary extends $pb.GeneratedMessage {
 
   /// The bar's velocity (m/s) at the rep's left edge, `MARGIN_MS` before motion
   /// was declared. A rep mid-set starts already moving, and an integration that
-  /// assumes zero there reads its travel high. Present only when
-  /// `REP_FLAG_HAS_ORIGIN` is set, so a record written before this field existed
-  /// (no origin) is not read as a rep that started at rest.
+  /// assumes zero there reads its travel high. Unset on a record written before
+  /// this field existed, which is how a rep with no origin is told from one that
+  /// started at rest.
   @$pb.TagNumber(17)
   TraceOrigin get v0 => $_getN(16);
   @$pb.TagNumber(17)

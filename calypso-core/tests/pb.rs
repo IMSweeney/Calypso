@@ -17,7 +17,7 @@ fn sample_summary() -> msg::RepSummary {
         pitch_min_deg: -0.8,
         pitch_max_deg: 3.1,
         trace_len: 145,
-        flags: calypso_core::rep::REP_FLAG_CALIBRATED | calypso_core::rep::REP_FLAG_HAS_ORIGIN,
+        flags: calypso_core::rep::REP_FLAG_CALIBRATED,
         ..Default::default()
     };
     summary.set_v0(msg::TraceOrigin {
@@ -60,7 +60,6 @@ fn summary_round_trips() {
             assert_eq!(s.chunk_count, 4);
             assert!(!s.decimated());
             assert!(s.calibrated());
-            assert!(s.has_origin());
             let origin = s.v0().expect("the origin survives the wire");
             assert!((origin.vx - 0.12).abs() < 1e-6);
             assert!((origin.vy - -0.05).abs() < 1e-6);
