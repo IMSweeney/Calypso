@@ -57,18 +57,24 @@ is exactly one stored rep — with 150 ms at the turn and 300 ms at the bottom �
 maps measure what happens as the knobs move away from that centre. The squat class is
 provisional: no squat rep has ever been captured.
 
-**What is measured: `is_a_rep`, nothing else.** A cell is one bit — would a summary for
-this motion be stored — not ROM, not span boundaries, not velocity. That is the product
-question, and `MIN_ROM_M` is the only threshold in the pipeline the outside world set.
+**What is measured: how many reps are stored, nothing else.** A cell is one of three —
+`.`, nothing stored; `#`, exactly one; `X`, more than one, the detector splitting one rep
+into two — not ROM, not span boundaries, not velocity. The count is the product question
+(`MIN_ROM_M` is the threshold the outside world set): zero is a miss, one is right, and
+the split is the failure a two-state cell used to hide behind a `#`.
 
 **A miss is a result, not a failure.** The map is expected to show that today's detector
-stores nothing for a good share of the pause range, and that belongs in the map rather
-than in a test that has to pass.
+stores nothing for a good share of the pause range, and — where the travel is large
+enough that each half clears `MIN_ROM_M` — that it stores a paused rep as two: the
+deadlift's pause-top slice is all `X` above the rest debounce. Both belong in the map
+rather than in a test that has to pass.
 
-**Drawing it.** Five axes do not plot, so the map is 2-D slices: speed in × speed out at
-the nominal pauses, speed in × pause top at the nominal travel and speeds, and so on. The
-output is a boundary per class, not a score, and the interesting part is how far each
-nominal sits inside it.
+**Drawing it.** Five axes do not plot, so the map is 2-D slices, each with travel on the x
+axis and one of the other four knobs on y: travel × speed in, travel × speed out, travel
+× pause top, travel × pause bottom. Travel is the shared column because it is the
+dimension a lifter actually varies, and the nominal cell is marked `*`. The output is a
+boundary per class, not a score, and the interesting part is how far each nominal sits
+inside it.
 
 **Phase two** — the unrack, the set's reps, and the re-rack assembled into one stream — is
 its own section, §4 Sets: it is where one rep's motion can merge with, or hide, its
@@ -154,8 +160,9 @@ The fix is in: the integration starts from the bar's velocity at the rep's left 
 
 ## Status
 
-- **Detectability map: done.** `sim/examples/detector_map.rs` draws the four slices (speed in
-  × speed out, travel × speed in, speed in × pause top, speed in × pause bottom) per class;
+- **Detectability map: done.** `sim/examples/detector_map.rs` draws the four slices (travel
+  × speed in, travel × speed out, travel × pause top, travel × pause bottom) per class, with
+  three cell states so an over-split shows rather than reading as a hit;
   `sim/tests/detector_tolerance.rs` pins that each nominal is exactly one stored rep and that
   the generated non-reps stay rejected.
 - **Noise map: todo.** `Rng` and `Impairments` exist in `sim/src/motion.rs`, but the noise
