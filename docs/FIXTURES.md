@@ -83,16 +83,19 @@ cargo run --example extract_capture -- \
 Every record is copied byte for byte, so a fixture made this way carries the same bytes
 the device wrote. Each prefix must match a rep or the command fails.
 
-Two of these are checked in, from one session (a workout of bench and deadlift):
+**None is checked in at the moment**, and the reason is worth keeping: the one session
+extracted this way had every window removed again, because a stored window is not a
+stream. The sampler that recorded it stalled for 2.2 s at a time and then burst to catch
+up, so the times inside a window jump and the samples in the window do not cover the
+motion it claims to describe — 158 ms of missing time inside a 1.4 s rep, 2.3 s inside an
+8.2 s one. A test against those bytes pins numbers derived from bridging the gap, and the
+first thing it did was make a detector change look worse than it was.
 
-- `real-reps` — three reps chosen for different shapes: the shortest drive (1.4 s), the
-  slowest (5.1 s, decimated) and the longest (8.2 s, decimated).
-- `real-wobble` — a rep the detector closed on a sensor that moved 3 cm, which is what
-  `MIN_ROM_M` exists to keep out of the log ([`REP_TRACKING.md`](REP_TRACKING.md)). The
-  app is never sent one; it is here so the shape of a non-rep is pinned by a test.
-
-Both predate `RepSummary.flags`' `CALIBRATED` bit, so their reps read as uncalibrated —
-which is what a record written before that bit existed says.
+Re-extract from a session recorded after the sampler's timeline is fixed
+([`ROADMAP.md`](../ROADMAP.md), "a rep's timeline has a hole in it"). Until then the
+checked-in fixtures are all generated, and `replay_dump` labels every window it is given
+with the timeline it found, so a session can be audited before anything is extracted from
+it.
 
 **Replaying one through the detector**: from `sim/`, `cargo run --example replay_dump
 -- <path.pblog>` prints the spans today's detector finds in each stored window, and

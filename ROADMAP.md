@@ -69,10 +69,13 @@ Where Calypso is and what is left. Feature documentation lives in
   pair, and a stroke that stalls mid-drive is one rep with its whole travel rather than a
   rep cut short or lost. Chosen over the momentum detector on measurement — 0 cells where
   it stored a rep the old one rejected across 5,292 map cells, no new false positive on
-  the non-rep sweep, and ROM at least as close to the travel actually moved. It costs one
-  thing, accepted knowingly: a return too gentle to reach `VEL_MIN` never turns, so it is
-  not detected (below). See [docs/REP_TRACKING.md](docs/REP_TRACKING.md) and
-  [docs/GOTCHAS.md](docs/GOTCHAS.md).
+  the non-rep sweep, and ROM at least as close to the travel actually moved. On the one
+  real capture it agrees with the detector it replaces on every stored window whose own
+  sample times can be replayed at all — 3 spans each — and the windows where they differ
+  are the ones with a 2.2 s jump or a catch-up burst inside them
+  ([docs/GOTCHAS.md](docs/GOTCHAS.md)). It costs one thing, accepted knowingly: a return
+  too gentle to reach `VEL_MIN` never turns, so it is not detected (below). See
+  [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
 
 ## Open
 
@@ -142,11 +145,13 @@ Where Calypso is and what is left. Feature documentation lives in
 
 ### First real device capture
 
-- [ ] **A capture is in the fixtures; what is left is more of one.** Three real reps
-      and one real wobble are checked in from a single bench session and asserted from
-      both ends ([docs/FIXTURES.md](docs/FIXTURES.md)). A second session, with the set
-      count known on the day, is what would make the detector's own numbers testable
-      rather than merely reproducible.
+- [ ] **The capture cannot be a fixture until its timeline is fixed.** Three real reps
+      and one real wobble were checked in from a single bench session and have been
+      removed again: every one of those windows carries a jump in its sample times, so a
+      test against them pins numbers that came from bridging a 2.2 s gap
+      ([docs/FIXTURES.md](docs/FIXTURES.md)). What is left is a new session, with the set
+      count known on the day, recorded after the hole is fixed — that is what would make
+      the detector's own numbers testable rather than merely reproducible.
 - [ ] **Whether the frame can be trusted, now that a rep is measured on it.** ROM is
       the vertical travel on Z rather than the biggest excursion, because Z is the only
       axis pinned to gravity — a rep's horizontal range is the estimate's error, not the

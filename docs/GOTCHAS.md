@@ -347,7 +347,15 @@ what should have been there.
 **Fix.** The sampler logs `sampler hole: … ms without a sample` where the gap is made, on
 the boot clock, so the flash windows and link events above it are the candidate causes,
 and raises `REPORT_KIND_SAMPLER_HOLE` so the phone says a rep from then may read long
-while the person is still in the gym. What the integration should do with the time is
+while the person is still in the gym.
+
+**A gap is also inside the stored window, not just between reps.** The tracer copies a
+window out of the ring, so the jump comes with it: of 61 replayed windows from one
+capture, 54 had a hole wider than 50 ms or a burst of samples closer than 4 ms — the three
+"real reps" in the fixture set had 158 ms, 2.1 s and 2.3 s of missing time inside them.
+`replay_dump` now labels every window `hole N ms` or `burst N ms` and only counts the ones
+with a timeline, because judging a detector on a window that does not describe its own
+motion is not a measurement. What the integration should do with the time is
 still open (`ROADMAP.md`): read a rep that spans a hole as short, or as unusable, or
 remove the holes.
 

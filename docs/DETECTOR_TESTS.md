@@ -116,8 +116,9 @@ reversal threshold and produces no span at all.
 Two things it needs that the detectability map does not:
 
 - **The captured non-reps**, checked in as they are, so a change that starts admitting one
-  fails in `cargo test` rather than in the field. `real-wobble` is the first (0.029 m of
-  travel over 4.9 s).
+  fails in `cargo test` rather than in the field. There are none in the set at the moment:
+  the one that was there came from a session whose stored windows each carried a broken
+  timeline, and it was removed for the reason in [`FIXTURES.md`](FIXTURES.md).
 - **§4 Sets**, because the motion *between* reps is where a false positive comes from: an
   unrack, a re-rack, or a partial drive that never came back down.
 

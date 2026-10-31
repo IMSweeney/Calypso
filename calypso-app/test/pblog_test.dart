@@ -195,60 +195,6 @@ void main() {
     );
   });
 
-  group('a real capture', () {
-    test('three reps the device recorded read back whole', () {
-      final result = readDump(fixture('real-reps'));
-      expect(result.truncated, isFalse);
-      final summaries = summariesOf(result.records).toList();
-      expect(summaries.length, 3);
-
-      for (final s in summaries) {
-        expect(s.uuid, isNotNull);
-        expect(s.recordedAt, isNotNull, reason: 'a real rep carries its time');
-        expect(s.timeOfDay, matches(RegExp(r'^\d{2}:\d{2}:\d{2}$')));
-        expect(s.traceLen, greaterThan(0));
-
-        final chunks = traceChunksFor(result.records, s.uuid!);
-        expect(chunks.length, s.chunkCount);
-        expect(
-          chunks.fold<int>(0, (n, c) => n + c.samples.length),
-          s.traceLen,
-          reason: 'every point the summary counts is in the chunks',
-        );
-      }
-
-      // The three were picked to be different shapes, so a regression in decimation or in the trace
-      // reassembly cannot pass by looking like the others.
-      expect(summaries.map((s) => s.durationMs).toList()..sort(), [
-        1369,
-        5112,
-        8220,
-      ]);
-      expect(summaries.where((s) => s.decimated), hasLength(2));
-      expect(
-        summaries.every((s) => s.rom > 0.2 && s.rom < 0.7),
-        isTrue,
-        reason: 'a rep moves the bar a little, not a wiggle and not a fall',
-      );
-    });
-
-    test('a wiggle reads back, and is smaller than any rep', () {
-      // What `MIN_ROM_M` keeps out of the log: the device closed a span on motion and rest, and the sensor
-      // travelled 3 cm. The app is never sent one — this fixture pins the shape of a non-rep.
-      final result = readDump(fixture('real-wobble'));
-      final summaries = summariesOf(result.records).toList();
-      expect(summaries, hasLength(1));
-      final wobble = summaries.single;
-      expect(wobble.recordedAt, isNotNull);
-      expect(wobble.rom, lessThan(0.1));
-      expect(wobble.durationMs, greaterThan(3000));
-
-      final real = summariesOf(readDump(fixture('real-reps')).records).toList();
-      final smallest = real.map((s) => s.rom).reduce((a, b) => a < b ? a : b);
-      expect(wobble.rom, lessThan(smallest));
-    });
-  });
-
   test('an empty dump is valid and empty', () {
     final result = readDump(fixture('empty'));
     expect(result.records, isEmpty);

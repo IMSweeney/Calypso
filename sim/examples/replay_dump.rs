@@ -23,6 +23,64 @@ use calypso_sim::fixtures::read_dump;
 
 /// How much stillness to append after a window, so a rep whose end is the window's edge can still close.
 const TAIL_MS: u32 = 2_000;
+/// The widest gap between a window's own samples that is still a timeline rather than a hole.
+///
+/// The device samples at 100 Hz and a decimated trace stores every other one, so 20 ms is normal.
+const MAX_STEP_MS: u32 = 50;
+/// The narrowest step that is still a sample rather than a catch-up burst.
+const MIN_STEP_MS: u32 = 4;
+
+/// Whether a window's own sample times can be integrated at all.
+///
+/// A stored trace is not a stream: the tracer copies samples out of the ring, and a sampler that
+/// stalled leaves a jump in the times with a burst of catch-up samples after it. A window either
+/// has a timeline or it does not, and this says which — so a replay can report the windows it can
+/// judge instead of averaging a detector's behaviour over motion it was never shown.
+enum Timeline {
+    /// Monotonic, 4–50 ms between samples.
+    Usable,
+    /// A jump in the times: the window is missing the motion it claims to describe.
+    Hole(u32),
+    /// Samples closer together than the device can take them.
+    Burst(u32),
+}
+
+impl Timeline {
+    fn of(samples: &[Sample]) -> Timeline {
+        let mut widest = 0u32;
+        let mut narrowest = u32::MAX;
+        let mut backwards = false;
+        for pair in samples.windows(2) {
+            let step = pair[1].t_ms;
+            let prev = pair[0].t_ms;
+            if step < prev {
+                backwards = true;
+            } else {
+                widest = widest.max(step - prev);
+                narrowest = narrowest.min(step - prev);
+            }
+        }
+        if widest > MAX_STEP_MS {
+            return Timeline::Hole(widest);
+        }
+        if narrowest < MIN_STEP_MS || backwards {
+            return Timeline::Burst(narrowest);
+        }
+        Timeline::Usable
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Timeline::Usable => String::new(),
+            Timeline::Hole(ms) => format!("hole {ms} ms"),
+            Timeline::Burst(ms) => format!("burst {ms} ms"),
+        }
+    }
+
+    fn usable(&self) -> bool {
+        matches!(self, Timeline::Usable)
+    }
+}
 
 struct Window {
     uuid: Vec<u8>,
@@ -84,14 +142,17 @@ fn main() {
         windows.iter().map(|w| w.chunks.len()).sum::<usize>()
     );
     println!(
-        "{:>3} {:>9} {:>7} {:>6} {:>7} {:>5} {:>4}  spans",
-        "#", "rep", "dur ms", "points", "peak a", "n", "dec"
+        "{:>3} {:>9} {:>7} {:>6} {:>7} {:>5} {:>4} {:>12}  spans",
+        "#", "rep", "dur ms", "points", "peak a", "n", "dec", "timeline"
     );
 
-    let mut spans_total = 0;
     let mut stored = 0;
     let mut rejected = 0;
     let mut one_span = 0;
+    let mut usable_windows = 0;
+    let mut usable_spans = 0;
+    let mut unusable_spans = 0;
+    let mut unusable: Vec<usize> = Vec::new();
     let mut still = Vec::new();
     let mut split = Vec::new();
     let mut traceless = Vec::new();
@@ -103,6 +164,13 @@ fn main() {
             continue;
         };
         let window_end = last.t_ms;
+        // Judged on the window's own samples, before the tail this harness appends is folded in.
+        let timeline = Timeline::of(&samples);
+        if timeline.usable() {
+            usable_windows += 1;
+        } else {
+            unusable.push(i + 1);
+        }
         // Stillness at the bias the window ended on: a rep that finished at rest, and the stream goes on.
         for n in 1..=(TAIL_MS / 10) {
             samples.push(Sample {
@@ -128,11 +196,15 @@ fn main() {
                 }
             }
         }
-        spans_total += spans.len();
-        match spans.len() {
-            1 => one_span += 1,
-            0 => still.push((i, peak)),
-            n => split.push((i, n)),
+        if timeline.usable() {
+            usable_spans += spans.len();
+            match spans.len() {
+                1 => one_span += 1,
+                0 => still.push((i, peak)),
+                n => split.push((i, n)),
+            }
+        } else {
+            unusable_spans += spans.len();
         }
 
         // What the device would do with each of those: a span it closed is only stored if the sensor actually moved.
@@ -156,21 +228,23 @@ fn main() {
             }
             let mut trace = TraceBuf::new(&mut storage);
             let sum = compute_rep(&window_buf[..n], [0.0; 3], &mut trace);
-            if sum.is_a_rep() {
-                kept.push(format!(
-                    "{}+{}ms rom {:.2}m",
-                    span.start_ms,
-                    span.duration_ms(),
-                    sum.rom
-                ));
+            let accepted = sum.is_a_rep() && timeline.usable();
+            kept.push(format!(
+                "{}+{}ms rom {:.2}m{}",
+                span.start_ms,
+                span.duration_ms(),
+                sum.rom,
+                if accepted {
+                    ""
+                } else if !sum.is_a_rep() {
+                    " REJECTED"
+                } else {
+                    " (window not replayable)"
+                }
+            ));
+            if accepted {
                 stored += 1;
-            } else {
-                kept.push(format!(
-                    "{}+{}ms rom {:.2}m REJECTED",
-                    span.start_ms,
-                    span.duration_ms(),
-                    sum.rom
-                ));
+            } else if timeline.usable() && !sum.is_a_rep() {
                 rejected += 1;
             }
         }
@@ -178,7 +252,7 @@ fn main() {
         // A decimated window has a wider sample spacing than the device's, which is the first thing to suspect when it replays badly.
         let decimated = w.flags & REP_FLAG_DECIMATED != 0;
         println!(
-            "{:>3} {:>9} {:>7} {:>6} {:>7.2} {:>5} {:>4}  {}",
+            "{:>3} {:>9} {:>7} {:>6} {:>7.2} {:>5} {:>4} {:>12}  {}",
             i + 1,
             short(&w.uuid),
             w.duration_ms,
@@ -186,12 +260,18 @@ fn main() {
             peak,
             spans.len(),
             if decimated { "yes" } else { "" },
+            timeline.label(),
             kept.join(", ")
         );
     }
 
     let replayed = windows.len() - traceless.len();
-    println!("\n{replayed} windows replayed, {spans_total} spans");
+    println!("\n{replayed} windows replayed");
+    println!(
+        "  {usable_windows} with a timeline, {usable_spans} spans; {} without, {unusable_spans} spans {unusable:?}",
+        replayed - usable_windows
+    );
+    println!("\n  of the windows with a timeline:");
     println!("  one rep   {one_span}");
     println!("  stored    {stored}; rejected as under {MIN_ROM_M} m of travel {rejected}");
     if !still.is_empty() {
