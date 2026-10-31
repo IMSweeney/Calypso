@@ -61,9 +61,18 @@ Where Calypso is and what is left. Feature documentation lives in
   run on hardware.** See [docs/CALIBRATION.md](docs/CALIBRATION.md).
 - **A rep is out and back** — the detector closes a rep on the return, not where the bar
   rests, so a bench rep held at lockout is captured as one rep instead of split into a
-  drive and a lowering (or lost), and a lowering gentler than `VEL_MIN` still closes on
-  its rest. A one-way push that pauses (an unrack) is dropped rather than merged into the
-  next rep. See [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
+  drive and a lowering (or lost). A one-way push that pauses (an unrack) is dropped
+  rather than merged into the next rep. See [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
+- **A rep is two strokes between turns** — the detector finds the turning points from the
+  bar's velocity and measures the signed vertical travel between them, so the travel check
+  is part of detection instead of a test afterwards: a leg under `MIN_ROM_M` can never
+  pair, and a stroke that stalls mid-drive is one rep with its whole travel rather than a
+  rep cut short or lost. Chosen over the momentum detector on measurement — 0 cells where
+  it stored a rep the old one rejected across 5,292 map cells, no new false positive on
+  the non-rep sweep, and ROM at least as close to the travel actually moved. It costs one
+  thing, accepted knowingly: a return too gentle to reach `VEL_MIN` never turns, so it is
+  not detected (below). See [docs/REP_TRACKING.md](docs/REP_TRACKING.md) and
+  [docs/GOTCHAS.md](docs/GOTCHAS.md).
 
 ## Open
 
@@ -224,12 +233,20 @@ Where Calypso is and what is left. Feature documentation lives in
       slots would mean shrinking the log partition.
 - [ ] On-device tests with [`embedded-test`](https://crates.io/crates/embedded-test):
       the flash partition layer first, then the radio path.
+- [ ] **A gentle return is not detected.** The turning-point detector ends a leg on a
+      turn, and a turn is a speed: a return that never reaches `VEL_MIN` (0.15 m/s) at its
+      peak never turns, so the rep is never stored. On a bench the boundary is between 0.26
+      and 0.27 m/s — inside the range of a deliberately slow negative. Closing a leg on
+      bounded travel as well as on a turn would cover it; the cost of doing so is not yet
+      measured against the maps, which is why it is not done yet. Pinned meanwhile by
+      `a_gentle_return_is_not_detected_yet`, which fails with instructions when fixed. See
+      [docs/GOTCHAS.md](docs/GOTCHAS.md).
 - [ ] **Tune the detector against real reps.** A rep now ends where the bar turns
       around rather than at a pause, which is what a set nobody pauses through needed
       (`docs/GOTCHAS.md`), and a synthetic five-rep set with no rest in it is the test
       for that. What is still fitted to generated motion is the rest: the on and rest
-      thresholds, their debounces, and the speed a reversal must reach. Nothing here
-      has been checked against a set whose rep count is known on the day.
+      thresholds, their debounces, and the speed a turn must reach. Nothing here has
+      been checked against a set whose rep count is known on the day.
 - [ ] **Trim the static heap region if the deepest stack figure ever asks for it.**
       The 64 KB `heap_allocator!` region is what the linker stack competes with
       most, and its surplus is stack the linker cannot use. Each byte trimmed moves

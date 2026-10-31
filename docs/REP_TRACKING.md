@@ -9,7 +9,7 @@ BNO055 (IMU mode, 100 Hz)
 Sampler ──► RAM ring (~12 s of samples)
    │
    ▼
-Rep detector (state machine, ZUPT at rest)
+Rep detector (turning points, ZUPT at rest)
    │  rep complete → slice [start-margin, end+margin] out of the ring
    ▼
 Trace computation: world-frame displacement + orientation, summary stats
@@ -36,28 +36,45 @@ Flash log (ring of 4 KB sectors) ──► BLE sync to the app
 
 ## Detecting a rep
 
-`calypso_core::rep::Detector`, fed one sample at a time:
+`calypso_core::rep::Detector`, fed one sample at a time, asks the question in terms of
+travel rather than momentum. **A rep is an out-and-back**: the bar goes more than
+`MIN_ROM_M` one way, turns, and comes more than `MIN_ROM_M` back.
 
 ```
-IDLE ──|a| > on-threshold for T_on──► MOVING ──┬── |a| < rest-threshold for T_rest──► close, IDLE
-                                             └── second reversal of the bar ──────► close, IDLE
+turn: the bar's speed falls below VEL_MIN for T_TURN_MS
+leg:  the signed vertical travel between two turns
+rep:  two consecutive legs, opposite directions, each past MIN_ROM_M
 ```
 
-Hysteresis between the two thresholds keeps a noisy rest from flapping. Tunables are
+The detector integrates each sample's acceleration (rotated into the world frame) into a
+velocity, which is zero wherever the bar stops — at the bottom and at the top of every
+rep, whether it dwells there or not. A pause is just a turn that lasts longer, so a set
+nobody pauses through splits at each end the same way a slow one does. Tunables are
 constants at the top of `calypso-core/src/rep.rs`.
 
-**A rep ends where the bar turns around, and a pause is only one of the ways that
-happens.** Stillness alone is not enough to go by: a set nobody pauses through has none
-of it, and a detector that waits for one merges the whole set into a single span — which
-then exceeds `MAX_REP_MS` and is thrown away, taking every rep in it. The reversals come
-from the acceleration integrated into a velocity, whose bias is learned only while the
-bar is still.
+**Travel is part of detection, not a check afterwards.** A leg too short to be half a
+rep is never kept, so it cannot pair with anything: a bump, a re-rack and a hand on the
+rack (the one capture had four spans of 0.03–0.09 m among ten real reps) are rejected by
+the same measurement that accepts a press. A one-way push tall enough to be a leg is
+dropped when the bar rests and then sets off the same way again — that is an unrack, not
+a rep. The summary is still checked against `MIN_ROM_M` when it is stored, against the
+travel the trace computes rather than the one integrated on the way in.
 
-**And a rep has to have moved.** The detector closes on motion and rest, which a
-vibration or a hand on the rack satisfies; what it cannot see is how far anything went,
-because that costs two integrations. `MIN_ROM_M` (0.10 m) is the check on the computed
-rep: the one real capture had four spans of 0.03–0.09 m with peak accelerations of
-1.4–4.2 m/s² sitting among ten real reps, and this is what keeps them out of the log.
+**A stall mid-drive is one rep with its whole travel.** The bar stopping without coming
+down splits a leg in two; two same-direction legs with no rest between them are the same
+stroke, so their travel is summed. After a rest they are not — that is a hold, and the
+older leg is the one that was already finished.
+
+**What it cannot see is a stroke slower than `VEL_MIN`.** A leg ends on a turn, and a turn
+is a *speed*: a return that never reaches 0.15 m/s at its peak never turns, so it never
+closes a rep. For a bench that boundary sits between 0.26 and 0.27 m/s, and it is accepted
+for now (`ROADMAP.md`, and the test that pins it is the one to delete when it is fixed).
+
+**The velocity is integrated in the world frame**, which is also what makes the `v0`
+handed to `compute_rep` the frame that function integrates in. The bias is learned, and
+the velocity anchored to zero, only while the bar is still: a bias learned from motion is
+the rep taken out of itself, and a velocity damped mid-rep is the same mistake one step
+later.
 
 ## Computing a rep
 

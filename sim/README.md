@@ -13,7 +13,6 @@ cargo test
 cargo run --example gen_fixtures     # writes calypso-app/assets/fixtures/
 cargo run --example replay_dump -- <path.pblog>
 cargo run --example detector_map -- bench   # draw where a synthetic rep is stored
-cargo run --example detector_diff -- bench  # the same map, two detectors, cell by cell
 ```
 
 [`docs/FIXTURES.md`](../docs/FIXTURES.md) is what a fixture is for and how the set is

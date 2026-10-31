@@ -283,6 +283,53 @@ back to back with rest only after the last: before the change it was one span of
 whole set, now it is five. That test also had to fix its own motion model — a sine is a
 push that never comes back, and a detector tuned on one has nothing to learn about reps.
 
+### A turn is a speed, so a gentle return is invisible
+
+**Symptom.** A rep whose lowering is slow and controlled is not stored at all. For a bench
+the boundary is between 0.26 and 0.27 m/s of peak return speed — comfortably in range of
+a deliberate negative.
+
+**Cause.** The detector delimits a rep by turning points, and a turn is the speed falling
+below `VEL_MIN` (0.15 m/s) for `T_TURN_MS`. A stroke that never reaches that speed never
+turns, so it never becomes a leg, and no leg means no rep — regardless of how far the bar
+actually went.
+
+**Fix.** There is none yet, and this is a decision rather than an oversight: the turning
+point model fixed stalls and ROM fidelity, and the cost was accepted. Closing a leg
+on bounded travel as well as on a turn would cover it. Until then,
+`sim/tests/detector_tolerance.rs::a_gentle_return_is_not_detected_yet` pins the behaviour
+so it fails — loudly, with instructions — if it is ever fixed.
+
+### A history ring answers a stale question with a default
+
+**Symptom.** The velocity a rep reports as its starting velocity is exactly zero for every
+rep longer than the ring, which at 100 Hz and 48 slots is 0.48 s — so every real rep. The
+travel then reads long, because the integration begins as though the bar were still.
+
+**Cause.** `Detector::velocity_at` searches a ring of recent samples for the newest at or
+before a timestamp and returns zero when nothing qualifies. Asking it for a point that has
+already been overwritten is not an error, it is a silent default. Anything that captures a
+value "at the left edge" has to capture it **when the edge happens**, not when the rep
+closes.
+
+**Fix.** A leg records `v0` as it opens (`Detector::open_leg`), not at the pair. The same
+trap applies to any new field read out of `hist_*`.
+
+### A rep window must not begin inside a rest
+
+**Symptom.** Every rep after the first in a set reads high — 24% over travel — and the
+velocity the trace starts from is a bar descending at 0.29 m/s.
+
+**Cause.** Legs are contiguous by design: each turn is both the end of a leg and the start
+of the next, which is what makes a turnaround with no pause either side two legs. The
+consequence is that a leg can *open* in the middle of a hold, so the rep's span — and its
+`MARGIN_MS` — begins while the bar is still finishing the previous stroke, and the
+unexplained travel in the window is the previous stroke's tail.
+
+**Fix.** A confirmed rest (`T_REST_MS` of quiet before the leg has moved) abandons the open
+leg, and the next one starts at the motion onset instead. The rule is: a turn continues a
+chain, a hold breaks it.
+
 ### A hole in the timeline is bridged as one step
 
 **Symptom.** A stored rep reports travel the bar cannot have made — one capture's largest

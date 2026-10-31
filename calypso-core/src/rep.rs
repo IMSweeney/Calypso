@@ -17,10 +17,10 @@ pub const MIN_REP_MS: u32 = 400;
 pub const MAX_REP_MS: u32 = 8000;
 /// Rest samples kept either side of the motion span so ZUPT has an at-rest window to anchor to, and the app can plot the rep's endpoints.
 pub const MARGIN_MS: u32 = 200;
-/// Sample times and velocities the detector keeps, so a rep can name the bar's velocity at its
-/// *left edge* — `MARGIN_MS` before the motion, not the zero a detector that only knows "it is
-/// moving now" would assume. The edge is that far behind motion being declared, plus headroom.
-const VEL_HISTORY: usize = 48;
+/// Sample times, velocities and heights the detector keeps, so a leg can name the point it began
+/// at after the fact: at most `MARGIN_MS` behind a turn, or `T_ON_MS` behind a motion onset, plus
+/// headroom.
+const HIST: usize = 48;
 /// Smallest dominant-axis travel (metres) that counts as a rep. A hand on a rack, a bar being unracked, a bump: each crosses the motion thresholds, none of them moves the sensor far enough to be a rep.
 pub const MIN_ROM_M: f32 = 0.10;
 
@@ -34,16 +34,6 @@ const BIAS_TAU_S: f32 = 3.0;
 const MAX_DT_S: f32 = 0.1;
 /// Time constant over which a velocity is pulled back to zero while the detector is idle and the bar is still — the velocity form of "it is not moving, so it is not going anywhere".
 const V_TAU_S: f32 = 0.5;
-/// Velocity (m/s, along the drive axis) that counts as the bar coming back. A gentle lowering is below [`VEL_MIN`], so it never registers as a turn; this is what lets such a rep still close on its rest instead of running into the next one.
-const RETURN_MPS: f32 = 0.05;
-
-/// Detector state (exposed for tests/logging).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum State {
-    Idle,
-    Moving,
-    Settle,
-}
 
 /// The motion span of a detected rep (milliseconds). Add [`MARGIN_MS`] at each end to get the trace window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,79 +48,110 @@ impl RepSpan {
     }
 }
 
-/// Motion/rest state machine:
-///
-/// ```text
-/// IDLE ──|a| > ON for T_ON──► MOVING ──┬── |a| < REST for T_REST────────────► emit span, IDLE
-///                                     └── second reversal of the bar ────────► emit span, IDLE
-/// ```
-///
-/// **A rep is out and back, so it ends where the bar turns around, and a pause is only one of the ways that happens.** Stillness alone is not enough to go by: a set nobody pauses through has no stillness in it, and a detector that waits for one merges the whole set into a single span — which then exceeds [`MAX_REP_MS`] and is thrown away, taking every rep in it. The reversals are found from the velocity, which is zero at the bottom and at the top of every rep whether the bar dwells there or not.
-pub struct Detector {
-    state: State,
-    /// Time |a| first exceeded the on-threshold (candidate motion start).
-    above_since: Option<u32>,
-    /// Time |a| first dropped below the rest-threshold.
-    below_since: Option<u32>,
-    /// Motion start of the rep in progress.
+/// A leg: the bar's travel between two turns, and what the bar carried into it.
+#[derive(Debug, Clone, Copy)]
+struct Leg {
     start_ms: u32,
-    /// Velocity of the bar, m/s: the acceleration integrated with its bias taken out (see [`Detector::integrate`]).
+    end_ms: u32,
+    /// Signed vertical displacement over the leg.
+    disp_z: f32,
+    /// Whether the bar came to rest before this leg moved — a hold, not a grind.
+    had_rest: bool,
+    /// The bar's velocity one [`MARGIN_MS`] before the leg started.
+    v0: [f32; 3],
+}
+
+/// Turning-point detector: **a rep is an out-and-back**.
+///
+/// Integrate the bar's velocity and watch for the moments it stalls. A stall is what the bottom
+/// and the top of a rep are, whether the bar dwells there or not, so a set nobody pauses through
+/// splits at each end just as a slow one does. The signed vertical travel between two consecutive
+/// stalls is a *leg*, and a rep is two consecutive legs in opposite directions, each longer than
+/// [`MIN_ROM_M`].
+///
+/// Asking the question in this order puts the travel check inside detection rather than after it:
+/// a stroke too short to be half a rep can never pair with anything, so a bump, a re-rack and a
+/// hand on the rack are rejected by the same measurement that accepts a press. A one-way push tall
+/// enough to be a leg is dropped when the bar rests and then sets off the same way again — that is
+/// an unrack, not a rep.
+///
+/// **What it cannot see.** A leg ends on a turn, and a turn is the speed falling below
+/// [`VEL_MIN`]. A stroke that never reaches that speed never turns, so a very gentle return — below
+/// 0.15 m/s at its peak — does not close a rep here, though a detector that keys on acceleration
+/// could still catch it. Motion must also clear [`ACCEL_ON_THRESHOLD`] for [`T_ON_MS`] to open a
+/// leg at all.
+///
+/// **Two frames, for two different reasons.** The velocity is integrated in the *body* frame,
+/// where the accelerometer's bias is a constant; only the travel is accumulated in the *world*
+/// frame, because only the vertical one decides a rep. Integrating in the world frame collapses a
+/// constant bias into a vector that turns with the sensor and never cancels, so the speed never
+/// returns to zero and no turn is found after the first — invisible on a fixture with an identity
+/// quaternion, and fatal on a real capture, where the sensor is tilted and the bar swings.
+/// [`Detector::rep_v0`] is reported in the world frame, which is what [`compute_rep`] integrates in.
+pub struct Detector {
+    /// Body-frame velocity: the acceleration integrated where the bias lives.
     v: [f32; 3],
-    /// Slow estimate of the acceleration's bias, which is what would otherwise integrate into a velocity that never comes back to zero.
+    /// Slow estimate of the acceleration's bias, which would otherwise integrate into a velocity that never comes back to zero.
     bias: [f32; 3],
-    /// Time the bar's velocity first fell to nothing, as a candidate reversal.
-    still_since: Option<u32>,
-    /// Whether the bar has moved since the last reversal. A return to zero only counts once it has.
-    moved: bool,
-    /// Reversals seen in this rep: out is one, back is two, and the second ends it.
-    turns: u8,
     /// Timestamp of the previous sample, for the integration step.
     prev_t_ms: u32,
-    /// Recent sample times and velocities, for [`Detector::velocity_at`].
-    hist_t: [u32; VEL_HISTORY],
-    hist_v: [[f32; 3]; VEL_HISTORY],
+    /// The previous step's vertical velocity, in the world frame, for the trapezoid.
+    prev_world_vz: f32,
+    /// Vertical displacement accumulated since the last rebase; only differences are ever used.
+    pos_z: f32,
+    /// The open leg: where it began, the height it began at, and the velocity the bar carried into it.
+    leg_start: Option<u32>,
+    leg_pos0_z: f32,
+    leg_v0: [f32; 3],
+    leg_had_rest: bool,
+    /// Whether the bar has moved since the leg opened. A turn only counts once it has.
+    moved: bool,
+    /// When the velocity first fell below [`VEL_MIN`], as a candidate turn.
+    still_since: Option<u32>,
+    /// When the acceleration first rose above [`ACCEL_ON_THRESHOLD`], as a candidate motion onset.
+    above_since: Option<u32>,
+    /// When the sensor first went quiet, as a candidate rest.
+    rest_since: Option<u32>,
+    /// Whether a rest has been seen and not yet claimed by a leg.
+    gap_rest: bool,
+    /// The last completed leg not yet paired into a rep.
+    pending: Option<Leg>,
+    /// Recent sample times, velocities and heights, for naming a leg's start after the fact.
+    hist_t: [u32; HIST],
+    hist_v: [[f32; 3]; HIST],
+    hist_z: [f32; HIST],
     hist_head: usize,
-    /// The bar's velocity at the rep's left edge (`start_ms - MARGIN_MS`), captured as it began.
+    /// The bar's velocity at the left edge of the rep that just closed, captured as it began.
     v0: [f32; 3],
-    /// Velocity direction of the stroke in progress, sampled while the bar moves fast enough to count. A rest at one reversal is a mid-rep pause only if the next stroke goes the same way.
-    moving_dir: [f32; 3],
-    /// When the bar left rest mid-span, so a one-way push's prefix can be dropped and the rep after it can start clean.
-    resume_ms: Option<u32>,
-    /// Direction of the last stroke that ended at a turn (`moving_dir`, unit length), so "the bar came back" is velocity pointing opposite it.
-    stroke_dir: [f32; 3],
-    /// Whether the bar has moved opposite the last stroke since the turn: a return, however gentle.
-    returned: bool,
 }
 
 impl Detector {
     pub const fn new() -> Self {
         Detector {
-            state: State::Idle,
-            above_since: None,
-            below_since: None,
-            start_ms: 0,
             v: [0.0; 3],
             bias: [0.0; 3],
-            still_since: None,
-            moved: false,
-            turns: 0,
             prev_t_ms: 0,
-            hist_t: [0; VEL_HISTORY],
-            hist_v: [[0.0; 3]; VEL_HISTORY],
+            prev_world_vz: 0.0,
+            pos_z: 0.0,
+            leg_start: None,
+            leg_pos0_z: 0.0,
+            leg_v0: [0.0; 3],
+            leg_had_rest: false,
+            moved: false,
+            still_since: None,
+            above_since: None,
+            rest_since: None,
+            gap_rest: false,
+            pending: None,
+            hist_t: [0; HIST],
+            hist_v: [[0.0; 3]; HIST],
+            hist_z: [0.0; HIST],
             hist_head: 0,
             v0: [0.0; 3],
-            moving_dir: [0.0; 3],
-            resume_ms: None,
-            stroke_dir: [0.0; 3],
-            returned: false,
         }
     }
 
-    pub fn state(&self) -> State {
-        self.state
-    }
-
-    /// The bar's velocity at the left edge of the rep that just closed, captured when it began.
+    /// The bar's velocity at the left edge of the rep that just closed, captured as it began.
     pub fn rep_v0(&self) -> [f32; 3] {
         self.v0
     }
@@ -138,153 +159,191 @@ impl Detector {
     /// Feed one sample; returns the span when a rep closes.
     pub fn update(&mut self, s: &Sample) -> Option<RepSpan> {
         let mag = accel_magnitude(s);
-        self.advance(s, mag);
-        match self.state {
-            State::Idle => {
-                if mag > ACCEL_ON_THRESHOLD {
-                    let since = *self.above_since.get_or_insert(s.t_ms);
-                    if s.t_ms.saturating_sub(since) >= T_ON_MS {
-                        self.start_ms = since;
-                        self.v0 = self.velocity_at(since.saturating_sub(MARGIN_MS));
-                        self.state = State::Moving;
-                        self.above_since = None;
-                        self.below_since = None;
-                    }
-                } else {
-                    self.above_since = None;
-                }
-                None
-            }
-            State::Moving | State::Settle => {
-                // A gentle lowering may never reach VEL_MIN and so never make a turn, but its velocity still points opposite the drive: latch that, so the rest at the bottom can still close the rep.
-                if self.turns == 1
-                    && self.v[0] * self.stroke_dir[0]
-                        + self.v[1] * self.stroke_dir[1]
-                        + self.v[2] * self.stroke_dir[2]
-                        < -RETURN_MPS
-                {
-                    self.returned = true;
-                }
-                if mag < ACCEL_REST_THRESHOLD {
-                    let since = *self.below_since.get_or_insert(s.t_ms);
-                    // A rest after one stroke (`turns == 1`) is the top of a rep, not its end — unless the bar has already come back (`returned`), which is the bottom of a gentle rep. Closing at the top is what split a paused rep into a drive and a return.
-                    if (self.turns != 1 || self.returned)
-                        && s.t_ms.saturating_sub(since) >= T_REST_MS
-                    {
-                        // ZUPT anchor: the sensor is at rest here, so the velocity integration is anchored to zero at this end of the rep (`compute_rep`).
-                        let span = RepSpan {
-                            start_ms: self.start_ms,
-                            end_ms: since,
-                        };
-                        self.state = State::Idle;
-                        self.below_since = None;
-                        self.above_since = None;
-                        self.turns = 0;
-                        self.moved = false;
-                        self.still_since = None;
-                        self.moving_dir = [0.0; 3];
-                        self.resume_ms = None;
-                        self.stroke_dir = [0.0; 3];
-                        self.returned = false;
-                        if span.duration_ms() >= MIN_REP_MS && span.duration_ms() <= MAX_REP_MS {
-                            return Some(span);
-                        }
-                        return None;
-                    }
-                } else {
-                    // Left rest mid-span: remember where, so a one-way push that resumes the same way can drop its prefix and let the rep after it start here.
-                    if self.below_since.take().is_some() && self.turns == 1 {
-                        self.resume_ms = Some(s.t_ms);
-                    }
-                }
-                // The other way a rep ends: the bar has gone out and come back. Its velocity is zero at the top as surely as in a pause, and waiting for the pause is what merges a whole set into one span.
-                let speed =
-                    sqrtf(self.v[0] * self.v[0] + self.v[1] * self.v[1] + self.v[2] * self.v[2]);
-                if speed > VEL_MIN {
-                    // A stroke resumed after a rest at one turn: its direction decides whether the stroke before the rest was a rep's drive (it comes back, opposite) or a one-way push (it starts again the same way). Opposite continues the span; the same drops the prefix so the rep after it starts clean.
-                    if self.turns == 1 && !self.moved {
-                        if let Some(resume) = self.resume_ms.take() {
-                            let same_way = self.v[0] * self.moving_dir[0]
-                                + self.v[1] * self.moving_dir[1]
-                                + self.v[2] * self.moving_dir[2]
-                                > 0.0;
-                            if same_way {
-                                self.start_ms = resume;
-                                self.v0 = self.velocity_at(resume.saturating_sub(MARGIN_MS));
-                                self.turns = 0;
-                                self.returned = false;
-                            }
-                        }
-                    }
-                    self.moved = true;
-                    self.still_since = None;
-                    self.moving_dir = self.v;
-                } else if self.moved {
-                    let since = *self.still_since.get_or_insert(s.t_ms);
-                    if s.t_ms.saturating_sub(since) >= T_TURN_MS {
-                        self.turns += 1;
-                        self.moved = false;
-                        self.still_since = None;
-                        self.resume_ms = None;
-                        self.stroke_dir = unit(self.moving_dir);
-                        self.returned = false;
-                        if self.turns >= 2 {
-                            let span = RepSpan {
-                                start_ms: self.start_ms,
-                                end_ms: since,
-                            };
-                            self.state = State::Idle;
-                            self.below_since = None;
-                            self.above_since = None;
-                            self.turns = 0;
-                            self.moving_dir = [0.0; 3];
-                            self.resume_ms = None;
-                            self.stroke_dir = [0.0; 3];
-                            self.returned = false;
-                            if span.duration_ms() >= MIN_REP_MS && span.duration_ms() <= MAX_REP_MS
-                            {
-                                return Some(span);
-                            }
-                            return None;
-                        }
-                    }
-                }
-                None
-            }
-        }
-    }
-
-    /// Advance the velocity by this sample's acceleration, with the accelerometer's bias taken out.
-    ///
-    /// A biased acceleration integrated over a rep is a velocity that never returns to zero, so the reversals this detector looks for would never arrive. Both corrections need the bar to be *still*, which is why neither runs while it is moving: a bias learned from motion is the rep, taken out of itself, and a velocity damped during a rep is the same mistake one step later — the set stops splitting the moment either one runs between two reps of a set nobody pauses through.
-    fn advance(&mut self, s: &Sample, mag: f32) {
         let dt = self.step_ms(s);
-        if dt <= 0.0 {
-            return;
-        }
+        let q = s.quat_f32();
         let a = s.accel_f32();
         let quiet = mag < ACCEL_REST_THRESHOLD;
-        for k in 0..3 {
-            self.v[k] += (a[k] - self.bias[k]) * dt;
+
+        if dt > 0.0 {
+            for k in 0..3 {
+                self.v[k] += (a[k] - self.bias[k]) * dt;
+            }
             if quiet {
-                self.bias[k] += (a[k] - self.bias[k]) * (dt / BIAS_TAU_S);
-                if self.state == State::Idle {
-                    self.v[k] += (0.0 - self.v[k]) * (dt / V_TAU_S);
+                for k in 0..3 {
+                    self.bias[k] += (a[k] - self.bias[k]) * (dt / BIAS_TAU_S);
+                    // Only anchor the velocity while the bar is still: at the midpoint of a stroke the acceleration crosses zero while the velocity is at its peak.
+                    if !self.moved {
+                        self.v[k] += (0.0 - self.v[k]) * (dt / V_TAU_S);
+                    }
                 }
             }
         }
+
+        // Only the travel is taken in the world frame, because only the vertical one decides a rep.
+        let world_v = rotate_by_quat(q, self.v);
+        if dt > 0.0 {
+            self.pos_z += 0.5 * (self.prev_world_vz + world_v[2]) * dt;
+        }
+        self.prev_world_vz = world_v[2];
+
         self.hist_t[self.hist_head] = s.t_ms;
-        self.hist_v[self.hist_head] = self.v;
-        self.hist_head = (self.hist_head + 1) % VEL_HISTORY;
+        self.hist_v[self.hist_head] = world_v;
+        self.hist_z[self.hist_head] = self.pos_z;
+        self.hist_head = (self.hist_head + 1) % HIST;
+
+        // A real rest: a hold, not a grind.
+        if quiet {
+            let since = *self.rest_since.get_or_insert(s.t_ms);
+            if s.t_ms.saturating_sub(since) >= T_REST_MS {
+                self.gap_rest = true;
+                if let Some(start) = self.leg_start.take() {
+                    let moved = self.moved;
+                    self.moved = false;
+                    self.still_since = None;
+                    if moved {
+                        // **A rest ends a leg, and it is not only a kindness.** Quiet for `T_REST_MS` means the bar has stopped, whatever the integrated speed says; on a real capture the speed can sit above `VEL_MIN` for a whole window because the integration has drifted, and a leg that could only end on a speed would run from the first rep to the last and store nothing. The leg ends where the bar stopped, and the next one starts when it moves again.
+                        let leg = Leg {
+                            start_ms: start,
+                            end_ms: since,
+                            disp_z: self.pos_at_z(since) - self.leg_pos0_z,
+                            had_rest: self.leg_had_rest,
+                            v0: self.leg_v0,
+                        };
+                        return self.pair(leg);
+                    }
+                }
+            }
+        } else {
+            self.rest_since = None;
+        }
+
+        // Rebase the height while nothing depends on it, so a long session cannot walk it into the range where an f32 has no millimetres left.
+        if quiet && self.leg_start.is_none() && self.pending.is_none() && absf(self.pos_z) > 2.0 {
+            let shift = self.pos_z;
+            self.pos_z -= shift;
+            for z in self.hist_z.iter_mut() {
+                *z -= shift;
+            }
+        }
+
+        let speed = sqrtf(self.v[0] * self.v[0] + self.v[1] * self.v[1] + self.v[2] * self.v[2]);
+
+        if self.leg_start.is_none() {
+            // Looking for a motion onset, which is only needed at the start of a stream: every leg after the first begins where the previous one turned.
+            if mag > ACCEL_ON_THRESHOLD {
+                let since = *self.above_since.get_or_insert(s.t_ms);
+                if s.t_ms.saturating_sub(since) >= T_ON_MS {
+                    self.open_leg(since);
+                    self.leg_had_rest = self.gap_rest;
+                    self.gap_rest = false;
+                    self.above_since = None;
+                }
+            } else {
+                self.above_since = None;
+            }
+            return None;
+        }
+
+        // A leg is open: it ends when the velocity has sat under VEL_MIN for T_TURN_MS.
+        if speed > VEL_MIN {
+            self.moved = true;
+            self.still_since = None;
+        } else if self.moved {
+            let since = *self.still_since.get_or_insert(s.t_ms);
+            if s.t_ms.saturating_sub(since) >= T_TURN_MS {
+                let start = self.leg_start.unwrap();
+                let leg = Leg {
+                    start_ms: start,
+                    end_ms: since,
+                    disp_z: self.pos_at_z(since) - self.leg_pos0_z,
+                    had_rest: self.leg_had_rest,
+                    v0: self.leg_v0,
+                };
+                // The bar turns, it does not restart: the next leg begins where this one ended, so a turnaround with no pause either side is still two legs.
+                self.open_leg(since);
+                self.leg_had_rest = false;
+                return self.pair(leg);
+            }
+        }
+        None
     }
 
-    /// The velocity at the newest sample at or before `t_ms`, or zero if it predates the ring
-    /// (the session's start, where the bar was still).
-    fn velocity_at(&self, t_ms: u32) -> [f32; 3] {
-        let mut newest = None;
-        for i in 0..VEL_HISTORY {
+    /// Start a leg at `t_ms`, with the height and the velocity the bar had there.
+    fn open_leg(&mut self, t_ms: u32) {
+        self.leg_start = Some(t_ms);
+        self.leg_pos0_z = self.pos_at_z(t_ms);
+        self.leg_v0 = self.velocity_at(t_ms.saturating_sub(MARGIN_MS));
+        self.moved = false;
+        self.still_since = None;
+    }
+
+    /// Pair a completed leg with the pending one.
+    ///
+    /// Opposite directions, both past [`MIN_ROM_M`], is a rep. The same direction with no rest
+    /// between them is one stroke split by a stall, so the halves fuse — the travel is the sum,
+    /// which is what keeps a grind reading as one rep. The same direction *after* a rest is a
+    /// one-way push (an unrack), and the older leg is the one to drop.
+    fn pair(&mut self, leg: Leg) -> Option<RepSpan> {
+        let mag = leg.disp_z.abs();
+        let Some(p) = self.pending else {
+            if mag >= MIN_ROM_M {
+                self.pending = Some(leg);
+            }
+            return None;
+        };
+        let pmag = p.disp_z.abs();
+        let opposite = p.disp_z * leg.disp_z < 0.0;
+
+        if opposite && pmag >= MIN_ROM_M && mag >= MIN_ROM_M {
+            let span = RepSpan {
+                start_ms: p.start_ms,
+                end_ms: leg.end_ms,
+            };
+            self.pending = None;
+            self.v0 = p.v0;
+            if span.duration_ms() >= MIN_REP_MS && span.duration_ms() <= MAX_REP_MS {
+                return Some(span);
+            }
+            return None;
+        }
+
+        let next = if !opposite && !leg.had_rest {
+            Leg {
+                start_ms: p.start_ms,
+                end_ms: leg.end_ms,
+                disp_z: p.disp_z + leg.disp_z,
+                had_rest: p.had_rest,
+                v0: p.v0,
+            }
+        } else {
+            leg
+        };
+        self.pending = if next.disp_z.abs() >= MIN_ROM_M {
+            Some(next)
+        } else {
+            None
+        };
+        None
+    }
+
+    /// The height at the newest sample at or before `t_ms`.
+    fn pos_at_z(&self, t_ms: u32) -> f32 {
+        let mut newest: Option<(u32, f32)> = None;
+        for i in 0..HIST {
             let t = self.hist_t[i];
-            if t <= t_ms && newest.map_or(true, |(bt, _)| t > bt) {
+            if t <= t_ms && newest.is_none_or(|(bt, _)| t > bt) {
+                newest = Some((t, self.hist_z[i]));
+            }
+        }
+        newest.map_or(self.pos_z, |(_, z)| z)
+    }
+
+    /// The velocity at the newest sample at or before `t_ms`.
+    fn velocity_at(&self, t_ms: u32) -> [f32; 3] {
+        let mut newest: Option<(u32, [f32; 3])> = None;
+        for i in 0..HIST {
+            let t = self.hist_t[i];
+            if t <= t_ms && newest.is_none_or(|(bt, _)| t > bt) {
                 newest = Some((t, self.hist_v[i]));
             }
         }
@@ -421,7 +480,7 @@ pub const REP_FLAG_CALIBRATED: u32 = 1 << 1;
 impl msg::RepSummary {
     /// Whether this is a rep at all: the bar has to have gone up or down [`MIN_ROM_M`].
     ///
-    /// The detector closes on motion and rest, which a vibration or a hand on the rack satisfies; what it cannot see is how far anything moved, because that costs two integrations. This is the check that costs nothing after the fact — and it is measured on the vertical, the only axis with a right answer.
+    /// The detector already refuses to pair a leg shorter than [`MIN_ROM_M`], so this is the same question asked of a different measurement: the travel the stored trace computes, detrended and decimated, rather than the travel integrated on the way in. The two can disagree — a rep that spans a hole in the samples reads long — so the log holds only summaries where the number itself says the bar moved, and that is measured on the vertical, the only axis with a right answer.
     pub fn is_a_rep(&self) -> bool {
         self.rom >= MIN_ROM_M
     }
@@ -687,15 +746,6 @@ fn atan2f(y: f32, x: f32) -> f32 {
 
 fn asinf(x: f32) -> f32 {
     libm::asinf(x)
-}
-
-fn unit(v: [f32; 3]) -> [f32; 3] {
-    let m = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-    if m > 1e-6 {
-        [v[0] / m, v[1] / m, v[2] / m]
-    } else {
-        [0.0; 3]
-    }
 }
 
 fn absf(x: f32) -> f32 {

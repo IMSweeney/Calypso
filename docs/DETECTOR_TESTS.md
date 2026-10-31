@@ -157,7 +157,9 @@ in time order; an unrack and a re-rack sit right next to a rep without being sto
 nobody pauses through still splits into all five of its reps — the reversal-based close is what
 kept it from merging into one span. The one blemish the probe surfaced is ROM fidelity: in a no-rest
 set every rep after the first reads high, because the velocity has not settled to zero between reps.
-The fix is in: the integration starts from the bar's velocity at the rep's left edge, shipped as `RepSummary.v0` (a `TraceOrigin`) so a reader re-derives from the same origin, which cut the no-rest inflation from ~25 % to a ~9 % residual and left a set with rest between reps unchanged. The residual is a second-order edge effect (the reversal-based close emits the span a few tens of ms before the true turnaround) and is tracked, not fixed, here.
+The fix is in: the integration starts from the bar's velocity at the rep's left edge, shipped as `RepSummary.v0` (a `TraceOrigin`) so a reader re-derives from the same origin, which cut the no-rest inflation from ~25 % to a ~9 % residual and left a set with rest between reps unchanged. The residual is a second-order edge effect (a span is emitted a few tens of ms before the true turnaround) and is tracked, not fixed, here.
+
+**Since then the detector itself changed** — a rep is now two strokes between turning points, with the travel check inside detection (`docs/REP_TRACKING.md`). On the maps that moved nothing it should not: the same 5,292 cells store the same reps, no new false positive on the non-rep sweep, ROM on shared cells at least as close to the travel moved, and stalls mid-drive gained. The no-rest residual did not move with it either way: the later reps of a five-rep set with no rest in it read 0.201 m before the change and 0.207 m after, against 0.19 m of travel. That residual is not the detector's close — it is the bar genuinely still moving when the next rep starts, and the reference frame the trace starts from deciding how much of it to attribute to the rep. The sweep below is unchanged and still the way a detector change is measured — it is how this one was.
 
 ## Status
 

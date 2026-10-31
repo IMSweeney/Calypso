@@ -146,10 +146,57 @@ impl Push {
     }
 }
 
+/// A rep whose drive stalls partway: `first` out, a hold, `second` more out, then the whole way
+/// back. What a grind looks like to the sensor — the bar stops without coming down, and a
+/// detector that only knows "the bar is moving" sees two strokes where the lifter made one.
+#[derive(Debug, Clone, Copy)]
+pub struct Stall {
+    pub first: f32,
+    pub second: f32,
+    /// Peak speed of each drive half and of the return.
+    pub speed_in: f32,
+    pub speed_out: f32,
+    pub stall_ms: u32,
+    /// The pause at the bottom, so a set can chain these the way [`Rep`] does.
+    pub pause_bottom_ms: u32,
+}
+
+impl Stall {
+    /// The shape the turning-point detector was measured on: a bench's travel driven in two halves.
+    pub const fn bench() -> Self {
+        Stall {
+            first: 0.10,
+            second: 0.09,
+            speed_in: 0.55,
+            speed_out: 0.35,
+            stall_ms: 150,
+            pause_bottom_ms: 300,
+        }
+    }
+
+    /// The rep's motion only, appended after `from_ms`. Returns the timestamp after it.
+    pub fn strokes(&self, out: &mut Vec<Sample>, from_ms: u32) -> u32 {
+        let mut t = stroke(out, from_ms, self.first, self.speed_in, 1.0);
+        t = push_rest(out, t, self.stall_ms);
+        t = stroke(out, t, self.second, self.speed_in, 1.0);
+        t = stroke(out, t, self.first + self.second, self.speed_out, -1.0);
+        push_rest(out, t, self.pause_bottom_ms)
+    }
+
+    pub fn samples(&self) -> Vec<Sample> {
+        let mut out = Vec::new();
+        let t = push_rest(&mut out, 0, LEAD_IN_MS);
+        self.strokes(&mut out, t);
+        out
+    }
+}
+
 /// Motion that is, or is not, a rep.
 #[derive(Debug, Clone, Copy)]
 pub enum Motion {
     Rep(Rep),
+    /// The same rep, ground out in two halves.
+    Stall(Stall),
     /// The unrack, a re-rack, a bump: one push that never comes back down.
     Push(Push),
     /// Oscillation with no net travel: a hand on the rack.
@@ -164,6 +211,7 @@ impl Motion {
     pub fn samples(&self) -> Vec<Sample> {
         match *self {
             Motion::Rep(r) => r.samples(),
+            Motion::Stall(s) => s.samples(),
             Motion::Push(p) => p.samples(),
             Motion::Wobble { travel, hz, ms } => {
                 // z = (travel/2)·(1 − cos(2πft)), so accel = +(travel/2)·(2πf)²·cos(2πft): an
@@ -190,6 +238,7 @@ impl Motion {
     pub fn travel(&self) -> f32 {
         match *self {
             Motion::Rep(r) => r.travel,
+            Motion::Stall(s) => s.first + s.second,
             Motion::Push(p) => p.travel,
             Motion::Wobble { travel, .. } => travel,
         }

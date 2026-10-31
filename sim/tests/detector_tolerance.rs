@@ -5,7 +5,7 @@
 //! the sweep examples (the maps). The maps are broad and read by eye; these are the one-sentence
 //! invariants that must not regress.
 
-use calypso_sim::motion::{stored, Motion, Push, Rep, Rng};
+use calypso_sim::motion::{stored, Motion, Push, Rep, Rng, Stall};
 
 /// Each nominal scenario is exactly one stored rep, and its ROM tracks the asked-for travel.
 ///
@@ -98,6 +98,63 @@ fn a_rep_paused_at_the_top_is_one_rep() {
             (rom - rep.travel).abs() < rep.travel * 0.10,
             "{name}: rom {rom:.4} for travel {:.3}",
             rep.travel
+        );
+    }
+}
+
+/// A drive that stalls partway is one rep carrying its whole travel, not two half-reps.
+///
+/// The detector this one replaced keyed on momentum: it opened a span when the bar moved and shut
+/// it when the bar returned, so a stall inside the drive closed the span early. Measured on these
+/// three shapes it read 0.122, lost the rep entirely, and read 0.152. The turning-point detector
+/// fuses the two same-direction halves of a stalled stroke, because a stall without a rest is a
+/// grind and a stall after a rest is a hold.
+#[test]
+fn a_stall_mid_stroke_is_one_rep_with_its_travel() {
+    let bench = Stall::bench();
+    for (first, second, stall_ms) in [(0.10, 0.09, 150), (0.15, 0.04, 150), (0.05, 0.14, 200)] {
+        let stall = Stall {
+            first,
+            second,
+            stall_ms,
+            ..bench
+        };
+        let summaries = stored(&Motion::Stall(stall));
+        assert_eq!(
+            summaries.len(),
+            1,
+            "{first}+{second} @{stall_ms} ms should be one rep, got {}",
+            summaries.len()
+        );
+        // Loose on purpose: the ROM of a *stalled* stroke is a fidelity question these three
+        // shapes do not agree on yet (0.05 + 0.14 reads ~20% low, in this detector and the one
+        // before it). What must not regress is that the rep exists and is not a half.
+        let travel = stall.first + stall.second;
+        let rom = summaries[0].rom;
+        assert!(
+            rom > travel * 0.75 && rom < travel * 1.15,
+            "{first}+{second} @{stall_ms} ms: rom {rom:.4} for travel {travel:.3}"
+        );
+    }
+}
+
+/// **The known blind spot, pinned so it is a decision rather than a surprise.**
+///
+/// A leg ends where the speed falls below `VEL_MIN`, so a return gentle enough never to reach
+/// 0.15 m/s never turns, and the rep is never stored. This is the cost of asking the question
+/// with velocity, and it is accepted: the current boundary for a bench sits between 0.26 and
+/// 0.27 m/s. A fix would close a leg on bounded travel as well as on a turn — at which point this
+/// test is the one to delete, not to relax.
+#[test]
+fn a_gentle_return_is_not_detected_yet() {
+    for speed_out in [0.20, 0.24, 0.26] {
+        let rep = Rep {
+            speed_out,
+            ..Rep::bench()
+        };
+        assert!(
+            stored(&Motion::Rep(rep)).is_empty(),
+            "speed_out {speed_out} is now detected: the blind spot has been fixed, so delete this test"
         );
     }
 }

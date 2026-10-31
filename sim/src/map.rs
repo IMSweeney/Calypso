@@ -1,4 +1,4 @@
-//! The detectability map — phase 1 of `docs/DETECTOR_TESTS.md`.
+//! Detectability map — phase 1 of `docs/DETECTOR_TESTS.md`.
 //!
 //! For one lift class, draw where a synthetic rep is stored and where it is not, as 2-D ASCII
 //! slices. A cell is one of three outcomes: `.` nothing stored, `#` exactly one rep stored, `X`
@@ -16,15 +16,8 @@
 //!   3. travel × pause top
 //!   4. travel × pause bottom
 //!
-//! Which detector fills the cells is the caller's choice ([`store`]), so the same sweep can be
-//! drawn for the firmware's detector and for a prototype and the two compared cell by cell.
 
-use calypso_core::pb::msg;
-
-use crate::motion::{Motion, Rep};
-
-/// The summaries a detector stores for one motion — one entry per rep, in order.
-pub type Store<'a> = &'a dyn Fn(&Motion) -> Vec<msg::RepSummary>;
+use crate::motion::{stored, Motion, Rep};
 
 pub struct Profile {
     pub name: &'static str,
@@ -52,13 +45,6 @@ pub fn profiles() -> [Profile; 3] {
             travel_range: 0.10,
         },
     ]
-}
-
-pub fn profile(name: &str) -> Profile {
-    profiles()
-        .into_iter()
-        .find(|p| p.name == name)
-        .unwrap_or_else(|| panic!("unknown profile '{name}' (try bench|deadlift|squat)"))
 }
 
 fn linspace(lo: f32, hi: f32, n: usize) -> Vec<f32> {
@@ -109,110 +95,38 @@ fn nearest_index(vals: &[f32], target: f32) -> usize {
     best
 }
 
-/// One slice of the map: two swept knobs and a way to build the rep they name.
-pub struct Slice {
-    pub xlabel: &'static str,
-    pub xvals: Vec<f32>,
-    pub ylabel: &'static str,
-    pub yvals: Vec<f32>,
-    pub nominal_x: f32,
-    pub nominal_y: f32,
-    build: Box<dyn Fn(f32, f32) -> Rep>,
-}
+/// Draw one slice: `build(x, y)` turns the two swept knobs into the rep to test, and `(nominal_x,
+/// nominal_y)` is where that class's nominal sits, marked `*`.
+fn render(
+    xlabel: &str,
+    xvals: &[f32],
+    ylabel: &str,
+    yvals: &[f32],
+    nominal_x: f32,
+    nominal_y: f32,
+    build: &dyn Fn(f32, f32) -> Rep,
+) {
+    let xd = decimals_for(xvals);
+    let yd = decimals_for(yvals);
+    let xi = nearest_index(xvals, nominal_x);
+    let yi = nearest_index(yvals, nominal_y);
 
-/// The four slices of one profile, in the order the map prints them.
-pub fn slices(p: &Profile) -> Vec<Slice> {
-    let r = p.rep;
-    let travel = linspace(r.travel - p.travel_range, r.travel + p.travel_range, 21);
-    let speed_in = linspace(r.speed_in * 0.4, r.speed_in * 1.1, 21);
-    let speed_out = linspace(r.speed_out * 0.4, r.speed_out * 1.1, 21);
-    let pauses = pause_sweep();
-
-    let mut out = Vec::new();
-    let mut push =
-        |ylabel: &'static str, yvals: Vec<f32>, nominal_y: f32, f: Box<dyn Fn(f32, f32) -> Rep>| {
-            out.push(Slice {
-                xlabel: "travel",
-                xvals: travel.clone(),
-                ylabel,
-                yvals,
-                nominal_x: r.travel,
-                nominal_y,
-                build: f,
-            });
-        };
-    let rr = r;
-    push(
-        "speed_in",
-        speed_in,
-        r.speed_in,
-        Box::new(move |tr, sin| Rep {
-            travel: tr,
-            speed_in: sin,
-            ..rr
-        }),
-    );
-    push(
-        "speed_out",
-        speed_out,
-        r.speed_out,
-        Box::new(move |tr, sout| Rep {
-            travel: tr,
-            speed_out: sout,
-            ..rr
-        }),
-    );
-    push(
-        "pause_top",
-        pauses.clone(),
-        r.pause_top_ms as f32,
-        Box::new(move |tr, ptop| Rep {
-            travel: tr,
-            pause_top_ms: ptop as u32,
-            ..rr
-        }),
-    );
-    push(
-        "pause_bottom",
-        pauses,
-        r.pause_bottom_ms as f32,
-        Box::new(move |tr, pbot| Rep {
-            travel: tr,
-            pause_bottom_ms: pbot as u32,
-            ..rr
-        }),
-    );
-    out
-}
-
-/// Draw one slice, reading each cell through `store`.
-pub fn render(slice: &Slice, store: Store<'_>) {
-    let xd = decimals_for(&slice.xvals);
-    let yd = decimals_for(&slice.yvals);
-    let xi = nearest_index(&slice.xvals, slice.nominal_x);
-    let yi = nearest_index(&slice.yvals, slice.nominal_y);
-
+    println!("\n=== {ylabel} (rows) × {xlabel} (columns) ===");
     println!(
-        "\n=== {} (rows) × {} (columns) ===",
-        slice.ylabel, slice.xlabel
-    );
-    println!(
-        "{} columns: {}",
-        slice.xlabel,
-        slice
-            .xvals
+        "{xlabel} columns: {}",
+        xvals
             .iter()
             .map(|x| fmt(*x, xd))
             .collect::<Vec<_>>()
             .join(" ")
     );
-    for (j, y) in slice.yvals.iter().enumerate().rev() {
+    for (j, y) in yvals.iter().enumerate().rev() {
         let mut line = format!("{:>7} |", fmt(*y, yd));
-        for (i, x) in slice.xvals.iter().enumerate() {
+        for (i, x) in xvals.iter().enumerate() {
             let symbol = if i == xi && j == yi {
                 '*'
             } else {
-                match store(&Motion::Rep((slice.build)(*x, *y))).len() {
+                match stored(&Motion::Rep(build(*x, *y))).len() {
                     0 => '.',
                     1 => '#',
                     _ => 'X',
@@ -223,54 +137,93 @@ pub fn render(slice: &Slice, store: Store<'_>) {
         println!("{line}");
     }
     println!(
-        "row order top→bottom: {} {} → {}   ('#' = one rep, 'X' = more than one, '.' = none, '*' = nominal)",
-        slice.ylabel,
-        fmt(*slice.yvals.last().unwrap(), yd),
-        fmt(*slice.yvals.first().unwrap(), yd)
+        "row order top→bottom: {ylabel} {} → {}   ('#' = one rep, 'X' = more than one, '.' = none, '*' = nominal)",
+        fmt(*yvals.last().unwrap(), yd),
+        fmt(*yvals.first().unwrap(), yd)
     );
 }
 
+/// The profile a `-- bench|deadlift|squat` argument names.
+pub fn profile(name: &str) -> Profile {
+    profiles()
+        .into_iter()
+        .find(|p| p.name == name)
+        .unwrap_or_else(|| panic!("unknown profile '{name}' (try bench|deadlift|squat)"))
+}
+
 /// Draw the whole map for one profile.
-pub fn render_profile(name: &str, store: Store<'_>) {
+pub fn render_profile(name: &str) {
     let p = profile(name);
     let r = p.rep;
     println!(
         "detectability map: {}  travel {:.2} ± {:.2} m, speed in {:.2} m/s, speed out {:.2} m/s, pauses {:?} / {:?} ms",
         p.name, r.travel, p.travel_range, r.speed_in, r.speed_out, r.pause_top_ms, r.pause_bottom_ms
     );
-    for slice in slices(&p) {
-        render(&slice, store);
-    }
+
+    // Travel on the x axis for every slice; only the y knob changes.
+    let travel = linspace(r.travel - p.travel_range, r.travel + p.travel_range, 21);
+    let speed_in = linspace(r.speed_in * 0.4, r.speed_in * 1.1, 21);
+    let speed_out = linspace(r.speed_out * 0.4, r.speed_out * 1.1, 21);
+    let pauses = pause_sweep();
+
+    render(
+        "travel",
+        &travel,
+        "speed_in",
+        &speed_in,
+        r.travel,
+        r.speed_in,
+        &|tr, sin| Rep {
+            travel: tr,
+            speed_in: sin,
+            ..r
+        },
+    );
+
+    render(
+        "travel",
+        &travel,
+        "speed_out",
+        &speed_out,
+        r.travel,
+        r.speed_out,
+        &|tr, sout| Rep {
+            travel: tr,
+            speed_out: sout,
+            ..r
+        },
+    );
+
+    render(
+        "travel",
+        &travel,
+        "pause_top",
+        &pauses,
+        r.travel,
+        r.pause_top_ms as f32,
+        &|tr, ptop| Rep {
+            travel: tr,
+            pause_top_ms: ptop as u32,
+            ..r
+        },
+    );
+
+    render(
+        "travel",
+        &travel,
+        "pause_bottom",
+        &pauses,
+        r.travel,
+        r.pause_bottom_ms as f32,
+        &|tr, pbot| Rep {
+            travel: tr,
+            pause_bottom_ms: pbot as u32,
+            ..r
+        },
+    );
 }
 
-impl Slice {
-    /// The rep this cell names.
-    pub fn rep(&self, x: f32, y: f32) -> Rep {
-        (self.build)(x, y)
-    }
-
-    /// The index of the cell carrying the `*`.
-    pub fn nominal_cell(&self) -> (usize, usize) {
-        (
-            nearest_index(&self.xvals, self.nominal_x),
-            nearest_index(&self.yvals, self.nominal_y),
-        )
-    }
-}
-
-/// The column labels, formatted the way the map prints them.
-pub fn column_labels(slice: &Slice) -> String {
-    let xd = decimals_for(&slice.xvals);
-    slice
-        .xvals
-        .iter()
-        .map(|x| fmt(*x, xd))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// One row label, formatted the way the map prints it.
-pub fn row_label(slice: &Slice, j: usize) -> String {
-    let yd = decimals_for(&slice.yvals);
-    fmt(slice.yvals[j], yd)
+/// One cell's worth of rep count, for a caller that wants a number rather than a drawing.
+pub fn count(rep: Rep) -> usize {
+    stored(&Motion::Rep(rep)).len()
 }

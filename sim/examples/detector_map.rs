@@ -8,9 +8,8 @@
 use std::env;
 
 use calypso_sim::map;
-use calypso_sim::motion::stored;
 
 fn main() {
     let name = env::args().nth(1).unwrap_or_else(|| "bench".to_string());
-    map::render_profile(&name, &stored);
+    map::render_profile(&name);
 }

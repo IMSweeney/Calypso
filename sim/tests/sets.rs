@@ -37,9 +37,9 @@ fn a_set_of_five_comes_back_as_five_in_order() {
 /// this possible — a detector that waited for rest would merge the whole set into one span and
 /// throw it away. This is the count that matters.
 ///
-/// Note the one thing *not* pinned here: the later reps' ROMs read high (~20% over travel), because
+/// Note the one thing *not* pinned here: the later reps' ROMs read high (~9% over travel), because
 /// the velocity has not settled to zero between reps. That is a fidelity issue, not a detection one,
-/// and is left for the detector fix rather than baked in as a number.
+/// and is left as a number for the maps to show rather than pinned here.
 #[test]
 fn a_no_rest_set_still_splits_into_five() {
     let mut rep = Rep::bench();
