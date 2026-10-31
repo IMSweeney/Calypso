@@ -4,4 +4,6 @@
 //! What it produces goes to the app — `.pblog` fixtures the client is developed against — and to the detector's tests.
 
 pub mod fixtures;
+pub mod leg;
+pub mod map;
 pub mod motion;
