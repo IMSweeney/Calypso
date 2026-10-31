@@ -107,6 +107,10 @@ fn main() {
 
     let (mut same, mut leg_only, mut cur_only, mut rom_diff, mut count_diff) = (0, 0, 0, 0, 0);
     let mut worst_rom = 0.0f32;
+    let mut worst_cell = String::new();
+    // ROM against the travel the generator moved, which is the only truth a cell has.
+    let (mut err_c, mut err_l, mut n_shared) = (0.0f32, 0.0f32, 0usize);
+    let (mut worst_err_c, mut worst_err_l) = (0.0f32, 0.0f32);
 
     for slice in map::slices(&p) {
         println!(
@@ -142,9 +146,27 @@ fn main() {
                         'X'
                     }
                     _ => {
+                        let ec = (c[0].rom - rep.travel).abs();
+                        let el = (l[0].rom - rep.travel).abs();
+                        err_c += ec;
+                        err_l += el;
+                        n_shared += 1;
+                        worst_err_c = worst_err_c.max(ec);
+                        worst_err_l = worst_err_l.max(el);
                         let d = (c[0].rom - l[0].rom).abs();
                         if d > worst_rom {
                             worst_rom = d;
+                            worst_cell = format!(
+                                "{}={} {}={}: current {:.3} m over {} ms, leg {:.3} m over {} ms",
+                                slice.xlabel,
+                                slice.xvals[i],
+                                slice.ylabel,
+                                slice.yvals[j],
+                                c[0].rom,
+                                c[0].duration_ms,
+                                l[0].rom,
+                                l[0].duration_ms
+                            );
                         }
                         if d > ROM_TOL {
                             rom_diff += 1;
@@ -168,4 +190,17 @@ fn main() {
         same, leg_only, cur_only, count_diff, rom_diff
     );
     println!("worst ROM disagreement on a shared cell: {worst_rom:.3} m");
+    if !worst_cell.is_empty() {
+        println!("  at {worst_cell}");
+    }
+    if n_shared > 0 {
+        let n = n_shared as f32;
+        println!(
+            "ROM against the travel actually moved, on the {n_shared} shared cells: current mean {:.3} m (worst {:.3}), leg mean {:.3} m (worst {:.3})",
+            err_c / n,
+            worst_err_c,
+            err_l / n,
+            worst_err_l
+        );
+    }
 }
