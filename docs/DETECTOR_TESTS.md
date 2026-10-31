@@ -63,11 +63,12 @@ into two — not ROM, not span boundaries, not velocity. The count is the produc
 (`MIN_ROM_M` is the threshold the outside world set): zero is a miss, one is right, and
 the split is the failure a two-state cell used to hide behind a `#`.
 
-**A miss is a result, not a failure.** The map is expected to show that today's detector
-stores nothing for a good share of the pause range, and — where the travel is large
-enough that each half clears `MIN_ROM_M` — that it stores a paused rep as two: the
-deadlift's pause-top slice is all `X` above the rest debounce. Both belong in the map
-rather than in a test that has to pass.
+**A miss is a result, not a failure.** The map is expected to show regions where the
+detector stores nothing. Since the detector was taught to close on the return rather than
+on rest, the pause-top slices now read `#` across the swept range — a paused rep is one
+rep — instead of splitting (`X`) or vanishing (`.`), and a lowering gentler than `VEL_MIN`
+still closes on its rest. The `X` state stays in the map as the instrument that would show
+a future re-split.
 
 **Drawing it.** Five axes do not plot, so the map is 2-D slices, each with travel on the x
 axis and one of the other four knobs on y: travel × speed in, travel × speed out, travel

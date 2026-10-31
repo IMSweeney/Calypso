@@ -79,3 +79,25 @@ fn rng_is_deterministic() {
     assert!(same, "the same seed drew different gauss() values");
     assert!(differs, "two seeds drew identical gauss() values");
 }
+
+/// A rep held at the top is one rep, not a drive and a lowering. Before the detector closed
+/// on the return, a lockout pause past `T_REST_MS` split the rep into two spans — one at the
+/// edge of `MIN_ROM_M`, one under it — so the real rep was lost. The return ends it now.
+#[test]
+fn a_rep_paused_at_the_top_is_one_rep() {
+    for (name, mut rep) in [("bench", Rep::bench()), ("deadlift", Rep::deadlift())] {
+        rep.pause_top_ms = 500;
+        let summaries = stored(&Motion::Rep(rep));
+        assert_eq!(
+            summaries.len(),
+            1,
+            "{name}: a paused rep should be exactly one rep"
+        );
+        let rom = summaries[0].rom;
+        assert!(
+            (rom - rep.travel).abs() < rep.travel * 0.10,
+            "{name}: rom {rom:.4} for travel {:.3}",
+            rep.travel
+        );
+    }
+}

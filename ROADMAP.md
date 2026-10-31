@@ -59,6 +59,11 @@ Where Calypso is and what is left. Feature documentation lives in
   `RepSummary.flags`) instead of the reps being thrown away. The profile save still
   wants both, because its offsets are the part that cannot be re-derived. **Not yet
   run on hardware.** See [docs/CALIBRATION.md](docs/CALIBRATION.md).
+- **A rep is out and back** — the detector closes a rep on the return, not where the bar
+  rests, so a bench rep held at lockout is captured as one rep instead of split into a
+  drive and a lowering (or lost), and a lowering gentler than `VEL_MIN` still closes on
+  its rest. A one-way push that pauses (an unrack) is dropped rather than merged into the
+  next rep. See [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
 
 ## Open
 
@@ -225,15 +230,6 @@ Where Calypso is and what is left. Feature documentation lives in
       for that. What is still fitted to generated motion is the rest: the on and rest
       thresholds, their debounces, and the speed a reversal must reach. Nothing here
       has been checked against a set whose rep count is known on the day.
-- [ ] **A rep paused at the top is stored as less than a rep.** The detector closes a
-      span wherever magnitude sits under the rest threshold for `T_REST_MS`, so a bench
-      rep held at lockout arrives as a drive of about 0.10 m and a lowering of about
-      0.08 m: one at the edge of `MIN_ROM_M`, one under it, and the real rep gone. On
-      synthetic motion of that shape the split is exact and repeatable. Which end of a
-      rep a lifter pauses at is what decides whether a set is captured at all, and the
-      one labelled capture cannot say, because the reps that survived are the ones that
-      were not paused. The tolerance suite pins the behaviour; what to change (close on
-      the return rather than on rest, or a longer rest debounce) is open.
 - [ ] **Trim the static heap region if the deepest stack figure ever asks for it.**
       The 64 KB `heap_allocator!` region is what the linker stack competes with
       most, and its surplus is stack the linker cannot use. Each byte trimmed moves

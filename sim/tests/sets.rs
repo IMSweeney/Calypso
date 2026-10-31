@@ -96,3 +96,36 @@ fn a_lone_unrack_is_not_a_rep() {
     };
     assert!(stored_set(&set).is_empty());
 }
+
+/// An unrack big enough to open a span must not merge into the first rep. The push in
+/// `the_unrack_and_rerack_are_not_stored` is too small to open one; a real lift-off does,
+/// and a detector that waited for its rest would run it into the first drive and store a
+/// bogus heavier rep instead of the rep.
+#[test]
+fn a_substantial_unrack_is_not_merged_into_the_first_rep() {
+    for travel in [0.15, 0.20] {
+        let set = Set {
+            rep: Rep::bench(),
+            reps: 1,
+            inter_rep_rest_ms: 1000,
+            unrack: Some(Push {
+                travel,
+                speed: 0.6,
+                hold_ms: 500,
+            }),
+            rerack: None,
+        };
+        let reps = stored_set(&set);
+        assert_eq!(
+            reps.len(),
+            1,
+            "unrack {travel} m: exactly the rep, and not the unrack"
+        );
+        assert!(
+            (reps[0].rom - set.rep.travel).abs() < set.rep.travel * 0.10,
+            "unrack {travel} m: rom {:.4} for travel {:.3}",
+            reps[0].rom,
+            set.rep.travel
+        );
+    }
+}

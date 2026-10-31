@@ -34,6 +34,8 @@ const BIAS_TAU_S: f32 = 3.0;
 const MAX_DT_S: f32 = 0.1;
 /// Time constant over which a velocity is pulled back to zero while the detector is idle and the bar is still — the velocity form of "it is not moving, so it is not going anywhere".
 const V_TAU_S: f32 = 0.5;
+/// Velocity (m/s, along the drive axis) that counts as the bar coming back. A gentle lowering is below [`VEL_MIN`], so it never registers as a turn; this is what lets such a rep still close on its rest instead of running into the next one.
+const RETURN_MPS: f32 = 0.05;
 
 /// Detector state (exposed for tests/logging).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +92,14 @@ pub struct Detector {
     hist_head: usize,
     /// The bar's velocity at the rep's left edge (`start_ms - MARGIN_MS`), captured as it began.
     v0: [f32; 3],
+    /// Velocity direction of the stroke in progress, sampled while the bar moves fast enough to count. A rest at one reversal is a mid-rep pause only if the next stroke goes the same way.
+    moving_dir: [f32; 3],
+    /// When the bar left rest mid-span, so a one-way push's prefix can be dropped and the rep after it can start clean.
+    resume_ms: Option<u32>,
+    /// Direction of the last stroke that ended at a turn (`moving_dir`, unit length), so "the bar came back" is velocity pointing opposite it.
+    stroke_dir: [f32; 3],
+    /// Whether the bar has moved opposite the last stroke since the turn: a return, however gentle.
+    returned: bool,
 }
 
 impl Detector {
@@ -109,6 +119,10 @@ impl Detector {
             hist_v: [[0.0; 3]; VEL_HISTORY],
             hist_head: 0,
             v0: [0.0; 3],
+            moving_dir: [0.0; 3],
+            resume_ms: None,
+            stroke_dir: [0.0; 3],
+            returned: false,
         }
     }
 
@@ -142,9 +156,21 @@ impl Detector {
                 None
             }
             State::Moving | State::Settle => {
+                // A gentle lowering may never reach VEL_MIN and so never make a turn, but its velocity still points opposite the drive: latch that, so the rest at the bottom can still close the rep.
+                if self.turns == 1
+                    && self.v[0] * self.stroke_dir[0]
+                        + self.v[1] * self.stroke_dir[1]
+                        + self.v[2] * self.stroke_dir[2]
+                        < -RETURN_MPS
+                {
+                    self.returned = true;
+                }
                 if mag < ACCEL_REST_THRESHOLD {
                     let since = *self.below_since.get_or_insert(s.t_ms);
-                    if s.t_ms.saturating_sub(since) >= T_REST_MS {
+                    // A rest after one stroke (`turns == 1`) is the top of a rep, not its end — unless the bar has already come back (`returned`), which is the bottom of a gentle rep. Closing at the top is what split a paused rep into a drive and a return.
+                    if (self.turns != 1 || self.returned)
+                        && s.t_ms.saturating_sub(since) >= T_REST_MS
+                    {
                         // ZUPT anchor: the sensor is at rest here, so the velocity integration is anchored to zero at this end of the rep (`compute_rep`).
                         let span = RepSpan {
                             start_ms: self.start_ms,
@@ -156,26 +182,52 @@ impl Detector {
                         self.turns = 0;
                         self.moved = false;
                         self.still_since = None;
+                        self.moving_dir = [0.0; 3];
+                        self.resume_ms = None;
+                        self.stroke_dir = [0.0; 3];
+                        self.returned = false;
                         if span.duration_ms() >= MIN_REP_MS && span.duration_ms() <= MAX_REP_MS {
                             return Some(span);
                         }
                         return None;
                     }
                 } else {
-                    self.below_since = None;
+                    // Left rest mid-span: remember where, so a one-way push that resumes the same way can drop its prefix and let the rep after it start here.
+                    if self.below_since.take().is_some() && self.turns == 1 {
+                        self.resume_ms = Some(s.t_ms);
+                    }
                 }
                 // The other way a rep ends: the bar has gone out and come back. Its velocity is zero at the top as surely as in a pause, and waiting for the pause is what merges a whole set into one span.
                 let speed =
                     sqrtf(self.v[0] * self.v[0] + self.v[1] * self.v[1] + self.v[2] * self.v[2]);
                 if speed > VEL_MIN {
+                    // A stroke resumed after a rest at one turn: its direction decides whether the stroke before the rest was a rep's drive (it comes back, opposite) or a one-way push (it starts again the same way). Opposite continues the span; the same drops the prefix so the rep after it starts clean.
+                    if self.turns == 1 && !self.moved {
+                        if let Some(resume) = self.resume_ms.take() {
+                            let same_way = self.v[0] * self.moving_dir[0]
+                                + self.v[1] * self.moving_dir[1]
+                                + self.v[2] * self.moving_dir[2]
+                                > 0.0;
+                            if same_way {
+                                self.start_ms = resume;
+                                self.v0 = self.velocity_at(resume.saturating_sub(MARGIN_MS));
+                                self.turns = 0;
+                                self.returned = false;
+                            }
+                        }
+                    }
                     self.moved = true;
                     self.still_since = None;
+                    self.moving_dir = self.v;
                 } else if self.moved {
                     let since = *self.still_since.get_or_insert(s.t_ms);
                     if s.t_ms.saturating_sub(since) >= T_TURN_MS {
                         self.turns += 1;
                         self.moved = false;
                         self.still_since = None;
+                        self.resume_ms = None;
+                        self.stroke_dir = unit(self.moving_dir);
+                        self.returned = false;
                         if self.turns >= 2 {
                             let span = RepSpan {
                                 start_ms: self.start_ms,
@@ -185,6 +237,10 @@ impl Detector {
                             self.below_since = None;
                             self.above_since = None;
                             self.turns = 0;
+                            self.moving_dir = [0.0; 3];
+                            self.resume_ms = None;
+                            self.stroke_dir = [0.0; 3];
+                            self.returned = false;
                             if span.duration_ms() >= MIN_REP_MS && span.duration_ms() <= MAX_REP_MS
                             {
                                 return Some(span);
@@ -631,6 +687,15 @@ fn atan2f(y: f32, x: f32) -> f32 {
 
 fn asinf(x: f32) -> f32 {
     libm::asinf(x)
+}
+
+fn unit(v: [f32; 3]) -> [f32; 3] {
+    let m = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if m > 1e-6 {
+        [v[0] / m, v[1] / m, v[2] / m]
+    } else {
+        [0.0; 3]
+    }
 }
 
 fn absf(x: f32) -> f32 {
