@@ -8,7 +8,7 @@ use calypso_core::gatt::pipe_sync;
 use calypso_core::pb::{self, msg};
 use calypso_core::pipe::MESSAGE_MAX;
 use calypso_core::sync::{
-    summary_message, trace_request, RepIndex, RepPlace, SummaryCursor, REP_INDEX_LEN,
+    dev_mode, summary_message, trace_request, RepIndex, RepPlace, SummaryCursor, REP_INDEX_LEN,
 };
 use calypso_core::uuid::fixture_uuid;
 
@@ -131,10 +131,10 @@ fn the_cursor_clamps_to_the_log_it_is_reading() {
 #[test]
 fn trace_requests_are_validated() {
     let mut buf = [0u8; 64];
-    let mut encode = |rep_uuid, all_chunks, chunk_index| {
+    let mut encode = |rep_uuid, all_chunks, chunk_index, kind| {
         let n = pb::encode_trace_request(
             &msg::TraceRequest {
-                kind: msg::TraceKind::Computed,
+                kind,
                 rep_uuid: pb::uuid_to_field(&rep_uuid),
                 all_chunks,
                 chunk_index,
@@ -146,11 +146,21 @@ fn trace_requests_are_validated() {
     };
 
     let want = fixture_uuid(12);
-    let ok = trace_request_of(&encode(want, true, 0)).unwrap();
+    let ok = trace_request_of(&encode(want, true, 0, msg::TraceKind::Computed)).unwrap();
     assert_eq!(pb::uuid_from_field(&ok.rep_uuid), Some(want));
     assert!(ok.all_chunks);
 
-    let one = trace_request_of(&encode(fixture_uuid(12), false, 5)).unwrap();
+    // Both kinds are served: which traces a rep has is its summary's business, and one it does not have reads back empty.
+    let raw = trace_request_of(&encode(want, true, 0, msg::TraceKind::Raw)).unwrap();
+    assert_eq!(raw.kind, msg::TraceKind::Raw);
+
+    let one = trace_request_of(&encode(
+        fixture_uuid(12),
+        false,
+        5,
+        msg::TraceKind::Computed,
+    ))
+    .unwrap();
     assert_eq!(one.chunk_index, 5);
 
     // Its own buffer: the closure above holds `buf`.
@@ -167,8 +177,27 @@ fn trace_requests_are_validated() {
     )
     .unwrap();
     assert!(trace_request_of(&scratch[..n]).is_none());
-    assert!(trace_request_of(&encode(fixture_uuid(1), false, 9999)).is_none());
+    assert!(trace_request_of(&encode(
+        fixture_uuid(1),
+        false,
+        9999,
+        msg::TraceKind::Computed
+    ))
+    .is_none());
     assert!(trace_request_of(&[0xFF, 0xFF, 0xFF, 0xFF]).is_none());
+}
+
+/// The dev switch is the request the device acts on without answering, so what it decodes to is the whole of it.
+#[test]
+fn the_dev_switch_arrives_with_the_way_it_sets_it() {
+    let mut buf = [0u8; 32];
+    for enabled in [true, false] {
+        let n = pb::encode_dev_mode(enabled, &mut buf).unwrap();
+        let request = pipe_sync::decode_request(&buf[..n]).expect("the request decodes");
+        assert_eq!(dev_mode(&request), Some(enabled));
+        // And it is not a trace request: the device reads one or the other, never both.
+        assert!(trace_request(&request).is_none());
+    }
 }
 
 /// Where a rep's records are, so a trace request is a walk of them rather than of the log.

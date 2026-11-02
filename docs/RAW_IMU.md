@@ -269,6 +269,19 @@ without a wipe the app pulls old-format records and plots them as though they we
 
 Verified by: a release build, fake reps through the whole path, then a real session.
 
+**What has already landed ahead of it.** Dev mode is wired end to end: a client arming it
+makes every rep from then on keep its raw window as well as its plotted trace, and a
+`TraceKind::Raw` request streams those chunks back out of the log. The buffer a raw trace
+is streamed from is allocated on the first such request rather than at boot, because a
+window of full-rate samples is the largest thing a session can be asked to hold and a
+session that never serves one should not pay for it.
+
+What this does **not** yet give is a trace worth replaying: the sampler still builds its
+sample from the fused `linear_acceleration` and a zero angular rate (see the stopgap in
+`main`), so a raw trace recorded today has the right shape and no gyroscope. That is the
+point of doing the plumbing first — a session that syncs 19 KB of chunks is the path
+working, and stage 3 is what makes the numbers in it mean something.
+
 The documentation moves with it, because it describes the system rather than the plan:
 [`REP_TRACKING.md`](REP_TRACKING.md) for what a sample is and where the frame comes from,
 [`APP_SYNC.md`](APP_SYNC.md) for the characteristics, and [`CALIBRATION.md`](CALIBRATION.md),
@@ -309,6 +322,8 @@ trace, where it is the format rather than a compromise.
 
 - **Stage 1: done.** The filter, and the simulator that measures it.
 - **Stage 2: done.** Both traces, the summary's header, the sync protocol, the device and the app.
-- **Stage 3: todo.** Device, with the input-swap A/B. This is where raw traces start being
-  recorded, because it is where the gyroscope appears.
+- **Stage 3: in part.** Dev mode records and serves raw traces, end to end on both sides.
+  Still to do: `ACCGYRO`, the range and bandwidth in CONFIG mode, the calibration surface
+  deleted, the recording gate moved onto the filter's readiness — and the input-swap A/B
+  that all of that is for.
 - **Stage 4: todo.** Reality, retune, and whether the detector consumes the filter's velocity.

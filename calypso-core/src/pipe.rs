@@ -14,6 +14,7 @@
 use crate::gatt::pipe_sync;
 use crate::pb::{self, msg, TRACE_CHUNK_SAMPLES};
 use crate::rep::TracePoint;
+use crate::sampler::Sample;
 use crate::uuid::RepUuid;
 use gatt_pipe::{flags, Header, Received, Receiver, Send, Sender, MAX_ATTEMPTS};
 
@@ -105,9 +106,13 @@ pub struct Session<'a> {
     incoming_len: usize,
     /// The frame the app is owed for the write that just arrived.
     reply: Option<Reply>,
-    /// A trace being streamed back, and the points it comes from.
+    /// A plotted trace being streamed back, and the points it comes from.
     points: &'a mut [TracePoint],
     points_len: usize,
+    /// A raw trace being streamed back, and the full-rate samples it comes from. Empty until the caller hands one
+    /// over, because a window's worth of samples is RAM a session that never serves a raw trace should not hold.
+    raw: &'a mut [Sample],
+    raw_len: usize,
     trace: Option<Trace>,
 }
 
@@ -118,11 +123,13 @@ enum Reply {
     Nak(u8),
 }
 
-/// A trace being streamed: one `TraceChunk` per transfer, in chunk order.
+/// A trace being streamed: one chunk message per transfer, in chunk order, from whichever of the session's two
+/// buffers the request's kind names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Trace {
     rep_uuid: RepUuid,
     t0_ms: u32,
+    kind: msg::TraceKind,
     /// Chunks in the whole trace, which every chunk carries so the app knows when it has them all.
     total_chunks: u32,
     next: u32,
@@ -166,6 +173,8 @@ impl<'a> Session<'a> {
             reply: None,
             points,
             points_len: 0,
+            raw: &mut [],
+            raw_len: 0,
             trace: None,
         }
     }
@@ -216,16 +225,42 @@ impl<'a> Session<'a> {
             self.trace = None;
             return false;
         };
-        let (rep_uuid, t0_ms, total_chunks) = match self.trace {
-            Some(trace) => (trace.rep_uuid, trace.t0_ms, trace.total_chunks),
-            None => return false,
+        let Some(trace) = self.trace else {
+            return false;
         };
         let start = (index as usize) * TRACE_CHUNK_SAMPLES;
+        // A chunk carries the rep, the kind it was asked for and how many there are, so the two traces are read
+        // from the two buffers that were filled and this is the only place that has to know which.
+        if trace.kind == msg::TraceKind::Raw {
+            let end = (start + TRACE_CHUNK_SAMPLES).min(self.raw_len);
+            let Some(samples) = self.raw.get(start..end) else {
+                return false;
+            };
+            let chunk = pb::raw_chunk_message(
+                trace.rep_uuid,
+                index,
+                trace.t0_ms,
+                trace.total_chunks,
+                samples,
+            );
+            return self.send(
+                Kind::Trace,
+                &msg::SyncMessage {
+                    body: Some(msg::SyncMessage_::Body::Raw(chunk)),
+                },
+            );
+        }
         let end = (start + TRACE_CHUNK_SAMPLES).min(self.points_len);
         let Some(points) = self.points.get(start..end) else {
             return false;
         };
-        let chunk = pb::computed_chunk_message(rep_uuid, index, t0_ms, total_chunks, points);
+        let chunk = pb::computed_chunk_message(
+            trace.rep_uuid,
+            index,
+            trace.t0_ms,
+            trace.total_chunks,
+            points,
+        );
         self.send(
             Kind::Trace,
             &msg::SyncMessage {
@@ -386,6 +421,8 @@ impl<'a> Session<'a> {
         self.outgoing_len = 0;
         self.trace = None;
         self.points_len = 0;
+        // The raw storage itself stays: it is the caller's buffer, and the next connection can ask for a trace too.
+        self.raw_len = 0;
     }
 
     /// The storage a trace being streamed is read into, for `store::read_trace`.
@@ -396,15 +433,61 @@ impl<'a> Session<'a> {
         &mut self.points[..]
     }
 
-    /// Start streaming the trace in [`Session::trace_storage`], which is now `points` long.
+    /// Start streaming the plotted trace in [`Session::trace_storage`], which is now `points` long.
     /// `only` is the one chunk index to send, for a request that asked for a single chunk rather than for the trace.
     /// A trace already streaming is replaced: the app asks for one at a time, and the newer request is the one that will be waited for.
     pub fn start_trace(&mut self, rep_uuid: RepUuid, t0_ms: u32, points: usize, only: Option<u32>) {
         self.points_len = points.min(self.points.len());
+        self.start_stream(
+            rep_uuid,
+            t0_ms,
+            msg::TraceKind::Computed,
+            self.points_len,
+            only,
+        );
+    }
+
+    /// The storage a raw trace being streamed is read into, for `store::read_raw`.
+    /// Empty until the caller hands a buffer over with [`Session::set_raw_storage`]: a raw trace is a window's worth
+    /// of full-rate samples, and only a client that asks for one should cost that RAM.
+    pub fn raw_storage(&mut self) -> &mut [Sample] {
+        self.raw_len = 0;
+        self.trace = None;
+        &mut self.raw[..]
+    }
+
+    /// The buffer [`Session::raw_storage`] hands out. The caller owns it and sizes it; this only stops using it.
+    pub fn set_raw_storage(&mut self, raw: &'a mut [Sample]) {
+        self.raw = raw;
+        self.raw_len = 0;
+        self.trace = None;
+    }
+
+    /// Start streaming the raw trace in [`Session::raw_storage`], which is now `samples` long.
+    pub fn start_raw_trace(
+        &mut self,
+        rep_uuid: RepUuid,
+        t0_ms: u32,
+        samples: usize,
+        only: Option<u32>,
+    ) {
+        self.raw_len = samples.min(self.raw.len());
+        self.start_stream(rep_uuid, t0_ms, msg::TraceKind::Raw, self.raw_len, only);
+    }
+
+    fn start_stream(
+        &mut self,
+        rep_uuid: RepUuid,
+        t0_ms: u32,
+        kind: msg::TraceKind,
+        len: usize,
+        only: Option<u32>,
+    ) {
         self.trace = Some(Trace {
             rep_uuid,
             t0_ms,
-            total_chunks: pb::chunk_count_for(self.points_len),
+            kind,
+            total_chunks: pb::chunk_count_for(len),
             next: only.unwrap_or(0),
             only,
         });

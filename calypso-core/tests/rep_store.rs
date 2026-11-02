@@ -211,6 +211,103 @@ fn a_trace_read_from_its_summary_walks_the_reps_records_only() {
     );
 }
 
+/// A rep a dev session recorded carries its window as well, and either trace reads back without disturbing the other:
+/// the two runs are written together and read by kind, from a summary's record id and from a walk of the log.
+#[test]
+fn a_raw_trace_is_stored_after_the_plotted_one_and_reads_back_whole() {
+    let (samples, _) = squat_set(1, 1500, 800, 0.4);
+    let (traces, summaries) = pipeline(&samples);
+    let trace = &traces[0];
+    let mut summary = summaries[0].clone();
+
+    // The window the rep was measured from, at full rate: what a dev session stores beside the plotted trace.
+    // It starts where the summary says it does, because that origin is what both traces count from.
+    let from = samples
+        .iter()
+        .position(|s| s.t_ms >= summary.t_start_ms)
+        .expect("a rep starts at one of the samples it was measured from");
+    let window: Vec<Sample> = samples[from..].iter().take(300).copied().collect();
+    assert_eq!(window[0].t_ms, summary.t_start_ms);
+    let raw_chunks = calypso_core::pb::chunk_count_for(window.len());
+    assert!(
+        raw_chunks > calypso_core::pb::chunk_count_for(trace.len()),
+        "the raw trace is the bigger one: full rate against a fixed budget"
+    );
+
+    let mut flash = BigFlash::new();
+    let mut buf = [0u8; RECORD_BUF_BYTES];
+    let want = fixture_uuid(7);
+    summary.rep_uuid = calypso_core::pb::uuid_to_field(&want);
+    let first_chunk_id = {
+        let mut log = mount(&mut flash);
+        let summary_id = log.next_id();
+        store::append_rep(&mut log, &mut buf, &mut summary, trace, Some(&window)).unwrap();
+        // What `store::append_rep` promises and the summary index relies on: the raw run starts after the plotted one.
+        assert_eq!(summary.raw_len, window.len() as u32);
+        assert_eq!(summary.raw_chunks, raw_chunks);
+        assert_eq!(
+            log.next_id(),
+            summary_id + 1 + summary.computed_chunks + raw_chunks
+        );
+        summary_id + 1 + summary.computed_chunks
+    };
+
+    let mut log = mount(&mut flash);
+    let mut rec = msg::RepRecord::default();
+
+    // Read from the raw run's first record, which is what the summary stream records as a rep's place.
+    let mut read = vec![Sample::ZERO; window.len()];
+    let n = store::read_raw_from(
+        &mut log,
+        &mut buf,
+        &mut rec,
+        first_chunk_id,
+        raw_chunks,
+        want,
+        &mut read,
+    )
+    .unwrap();
+    assert_eq!(n, window.len(), "every sample of the window");
+    assert_eq!(read, rebased(&window), "as the sensor read them");
+
+    // And the same by walking the log, for a rep this connection never placed.
+    let mut walked = vec![Sample::ZERO; window.len()];
+    let m = store::read_raw(&mut log, &mut buf, &mut rec, want, &mut walked).unwrap();
+    assert_eq!(m, n, "the walk and the placement find the same trace");
+    assert_eq!(walked, read);
+
+    // The plotted trace is still whole either way: the two runs do not eat into each other.
+    let mut storage = vec![TracePoint::ZERO; trace.len()];
+    let mut plotted = TraceBuf::new(&mut storage);
+    let p = store::read_trace_from(
+        &mut log,
+        &mut buf,
+        &mut rec,
+        first_chunk_id - summary.computed_chunks,
+        summary.computed_chunks,
+        want,
+        &mut plotted,
+    )
+    .unwrap();
+    assert_eq!(p, trace.len());
+    for (got, want) in plotted.iter().zip(trace.iter()) {
+        assert_eq!(got.t_ms, want.t_ms - trace[0].t_ms);
+        assert_eq!(got.quat, want.quat);
+    }
+}
+
+/// What a stored sample reads back as: the wire counts from the rep's first sample, so an uptime arrives rebased.
+fn rebased(window: &[Sample]) -> Vec<Sample> {
+    let t0 = window.first().map_or(0, |s| s.t_ms);
+    window
+        .iter()
+        .map(|s| Sample {
+            t_ms: s.t_ms - t0,
+            ..*s
+        })
+        .collect()
+}
+
 #[test]
 fn summary_and_chunks_share_the_rep_uuid() {
     let (samples, _) = squat_set(1, 1500, 800, 0.4);

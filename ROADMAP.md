@@ -94,11 +94,12 @@ Where Calypso is and what is left. Feature documentation lives in
       zero at rest by definition — and a residue it left behind kept the device from storing a
       rep for a whole session. Reading `ACC_DATA`/`GYR_DATA` and running the filter here makes
       gravity an input rather than an estimate. The plan and its four stages are
-      [docs/RAW_IMU.md](docs/RAW_IMU.md): the filter, the simulator and the wire format — two
-      traces, a raw one only a dev switch records — are done, and what is left is the device's
-      `ACCGYRO` read with the calibration surface deleted, raw traces actually being recorded,
-      and a real session to retune against. Until stage 3 lands, the device keeps working the old
-      way.
+      [docs/RAW_IMU.md](docs/RAW_IMU.md): the filter, the simulator, the wire format — two
+      traces, a raw one only a dev switch records — and the dev switch itself, which stores a
+      rep's window and streams it back out, are done. What is left is the device's `ACCGYRO` read
+      with the calibration surface deleted, and a real session to retune against. Until that
+      lands the device keeps working the old way, which also means the samples it records carry no
+      gyroscope: the path is live and the traces in it are not yet worth replaying.
 
 ### The recording gate
 

@@ -50,7 +50,7 @@ use calypso_core::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, comp
 use calypso_core::report::Latch;
 use calypso_core::sampler::{SAMPLE_RATE_HZ, Sample, SampleRing};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
-use calypso_core::sync::{SummaryCursor, trace_request};
+use calypso_core::sync::{SummaryCursor, dev_mode, trace_request};
 use calypso_core::uuid::{self, RepUuid};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -90,6 +90,15 @@ static CALIBRATION_BITS: AtomicU32 = AtomicU32::new(0);
 
 /// Whether the calibration profile has been written to NVS this boot, so the save (a flash erase and write) does not repeat on every poll.
 static CALIBRATION_SAVED: AtomicBool = AtomicBool::new(false);
+
+/// Whether a client has armed dev mode this boot: every rep stored from here on keeps its raw trace as well as its plotted one.
+///
+/// Off at every boot and never persisted (`msg::DevMode` says why): a switch left on fills the log three times as fast,
+/// and a switch remembered would cost a reflash to turn off.
+///
+/// A trace recorded by this build has no angular rate in it — the sampler's sample still comes from the fused output,
+/// which is the stopgap — so it has the right shape and does not replay through the filter yet.
+static DEV_MODE: AtomicBool = AtomicBool::new(false);
 
 /// The wall clock the client last set: unix seconds at this boot's uptime zero, or 0 while nothing has set one.
 ///
@@ -169,6 +178,10 @@ impl FlashStore {
 
 /// Summaries collected per pass of the summary stream. Each is ~76 bytes, so the batch is a heap buffer rather than a local.
 const SUMMARY_BATCH: usize = 16;
+
+/// What the heap must still have free once the raw trace buffer is allocated: the radio is in the same heap, and a
+/// device this short of it stops taking connections.
+const RAW_TRACE_HEADROOM_BYTES: usize = 8 * 1024;
 
 /// How many records this boot has added to the flash log.
 ///
@@ -581,29 +594,59 @@ async fn main(spawner: Spawner) -> ! {
                                         report(msg::ReportKind::RequestRefused);
                                         continue;
                                     };
-                                    let Some(request) = trace_request(&request) else {
-                                        warn!("sync: a request this device will not serve");
-                                        report(msg::ReportKind::RequestRefused);
-                                        continue;
-                                    };
-                                    let wanted =
-                                        calypso_core::pb::uuid_from_field(&request.rep_uuid);
-                                    info!("trace request: rep {}", UuidShort(wanted.as_ref()));
-                                    if is_subscribed(&gatt, &conn, gatt.sync.messages.cccd_handle) {
-                                        stream_trace(
-                                            store,
-                                            sync_rec_buf,
-                                            sync_rec_msg,
-                                            &batch,
-                                            &mut sync,
-                                            &conn,
-                                            request,
-                                        )
-                                        .await;
+                                    // The dev switch is an operation rather than a question, so it is answered with a log line rather than with a message.
+                                    if let Some(enabled) = dev_mode(&request) {
+                                        DEV_MODE.store(enabled, Ordering::Relaxed);
+                                        if enabled {
+                                            info!("dev mode on: every rep from here keeps its raw trace as well");
+                                        } else {
+                                            info!("dev mode off: reps store the plotted trace only");
+                                        }
                                     } else {
-                                        // A transfer nobody acknowledges would stall and be abandoned, and the app would wait for a trace that is not coming.
-                                        warn!("trace request ignored: notifications are not subscribed");
-                                        report(msg::ReportKind::RequestRefused);
+                                        let Some(request) = trace_request(&request) else {
+                                            warn!("sync: a request this device will not serve");
+                                            report(msg::ReportKind::RequestRefused);
+                                            continue;
+                                        };
+                                        let wanted =
+                                            calypso_core::pb::uuid_from_field(&request.rep_uuid);
+                                        info!(
+                                            "trace request: rep {} ({=str})",
+                                            UuidShort(wanted.as_ref()),
+                                            trace_kind(request.kind)
+                                        );
+                                        if is_subscribed(&gatt, &conn, gatt.sync.messages.cccd_handle) {
+                                            // The two traces are read differently because they are different sizes:
+                                            // the plotted one fits the session's buffer from boot, and a window of
+                                            // full-rate samples does not.
+                                            if request.kind == msg::TraceKind::Raw {
+                                                stream_raw_trace(
+                                                    store,
+                                                    sync_rec_buf,
+                                                    sync_rec_msg,
+                                                    &batch,
+                                                    &mut sync,
+                                                    &conn,
+                                                    &request,
+                                                )
+                                                .await;
+                                            } else {
+                                                stream_trace(
+                                                    store,
+                                                    sync_rec_buf,
+                                                    sync_rec_msg,
+                                                    &batch,
+                                                    &mut sync,
+                                                    &conn,
+                                                    request,
+                                                )
+                                                .await;
+                                            }
+                                        } else {
+                                            // A transfer nobody acknowledges would stall and be abandoned, and the app would wait for a trace that is not coming.
+                                            warn!("trace request ignored: notifications are not subscribed");
+                                            report(msg::ReportKind::RequestRefused);
+                                        }
                                     }
                                 }
 
@@ -787,11 +830,15 @@ async fn main(spawner: Spawner) -> ! {
                             sum.rep_uuid = calypso_core::pb::uuid_to_field(&rep_uuid);
                             // What the sensor was set to, so the trace can be read without assuming today's build.
                             sum.set_config(calypso_core::pb::config_message(&SAMPLER_CONFIG));
+                            // A dev session keeps what the sensor read on top of what it plotted: the plotted trace is what a screen draws, and only the raw one can be replayed. Same window, so the two cover the same rep.
+                            let raw = DEV_MODE
+                                .load(Ordering::Relaxed)
+                                .then_some(&rep_window[..copied]);
                             // Persist the rep (summary + trace chunks). This happens right after the rest debounce, i.e. while the sensor is at rest, so the tens of ms an erase takes here can't land in the middle of a rep.
                             let stored = {
                                 let mut guard = store.lock().await;
                                 flash_window("rep append", || {
-                                    store_rep(&mut guard, rec_buf, &mut sum, &rep_trace)
+                                    store_rep(&mut guard, rec_buf, &mut sum, &rep_trace, raw)
                                 })
                             };
                             match stored {
@@ -814,12 +861,13 @@ async fn main(spawner: Spawner) -> ! {
                                 }
                             }
                             info!(
-                                "rep {}: {}..{} ms ({} ms), {} trace pts, rom {=f32} m, peak v {=f32} m/s, mean v {=f32} m/s, peak a {=f32} m/s^2, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
+                                "rep {}: {}..{} ms ({} ms), {} trace pts, {} raw samples, rom {=f32} m, peak v {=f32} m/s, mean v {=f32} m/s, peak a {=f32} m/s^2, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
                                 UuidShort(Some(&rep_uuid)),
                                 span.start_ms,
                                 span.end_ms,
                                 sum.duration_ms,
                                 sum.computed_len,
+                                sum.raw_len,
                                 sum.rom,
                                 sum.peak_velocity,
                                 sum.mean_velocity,
@@ -1540,6 +1588,128 @@ fn read_trace_from_log(
     read.map(|n| n > 0).unwrap_or(false)
 }
 
+/// Read a rep's **raw** trace out of the log and start streaming it, the same way the plotted one is.
+///
+/// The only difference is where the samples are while they are sent: a full-rate window is the one trace too big to
+/// hold from boot, so its buffer is allocated on the first request (`ensure_raw_storage`).
+///
+/// A function of its own rather than an arm of [`stream_trace`] because two awaited futures in one frame is one future
+/// holding both, and this crate lints the frame size.
+async fn stream_raw_trace(
+    store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
+    rec_buf: &mut [u8],
+    rec: &mut msg::RepRecord,
+    batch: &SummaryBatch,
+    sync: &mut Sync<'_>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
+    request: &msg::TraceRequest,
+) {
+    let Some(rep_uuid) = calypso_core::pb::uuid_from_field(&request.rep_uuid) else {
+        return;
+    };
+    ensure_raw_storage(sync);
+    let (t0_ms, samples) = {
+        let storage = sync.session.raw_storage();
+        if storage.is_empty() {
+            refuse_raw_trace(&rep_uuid, "this device cannot hold one");
+            report(msg::ReportKind::RequestRefused);
+            return;
+        }
+        let mut guard = store.lock().await;
+        // The log work stays out of this future: see `collect_summaries`.
+        let read = read_raw_from_log(&mut guard, rec_buf, rec, rep_uuid, &batch.index, storage);
+        if read == 0 {
+            refuse_raw_trace(&rep_uuid, "not in the log");
+            report(msg::ReportKind::TraceUnreadable);
+            return;
+        }
+        // The window's first sample, which is the origin both traces count from.
+        (storage[0].t_ms, read)
+    };
+
+    log_raw_trace(&rep_uuid, samples);
+    let only = if request.all_chunks {
+        None
+    } else {
+        Some(request.chunk_index)
+    };
+    sync.session.start_raw_trace(rep_uuid, t0_ms, samples, only);
+
+    // The first transfer goes now; the rest go as the app acknowledges them (see `keep_sending`).
+    sync.send_trace_chunk(conn).await;
+}
+
+/// Read one rep's raw trace out of the log into `samples`, returning how many were recovered — 0 when the rep's raw
+/// chunks were never recorded or the ring has overwritten them.
+///
+/// In its own frame, and never inlined: the partition table it reads into is the largest local in this file.
+#[inline(never)]
+fn read_raw_from_log(
+    store: &mut FlashStore,
+    rec_buf: &mut [u8],
+    rec: &mut msg::RepRecord,
+    rep_uuid: RepUuid,
+    index: &BatchIndex,
+    samples: &mut [Sample],
+) -> usize {
+    let (flash, pt_mem) = store.split();
+    let Ok(pt) = partitions::read_partition_table(flash, pt_mem) else {
+        return 0;
+    };
+    let Ok(Some(partition)) = pt.find_partition(partitions::PartitionType::Data(
+        partitions::DataPartitionSubType::Undefined,
+    )) else {
+        return 0;
+    };
+    let mut region = partition.as_embedded_storage(flash);
+    let Ok(mut log) = FlashLog::mount(&mut region) else {
+        return 0;
+    };
+    let read = match index.find(&rep_uuid) {
+        Some(place) => store::read_raw_from(
+            &mut log,
+            rec_buf,
+            rec,
+            place.first_raw_chunk_id(),
+            place.raw_chunks,
+            rep_uuid,
+            samples,
+        ),
+        None => store::read_raw(&mut log, rec_buf, rec, rep_uuid, samples),
+    };
+    read.unwrap_or(0)
+}
+
+/// Give the session the buffer a raw trace is streamed from, if it has none yet.
+///
+/// A window of full-rate samples is the largest thing a session can be asked to hold, and only a client in dev mode
+/// asks for it, so it is allocated on the first request rather than at boot. The heap check is the radio's: the two
+/// share one heap, and a device left too short of it stops accepting connections.
+#[inline(never)]
+fn ensure_raw_storage(sync: &mut Sync<'_>) {
+    if !sync.session.raw_storage().is_empty() {
+        return;
+    }
+    let bytes = REP_WINDOW_SAMPLES * core::mem::size_of::<Sample>();
+    let free = esp_alloc::HEAP.free();
+    if free < bytes + RAW_TRACE_HEADROOM_BYTES {
+        warn!(
+            "raw trace storage: {} B wanted, {} B free — refusing",
+            bytes, free
+        );
+        return;
+    }
+    let mut buf = AllocVec::new();
+    buf.resize(REP_WINDOW_SAMPLES, Sample::ZERO);
+    sync.session
+        .set_raw_storage(Box::leak(buf.into_boxed_slice()));
+    info!(
+        "raw trace storage: {} B allocated, heap free {} B",
+        bytes,
+        esp_alloc::HEAP.free()
+    );
+}
+
 /// A rep UUID for logs: its short form, or a placeholder when absent.
 ///
 /// Formatted through `defmt` directly rather than to a `&str`, so logging a rep costs no allocation.
@@ -1551,6 +1721,16 @@ impl defmt::Format for UuidShort<'_> {
             Some(uuid) => defmt::write!(f, "{=[u8]:02x}", &uuid::short(uuid)[..]),
             None => defmt::write!(f, "????????"),
         }
+    }
+}
+
+/// Which trace a request is for, for a log line. The same question the stream is chosen by: anything that is not raw
+/// is served as the plotted trace.
+fn trace_kind(kind: msg::TraceKind) -> &'static str {
+    if kind == msg::TraceKind::Raw {
+        "raw"
+    } else {
+        "plotted"
     }
 }
 
@@ -1633,7 +1813,7 @@ fn write_clock_record(
     })
 }
 
-/// Append one rep (summary + trace chunks) to the flash log partition. Returns the number of records written.
+/// Append one rep (summary, plotted trace chunks, and the raw ones when a dev session asked for them) to the flash log partition. Returns the number of records written.
 /// The log is mounted per append — a scan of the sector headers, and appends are rare (once per rep, at rest) — so nothing keeps it alive between reps.
 /// An append therefore fails for the same reasons the boot-time mount does, and a rep is lost when this returns an error.
 fn store_rep(
@@ -1641,6 +1821,7 @@ fn store_rep(
     rec_buf: &mut [u8],
     summary: &mut msg::RepSummary,
     trace: &TraceBuf<'_>,
+    raw: Option<&[Sample]>,
 ) -> Result<u32, LogError> {
     let (flash, pt_mem) = store.split();
     let pt = partitions::read_partition_table(flash, pt_mem).map_err(LogError::Table)?;
@@ -1659,7 +1840,7 @@ fn store_rep(
         FlashLog::mount(&mut region)
             .map_err(store::Error::Log)
             .and_then(|mut log| {
-                store::append_rep(&mut log, rec_buf, summary, trace.as_slice(), None)
+                store::append_rep(&mut log, rec_buf, summary, trace.as_slice(), raw)
             })
     };
     match appended {
@@ -1979,6 +2160,27 @@ fn log_trace(rep_uuid: &RepUuid, points: usize) {
         UuidShort(Some(rep_uuid)),
         points,
         calypso_core::pb::chunk_count_for(points),
+    );
+}
+
+/// A raw trace this end will not send, in a frame of its own for the same reason.
+#[inline(never)]
+fn refuse_raw_trace(rep_uuid: &RepUuid, reason: &'static str) {
+    warn!(
+        "raw trace for rep {}: {=str}",
+        UuidShort(Some(rep_uuid)),
+        reason
+    );
+}
+
+/// The same for the raw trace, in a frame of its own for the same reason.
+#[inline(never)]
+fn log_raw_trace(rep_uuid: &RepUuid, samples: usize) {
+    info!(
+        "raw trace {}: {} samples, {} chunks",
+        UuidShort(Some(rep_uuid)),
+        samples,
+        calypso_core::pb::chunk_count_for(samples),
     );
 }
 

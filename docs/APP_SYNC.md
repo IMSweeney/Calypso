@@ -234,9 +234,15 @@ a `ReportKind` and nothing else.
 
 ## Trace sync
 
-The app writes a `TraceRequest { rep_uuid, all_chunks, chunk_index }` (as a transfer
-of its own) and the device streams `TraceChunk` messages in response, one per
-transfer.
+The app writes a `TraceRequest { kind, rep_uuid, all_chunks, chunk_index }` (as a
+transfer of its own) and the device streams chunks in response, one per transfer:
+`TraceChunk` messages for the plotted trace and `RawChunk` ones for the raw trace.
+
+- **`kind` names which trace.** `TRACE_KIND_COMPUTED` is the default and the one the
+  app asks for: the plotted path, which every rep has. `TRACE_KIND_RAW` is what a dev
+  session recorded, and a rep that has none reads back empty rather than as the other
+  kind — a client reads `computed_chunks` / `raw_chunks` off the summary and knows
+  which it may ask for.
 
 - **One transfer per stored chunk.** The log stores 48 points per record (sized to
   fit a flash sector) and each record is one message: it crosses as a few
@@ -257,6 +263,30 @@ transfer.
   arrival works, a repeated index replaces the earlier one, and chunks for another
   rep are ignored. `missingIndices()` reports gaps so a single chunk can be
   re-requested.
+- **The raw trace is the whole window at full rate**, so it is several times the
+  plotted one: about 19 KB for a nine-second rep against 5 KB, and 8 to 21 chunks
+  rather than 3. It exists to be replayed rather than drawn, which is also why the
+  device holds it differently — the plotted trace is read into the session's buffer,
+  and the raw one needs a buffer of its own, allocated on the first raw request
+  rather than at boot.
+
+### Dev mode
+
+Raw traces are **recorded only while a client asks for them**. The client writes a
+`SyncRequest`'s `dev_mode` arm with `enabled`, and from then on every rep the device
+stores keeps its raw trace too; `enabled: false` stops it.
+
+- **An operation, not a value.** Nothing reads it back, and the device forgets it at
+  every boot rather than persisting it: a switch left on by accident fills the log
+  three times as fast, and forgetting it costs a reflash rather than a discovery.
+- **It travels on the pipe**, like a trace request, rather than on a characteristic
+  of its own — see [the interface](#the-devices-ble-interface) for why an operation
+  is not a state.
+- **The raw trace is recorded per boot, from the moment it is set.** Reps stored
+  before it are plotted-only, and they say so: `raw_chunks` is 0.
+- **What the samples are is [`RAW_IMU.md`](RAW_IMU.md)'s subject.** Until the chip is
+  read raw, the sampler's samples carry no angular rate, so a trace recorded now
+  exercises the path rather than replaying faithfully.
 
 ## The archive
 
@@ -287,11 +317,8 @@ truth for what the app shows**:
   second file to keep in step with it. The list is ordered by that time rather than
   by the order the archive was written in, which is what makes a catch-up land in
   the order it happened rather than in the order it arrived.
-- **What else a rep carries is in `RepSummary.flags`, one bit each.** `DECIMATED`
-  says the trace was thinned to fit the device's buffer; `CALIBRATED` says the IMU's
-  accelerometer was calibrated as well as its gyroscope when the rep was recorded.
-  The device records a rep on the gyroscope alone ([`CALIBRATION.md`](CALIBRATION.md)),
-  so a rep with that bit clear is a real rep taken while the accelerometer's status
-  was wandering, and the list says so on the row. The bits are constants in
-  `calypso_core::rep` and mirrored in the app's `model/rep.dart`; the field was a
-  single `bool` before, so a record written then reads back as the `DECIMATED` bit.
+- **Whether a rep can be replayed is in its summary.** `raw_chunks > 0` is "this
+  rep's raw trace is in the archive", and the list says `replayable` on the row.
+  Nothing else is claimed per rep: the trace's thinning is derivable from the counts
+  (`computed_len` against a full-rate window), and the summary carries what the
+  detector was given rather than a flag per possibility.

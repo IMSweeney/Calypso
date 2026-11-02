@@ -10,6 +10,7 @@ use calypso_core::pipe::{
     Kind, Session, Stalled, ATT_MTU_DEFAULT, FRAME_MAX, MESSAGE_MAX, XFER_TIMEOUT_MS,
 };
 use calypso_core::rep::TracePoint;
+use calypso_core::sampler::Sample;
 use calypso_core::sync::{self, SummaryCursor};
 use calypso_core::uuid::{fixture_uuid, RepUuid};
 use gatt_pipe::{flags, Acked, Header, Received, Receiver, Send, Sender, MAX_ATTEMPTS};
@@ -40,6 +41,16 @@ impl Buffers {
 
     fn session(&mut self) -> Session<'_> {
         Session::new(&mut self.outgoing, &mut self.incoming, &mut self.points)
+    }
+}
+
+/// A raw sample, distinct in every field, so a trace that comes back reordered or rescaled cannot pass. Times are the
+/// uptimes the device would stamp, which the wire turns into offsets from `t0`.
+fn sample(i: usize) -> Sample {
+    Sample {
+        t_ms: 1000 + (i as u32) * 10,
+        accel: [i as i16 * 3, -(i as i16) * 5, 981 + i as i16],
+        gyro: [i as i16, -(i as i16) * 7, 16 * i as i16],
     }
 }
 
@@ -569,6 +580,61 @@ fn a_trace_stream_survives_the_transfers_it_is_made_of() {
     assert_eq!(indices, (0..expected).collect::<Vec<_>>());
     assert_eq!(samples.len(), 100, "every point of the trace");
     assert!(!session.streaming(), "and the stream is done");
+}
+
+/// The raw trace streams the same way as the plotted one, out of the session's other buffer, and what arrives is what
+/// the device read: the samples a replay is started from.
+#[test]
+fn a_raw_trace_streams_as_raw_chunks() {
+    let mut buffers = Buffers::new(4);
+    let mut session = buffers.session();
+    let mut raw = vec![Sample::ZERO; 100];
+    session.set_raw_storage(&mut raw);
+    for (i, slot) in session.raw_storage().iter_mut().take(100).enumerate() {
+        *slot = sample(i);
+    }
+    session.start_raw_trace(fixture_uuid(4), 1000, 100, None);
+
+    let mut phone = Phone::new();
+    let mut now = 0u32;
+    let mut indices = Vec::new();
+    let mut samples = Vec::new();
+    while session.send_next_trace_chunk() {
+        let mut got = None;
+        for frame in drain(&mut session, MTU) {
+            now += 10;
+            if let Some(bytes) = phone.take(&mut session, &frame, now) {
+                got = Some(bytes);
+            }
+        }
+        match pb::decode_sync(&got.expect("the chunk arrived"))
+            .unwrap()
+            .body
+        {
+            Some(msg::SyncMessage_::Body::Raw(chunk)) => {
+                indices.push(chunk.index);
+                assert_eq!(chunk.total_chunks, 3, "the trace is three chunks of 48");
+                for s in chunk.samples.iter() {
+                    samples.push(pb::raw_point_from_message(s));
+                }
+            }
+            other => panic!("expected a raw chunk, got {other:?}"),
+        }
+    }
+
+    assert_eq!(indices, [0, 1, 2], "in order, with nothing skipped");
+    // The wire counts from the trace's origin, so a sample arrives with its uptime rebased on the rep's first sample.
+    let read_back: Vec<Sample> = (0..100)
+        .map(|i| Sample {
+            t_ms: 10 * i as u32,
+            ..sample(i)
+        })
+        .collect();
+    assert_eq!(
+        samples, read_back,
+        "and every sample as the device read it, full rate and undecimated"
+    );
+    assert!(!session.streaming(), "the stream is done");
 }
 
 #[test]

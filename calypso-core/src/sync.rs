@@ -120,8 +120,9 @@ pub fn summary_message(summary: msg::RepSummary) -> msg::SyncMessage {
 
 /// The trace request inside a `SyncRequest` the app wrote, or `None` if it is not one this device will serve.
 ///
-/// A request for the **raw** trace is refused: this end serves the plotted one, and the raw kind exists in the schema
-/// for the read that fills it in. Answering a raw request with the plotted trace would be worse than refusing it.
+/// Both kinds are served: the plotted trace from the chunks every rep has, and the raw one from the chunks a dev
+/// session recorded. Which of them a rep has is its summary's business (`computed_chunks`, `raw_chunks`), not this
+/// end's — a request for a trace a rep does not have reads back empty, and that is the answer either way.
 pub fn trace_request(request: &msg::SyncRequest) -> Option<msg::TraceRequest> {
     let trace = match &request.body {
         Some(msg::SyncRequest_::Body::Trace(trace)) => trace.clone(),
@@ -130,9 +131,6 @@ pub fn trace_request(request: &msg::SyncRequest) -> Option<msg::TraceRequest> {
     // A short uuid is not an identity.
     pb::uuid_from_field(&trace.rep_uuid)?;
     if !trace.all_chunks && trace.chunk_index >= 64 {
-        return None;
-    }
-    if trace.kind == msg::TraceKind::Raw {
         return None;
     }
     Some(trace)
