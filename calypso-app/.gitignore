@@ -15,3 +15,6 @@ macos/Pods/
 macos/Flutter/ephemeral/
 # Generated protobuf output is checked in on purpose (see tool/gen_proto.sh),
 # so it is deliberately not ignored.
+
+# Golden-test failure artifacts (flutter writes these when a pixel test fails).
+test/failures/
