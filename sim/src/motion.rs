@@ -282,6 +282,63 @@ impl Set {
     }
 }
 
+/// The canonical sets, the ones that ask different things of the detector: rest between reps, no
+/// rest, a push either side of a rep, and a push on its own. Shared by the `set_probe` example and
+/// the report, so the two cannot measure different sets.
+pub fn probe_sets() -> Vec<(&'static str, Set)> {
+    let push = Push {
+        travel: 0.06,
+        speed: 0.8,
+        hold_ms: 500,
+    };
+
+    let mut no_rest = Rep::bench();
+    no_rest.pause_top_ms = 0;
+
+    vec![
+        (
+            "bench x5, 3 s rest",
+            Set {
+                rep: Rep::bench(),
+                reps: 5,
+                inter_rep_rest_ms: 3000,
+                unrack: None,
+                rerack: None,
+            },
+        ),
+        (
+            "bench x5, no rest",
+            Set {
+                rep: no_rest,
+                reps: 5,
+                inter_rep_rest_ms: 0,
+                unrack: None,
+                rerack: None,
+            },
+        ),
+        (
+            "unrack + bench x1 + rerack (1 s)",
+            Set {
+                rep: Rep::bench(),
+                reps: 1,
+                inter_rep_rest_ms: 1000,
+                unrack: Some(push),
+                rerack: Some(push),
+            },
+        ),
+        (
+            "unrack only",
+            Set {
+                rep: Rep::bench(),
+                reps: 0,
+                inter_rep_rest_ms: 0,
+                unrack: Some(push),
+                rerack: None,
+            },
+        ),
+    ]
+}
+
 /// A shortcut: [`detect_and_trace`] a set's samples and keep only the summaries that clear
 /// [`MIN_ROM_M`], the same "would the device store it" question [`stored`] asks of a single motion.
 pub fn stored_set(set: &Set) -> Vec<msg::RepSummary> {

@@ -12,8 +12,15 @@ cannot describe motion the device would produce differently.
 cargo test
 cargo run --example gen_fixtures     # writes calypso-app/assets/fixtures/
 cargo run --example replay_dump -- <path.pblog>
-cargo run --example detector_map -- bench   # draw where a synthetic rep is stored
+cargo run --example detector_report # every phase, counted
+cargo run --example detector_map -- bench        # draw where a synthetic rep is stored
+cargo run --example false_positive_map           # draw where motion that is not a rep is stored
+cargo run --example set_probe                    # print what a set comes back as
 ```
+
+`detector_report` is the one command that runs all of it: the same cells the maps draw, counted
+per slice and per motion, and the canonical sets measured. The maps remain the drawing; the report
+is the same grid read as numbers, so the two cannot disagree about what the detector did.
 
 [`docs/FIXTURES.md`](../docs/FIXTURES.md) is what a fixture is for and how the set is
 added to; [`docs/DETECTOR_TESTS.md`](../docs/DETECTOR_TESTS.md) is the detector's

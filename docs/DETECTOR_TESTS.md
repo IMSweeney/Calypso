@@ -82,6 +82,14 @@ dimension a lifter actually varies, and the nominal cell is marked `*`. The outp
 boundary per class, not a score, and the interesting part is how far each nominal sits
 inside it.
 
+**Counting it.** `sim/examples/detector_report.rs` counts the same cells — the slices are
+computed once by `Slice::scan`, and the drawing and the numbers are two views of them — and
+states the result the boundary is for: the contiguous run of one-rep cells through the
+nominal, in each knob's own units, with brackets where the run reached the end of the sweep
+and the boundary is therefore outside the grid. That interval needs no denominator, so it can
+be compared across tuning changes. The percentages in the same report do need one: the grid is
+ours, so only two runs over the same grid compare.
+
 **Phase two** — the unrack, the set's reps, and the re-rack assembled into one stream — is
 its own section, §4 Sets: it is where one rep's motion can merge with, or hide, its
 neighbours.
@@ -110,13 +118,21 @@ no size threshold can reject.
 Same five knobs, different classes, and the same measurement inverted: how often is
 something stored that is not a rep. With the noise map on top it becomes a rate.
 
-**What the first sweep found.** The generator is `sim/examples/false_positive_map.rs`, two
-slices over `Motion::Push` and `Motion::Wobble`. A one-way push is nearly never stored:
-the velocity detrend halves the ROM of a stroke that never comes back, so an unrack has to
-travel about twice `MIN_ROM_M` to register, and only in a band of speeds where the stroke is
-long enough to be a rep but still fast enough to start one. A clean oscillation is stored
-only while it is slow enough to rest at each turnaround; a fast shake never dwells below the
-reversal threshold and produces no span at all.
+**What the sweep found.** The generator is `sim/src/false_positive.rs`, two slices over
+`Motion::Push` and `Motion::Wobble`.
+
+A one-way push is not stored anywhere in the swept range — not at three times `MIN_ROM_M`,
+not at any speed. That is structural rather than a tuned margin: a rep is two opposite legs,
+each past `MIN_ROM_M`, and a push is one leg, so the travel the detrend reads is not the
+quantity being asked about. (The earlier note that an unrack had to travel about twice
+`MIN_ROM_M` described the detector that keyed on momentum, before a rep became a pair of
+turns.)
+
+A clean oscillation is stored only while it is slow enough to rest at each turnaround; a fast
+shake never dwells below the reversal threshold and produces no span at all. Inside that slow
+band the detector re-opens a span at every turnaround, so most of the cells that store anything
+are splits (`X`) — one 3 s hand-on-the-rack shake is several stored reps, not one. The map shows
+all three states for that reason.
 
 Two things it needs that the detectability map does not:
 
@@ -174,6 +190,13 @@ The fix is in: the integration starts from the bar's velocity at the rep's left 
   three cell states so an over-split shows rather than reading as a hit;
   `sim/tests/detector_tolerance.rs` pins that each nominal is exactly one stored rep and that
   the generated non-reps stay rejected.
+- **One report over all of it: done.** `sim/examples/detector_report.rs` runs the detectability
+  sweeps, the non-rep sweeps and the canonical sets in one pass and prints, per slice, the cell
+  counts, the ROM error against the travel asked for, and the run of one-rep cells around the
+  nominal in the knob's own units; then what the non-rep sweep stores (with the splits counted)
+  and how many reps each set comes back with, in what order, and how far its ROM drifted. The
+  cells are `Slice::scan`'s, so the report and the drawing cannot disagree; the maps stay the
+  way to see the boundary, and the report is the way to see that it moved.
 - **Noise map: todo.** `Rng` and `Impairments` exist in `sim/src/motion.rs`, but the noise
   slice of the map and any noise pins are not written yet.
 - **False positives: done.** `sim/examples/false_positive_map.rs` sweeps `Push` (the
