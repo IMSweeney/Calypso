@@ -409,6 +409,7 @@ void _calibrationHint() {
 /// The day heading's arrows, found the way the person using the screen finds them: by their tooltip.
 Finder earlierDay() => find.byTooltip('Earlier day');
 Finder laterDay() => find.byTooltip('Later day');
+Finder todayButton() => find.byTooltip('Today');
 
 Future<void> pageBack(WidgetTester tester) async {
   await tester.tap(earlierDay());
@@ -419,6 +420,13 @@ Future<void> pageForward(WidgetTester tester) async {
   await tester.tap(laterDay());
   await tester.pumpAndSettle();
 }
+
+/// Whether the calendar button can be pressed at all.
+bool canGoToToday(WidgetTester tester) =>
+    tester
+        .widget<IconButton>(find.widgetWithIcon(IconButton, Icons.today))
+        .onPressed !=
+    null;
 
 /// Whether the forward arrow can be pressed at all.
 bool canPageForward(WidgetTester tester) =>
@@ -467,6 +475,50 @@ void _dayBoundary() {
     expect(find.text('Today'), findsOneWidget);
     expect(find.byKey(ValueKey(u(2))), findsOneWidget);
     expect(find.byKey(ValueKey(u(1))), findsNothing);
+
+    await ble.close();
+  });
+
+  testWidgets('the calendar button comes back to today from any page', (
+    tester,
+  ) async {
+    // A rep three days back: the arrows can be pressed to it, but only three presses bring you back.
+    final archive = MemoryArchive();
+    final (_, device, ble) = await connectedList(tester, archive: archive);
+    device.send(
+      summaryMessage(
+        u(1),
+        unixMs: deviceEpochMs - 3 * Duration.millisecondsPerDay,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      canGoToToday(tester),
+      isFalse,
+      reason: 'already on today, so there is nowhere to go',
+    );
+
+    await pageBack(tester);
+    await pageBack(tester);
+    await pageBack(tester);
+    expect(find.text('Today'), findsNothing);
+    expect(find.byKey(ValueKey(u(1))), findsOneWidget);
+    expect(canGoToToday(tester), isTrue);
+
+    await tester.tap(todayButton());
+    await tester.pumpAndSettle();
+
+    expect(find.text('Today'), findsOneWidget);
+    expect(
+      find.byKey(ValueKey(u(1))),
+      findsNothing,
+      reason: 'three days ago is not today',
+    );
+    expect(find.text('No reps'), findsOneWidget);
+    expect(archive.contains(u(1)), isTrue, reason: 'a day away is not lost');
+    expect(canGoToToday(tester), isFalse);
+    expect(canPageForward(tester), isFalse);
 
     await ble.close();
   });

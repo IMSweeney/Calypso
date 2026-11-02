@@ -190,6 +190,11 @@ class _RepListScreenState extends State<RepListScreen> {
     setState(() => _day = _onDay(next, _today) ? null : next);
   }
 
+  /// Back to today from however many pages back, which is the one page the arrows cannot reach in a single press.
+  /// Null is this screen's way of saying today, so a screen left open across midnight lands on the new day rather
+  /// than returning to the one it was opened on.
+  void _toToday() => setState(() => _day = null);
+
   /// The day a seeded fixture's reps are dated, so the app opens on the session the fixture is: a recording read
   /// back months later would otherwise sit behind a today page that no arrow on today leads away from. Null when the
   /// newest rep is today's, or when nothing in the archive is dated — the screen stays on today then, and the
@@ -383,8 +388,17 @@ class _RepListScreenState extends State<RepListScreen> {
 
   /// The day heading with an arrow either side of it: left is backwards in time, right is forwards, and forwards
   /// stops at today because nothing has happened tomorrow.
+  ///
+  /// The calendar at the end is the way back from a page more than one day back — a fixture's session, or a look at
+  /// last month — which the arrows would otherwise take that many presses to return from. It is disabled rather than
+  /// hidden while the screen is on today, so the arrows do not move under the finger as a page turns.
+  ///
+  /// The gap before the arrows is the calendar button's own width (`kMinInteractiveDimension`, which is what an
+  /// `IconButton` is), so the heading sits in the middle of the bar rather than in the middle of what is left of it
+  /// once the extra button is on one side.
   Widget _dayBar() => Row(
     children: [
+      const SizedBox(width: kMinInteractiveDimension),
       IconButton(
         onPressed: _earlierDay,
         icon: const Icon(Icons.chevron_left),
@@ -401,6 +415,11 @@ class _RepListScreenState extends State<RepListScreen> {
         onPressed: _day == null ? null : _laterDay,
         icon: const Icon(Icons.chevron_right),
         tooltip: 'Later day',
+      ),
+      IconButton(
+        onPressed: _day == null ? null : _toToday,
+        icon: const Icon(Icons.today),
+        tooltip: 'Today',
       ),
     ],
   );
