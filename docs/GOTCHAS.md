@@ -272,6 +272,27 @@ re-derives that from stillness) and `accel` at 0 — which reads as "the save is
 rather than "the save never ran". When a save looks broken, first check that whatever
 triggers it can actually happen.
 
+### `ready` is the recording gate, not "calibrated"
+
+**Symptom.** The app's calibration hint never appears on a device whose accelerometer has
+clearly wandered — the reps it records even carry the "not calibrated" flag — and the one
+case it was written for is the case it stays silent on.
+
+**Cause.** `CalibrationStatus.ready` is the device's own `can_record()`: the gyroscope at
+3 and nothing else, because gating on the accelerometer cost reps at random (see below).
+So a device with `gyro: 3, accel: 1` serves `ready: true` and is telling the truth about
+*recording*. A client that reads `ready` as "fully calibrated", and hides its hint when it
+is set, goes quiet for exactly the shortfall worth mentioning. The reverse mistake is as
+easy: requiring every level at 3 for readiness means a hint that never clears, since the
+magnetometer is disabled in IMU mode and the aggregate `sys` counts it.
+
+**Fix.** The levels are the truth; `ready` is only the answer to "will a rep be stored".
+`needsAttention`/`records` in `calypso-app/lib/model/calibration.dart` decide from `gyro`
+and `accel`, and the hint has two looks for the two cases: red for no reps being recorded
+(gyroscope short), advisory for reps being recorded with numbers worth less
+(accelerometer short). `test/support/calibration.dart` fakes the same rule, so a test
+that calls an accelerometer-only shortfall "not ready" is told it is wrong.
+
 ### A rep only counts if it ends in a pause
 
 **Symptom.** A set of reps stores one rep, or none, and the reps that survive are 3–8 s

@@ -368,6 +368,28 @@ void _calibrationHint() {
     await ble.close();
   });
 
+  testWidgets('an accelerometer-only shortfall still says so', (tester) async {
+    // `ready` is the device's recording gate (gyroscope only), so this device says it is recording and is right: the
+    // hint is the only place the wandering accelerometer shows up while a set is going on.
+    final (_, device, ble) = await pumpConnected(tester);
+
+    device.servesCalibration(
+      calibrationStatus(sys: 3, accel: 1, gyro: 3, ready: true),
+    );
+    await _pollCalibration(tester);
+
+    expect(find.textContaining('Accelerometer not calibrated'), findsOneWidget);
+    expect(find.textContaining('rep recording is paused'), findsNothing);
+    expect(find.textContaining('still record'), findsOneWidget);
+    expect(find.textContaining('accel 1/3'), findsOneWidget);
+
+    device.servesCalibration(calibrationStatus());
+    await _pollCalibration(tester);
+    expect(find.textContaining('Accelerometer not calibrated'), findsNothing);
+
+    await ble.close();
+  });
+
   testWidgets('a dropped connection takes a stale hint with it', (
     tester,
   ) async {

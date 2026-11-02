@@ -55,6 +55,45 @@ void main() {
     expect(bothShort.action, contains('upright'));
   });
 
+  test('an accelerometer that has wandered is a hint, not a pause', () {
+    // The device's gate is the gyroscope alone, so this device is recording reps — with `ready` true — while its
+    // accelerometer reads short. That is the case the hint has to cover and, before this, the one it never showed.
+    final accelShort = pb.CalibrationStatus(
+      sys: 3,
+      accel: 1,
+      gyro: 3,
+      mag: 0,
+      ready: true,
+    );
+    expect(accelShort.records, isTrue);
+    expect(accelShort.needsAttention, isTrue);
+    expect(accelShort.summary, isNot(contains('paused')));
+    expect(accelShort.summary, contains('travel'));
+    expect(accelShort.action, contains('upright'));
+    expect(accelShort.action, isNot(contains('on the rack')));
+    expect(accelShort.action, contains('still record'));
+
+    final gyroShort = pb.CalibrationStatus(
+      sys: 3,
+      accel: 3,
+      gyro: 2,
+      mag: 0,
+      ready: false,
+    );
+    expect(gyroShort.records, isFalse);
+    expect(gyroShort.needsAttention, isTrue);
+    expect(gyroShort.summary, contains('paused'));
+
+    final fully = pb.CalibrationStatus(
+      sys: 3,
+      accel: 3,
+      gyro: 3,
+      mag: 0,
+      ready: true,
+    );
+    expect(fully.needsAttention, isFalse, reason: 'nothing to say');
+  });
+
   test(
     'nothing is asked for when the sensors are fine but the device is not recording',
     () {
