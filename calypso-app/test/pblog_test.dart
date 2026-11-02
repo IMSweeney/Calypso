@@ -195,6 +195,47 @@ void main() {
     );
   });
 
+  test('the real deadlift fixture is one dated, complete rep', () {
+    // The only fixture of motion a device actually recorded (`docs/FIXTURES.md`): a 5.7 s deadlift with a clean
+    // timeline, kept so the app is developed against something the sensor produced rather than a cosine.
+    final result = readDump(fixture('real-deadlift'));
+    expect(result.truncated, isFalse, reason: 'a fixture ends on a record');
+
+    final summaries = summariesOf(result.records);
+    expect(summaries.length, 1);
+    final summary = summaries.single;
+    expect(summary.uuid, startsWith('f900f046'));
+
+    // The time is the point: the device stores a rep's uptime, and the date comes from its boot's clock record.
+    expect(summary.recordedAt, DateTime.utc(2026, 10, 31, 20, 30, 56, 854));
+
+    expect(summary.chunkCount, 6);
+    expect(summary.traceLen, 285);
+    expect(summary.durationMs, 5689);
+    expect(summary.rom, closeTo(0.94, 0.01));
+    expect(
+      summary.decimated,
+      isTrue,
+      reason: 'a 5.7 s window does not fit the trace buffer at full rate',
+    );
+
+    final chunks = traceChunksFor(result.records, summary.uuid!);
+    expect(chunks.length, summary.chunkCount);
+    final times = <int>[
+      for (final chunk in chunks)
+        for (final sample in chunk.samples) sample.tOffsetMs,
+    ];
+    expect(times.length, summary.traceLen);
+    for (var i = 1; i < times.length; i++) {
+      expect(
+        times[i],
+        greaterThan(times[i - 1]),
+        reason: 'a stored window has one timeline or it is not usable',
+      );
+      expect(times[i] - times[i - 1], lessThanOrEqualTo(50));
+    }
+  });
+
   test('an empty dump is valid and empty', () {
     final result = readDump(fixture('empty'));
     expect(result.records, isEmpty);

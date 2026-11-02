@@ -83,19 +83,33 @@ cargo run --example extract_capture -- \
 Every record is copied byte for byte, so a fixture made this way carries the same bytes
 the device wrote. Each prefix must match a rep or the command fails.
 
-**None is checked in at the moment**, and the reason is worth keeping: the one session
-extracted this way had every window removed again, because a stored window is not a
-stream. The sampler that recorded it stalled for 2.2 s at a time and then burst to catch
-up, so the times inside a window jump and the samples in the window do not cover the
-motion it claims to describe — 158 ms of missing time inside a 1.4 s rep, 2.3 s inside an
-8.2 s one. A test against those bytes pins numbers derived from bridging the gap, and the
-first thing it did was make a detector change look worse than it was.
+**`real-deadlift` is the one that is**, and it is one rep rather than a session: the
+first rep the device stored after the sampler's timeline was fixed — a 5.7 s deadlift,
+285 points with 19–21 ms between them, so its window is motion the device measured. It is
+read by `sim/tests/real_capture.rs`.
 
-Re-extract from a session recorded after the sampler's timeline is fixed
-([`ROADMAP.md`](../ROADMAP.md), "a rep's timeline has a hole in it"). Until then the
-checked-in fixtures are all generated, and `replay_dump` labels every window it is given
-with the timeline it found, so a session can be audited before anything is extracted from
-it.
+An older session's windows were all removed again, and the reason is worth keeping: a
+stored window is not a stream. The sampler that recorded them stalled for 2.2 s at a time
+and then burst to catch up, so the times inside a window jumped and the samples did not
+cover the motion the window claimed — 158 ms of missing time inside a 1.4 s rep, 2.3 s
+inside an 8.2 s one. A test against those bytes pins numbers derived from bridging the
+gap, and the first thing it did was make a detector change look worse than it was.
+
+A clean timeline is necessary but not sufficient. The window is the motion span with
+`MARGIN_MS` asked for before it and whatever had been sampled after it — the tail is cut
+at the close, so its margin is a few samples at most — and on `real-deadlift` even the
+200 ms before the onset are inside motion. Nothing replays such a window as a stream: a
+detector fed it cold closes no span, and `compute_rep` re-run over its own trace reads
+1.10 m where the summary stored 0.94, because the trace keeps every second sample and
+this motion's travel depends on the step it is integrated at.
+
+So audit a session with `replay_dump` — it labels every window with the timeline it found
+and the peak acceleration inside it — and extract only what that says is sound. A whole
+session with its set counts known on the day is still what the detector wants
+([`ROADMAP.md`](../ROADMAP.md), "first real device capture"). The device's own log does
+not need the app: `espflash read-flash 0x190000 0x270000 log.bin`, then `cargo run
+--example device_log -- log.bin --dump <out.pblog> <uuid-prefix>`, which is how
+`real-deadlift` was made.
 
 **Replaying one through the detector**: from `sim/`, `cargo run --example replay_dump
 -- <path.pblog>` prints the spans today's detector finds in each stored window, and

@@ -1,9 +1,10 @@
 //! Pins for the synthetic-motion generators: the few deterministic points that must stay true
 //! across every detector change, so a tuning edit is measured rather than assumed.
 //!
-//! These are the complements to `real_capture.rs` (the captured reps and non-reps, checked in) and
-//! the sweep examples (the maps). The maps are broad and read by eye; these are the one-sentence
-//! invariants that must not regress.
+//! These are the complements to the sweep examples (the maps). The maps are broad and read by eye;
+//! these are the one-sentence invariants that must not regress. Nothing here is a captured rep: a
+//! stored window has no rest at either end, so a detector cannot be judged on one (docs/FIXTURES.md,
+//! and `real_capture.rs` for what real motion *can* pin).
 
 use calypso_sim::motion::{stored, Motion, Push, Rep, Rng, Stall};
 
@@ -37,9 +38,8 @@ fn each_nominal_is_exactly_one_stored_rep() {
     }
 }
 
-/// The generated non-reps — a one-way push and an oscillation — stay rejected. The captured
-/// wobble is pinned separately in `real_capture.rs`; these are the synthetic versions. The push
-/// is under [`calypso_core::rep::MIN_ROM_M`] outright; the oscillation never even closes a span.
+/// The generated non-reps — a one-way push and an oscillation — stay rejected. The push is under
+/// [`calypso_core::rep::MIN_ROM_M`] outright; the oscillation never even closes a span.
 /// The harder cases — a full-height push (whose ROM the velocity detrend halves) or an oscillation
 /// big enough to matter — are what the false-positive map sweeps, not these two points.
 #[test]

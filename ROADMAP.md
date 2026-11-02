@@ -153,13 +153,14 @@ Where Calypso is and what is left. Feature documentation lives in
 
 ### First real device capture
 
-- [ ] **The capture cannot be a fixture until its timeline is fixed.** Three real reps
-      and one real wobble were checked in from a single bench session and have been
-      removed again: every one of those windows carries a jump in its sample times, so a
-      test against them pins numbers that came from bridging a 2.2 s gap
-      ([docs/FIXTURES.md](docs/FIXTURES.md)). What is left is a new session, with the set
-      count known on the day, recorded after the hole is fixed — that is what would make
-      the detector's own numbers testable rather than merely reproducible.
+- [ ] **A session with its set counts known on the day.** The three real reps checked in
+      from a bench session were removed again because every window in it carried a jump in
+      its sample times, so a test against them pinned numbers that came from bridging a
+      2.2 s gap ([docs/FIXTURES.md](docs/FIXTURES.md)). The sampler's timeline is fixed,
+      and the first rep stored after that is in the fixture set as `real-deadlift`
+      (`sim/tests/real_capture.rs`): one clean deadlift, 285 points, no hole. What one rep
+      cannot say is whether the detector caught a *set* — that needs a session whose rep
+      count is known before it starts, so a miss is a count rather than an inference.
 - [ ] **Whether the frame can be trusted, now that a rep is measured on it.** ROM is
       the vertical travel on Z rather than the biggest excursion, because Z is the only
       axis pinned to gravity — a rep's horizontal range is the estimate's error, not the

@@ -108,13 +108,25 @@ fn main() {
     );
 
     let mut windows: Vec<Window> = Vec::new();
+    // Unix milliseconds at the uptime zero of the boot these records are in, from the newest clock before them. A
+    // stored summary carries its uptime and not its time, so a dump's dates come from here
+    // (`docs/FIXTURES.md`), and a clock at 0 is a boot opening rather than a time.
+    let mut epoch_ms: Option<u64> = None;
     for record in &records {
         let record = decode_record(record).expect("every record in the dump decodes");
         match record {
+            Record::Clock(c) => match c.epoch_s {
+                0 => epoch_ms = None,
+                s => epoch_ms = Some(u64::from(s) * 1000),
+            },
             Record::Summary(s) => windows.push(Window {
                 uuid: s.rep_uuid.to_vec(),
                 duration_ms: s.duration_ms,
-                t_unix_ms: s.t_unix_ms,
+                // A summary streamed to the app carries its own time; one read out of the log does not.
+                t_unix_ms: match (s.t_unix_ms, epoch_ms) {
+                    (0, Some(epoch)) => epoch + u64::from(s.t_start_ms),
+                    (own, _) => own,
+                },
                 flags: s.flags,
                 chunks: Vec::new(),
             }),
@@ -132,7 +144,6 @@ fn main() {
                     w.chunks.push((c.index, samples));
                 }
             }
-            Record::Clock(_) => {}
         }
     }
 
@@ -275,9 +286,16 @@ fn main() {
     println!("  one rep   {one_span}");
     println!("  stored    {stored}; rejected as under {MIN_ROM_M} m of travel {rejected}");
     if !still.is_empty() {
+        // The peak is worth printing: a window that never closed a span because nothing moved past the threshold
+        // and one that was loud but never turned both land here, and only the number tells them apart.
         println!(
-            "  no motion {} — nothing in them past the detector's on-threshold",
-            still.len()
+            "  no span   {} — nothing in them closed as a rep, peak |a| {}",
+            still.len(),
+            still
+                .iter()
+                .map(|(_, p)| format!("{p:.1}"))
+                .collect::<Vec<_>>()
+                .join(", ")
         );
     }
     if !split.is_empty() {
