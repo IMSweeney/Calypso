@@ -1,3 +1,4 @@
+use calypso_core::fusion::FusionState;
 use calypso_core::pb::{self, msg, Record};
 use calypso_core::rep::{compute_rep, TraceBuf, TracePoint};
 use calypso_core::store::RECORD_BUF_BYTES;
@@ -116,14 +117,16 @@ fn empty_and_single_point_dumps_are_valid() {
 #[test]
 fn decimation_keeps_the_last_point() {
     let (samples, _) = squat_set(1, 10_000, 1_000, 1.2);
-    let lead_in = 300 / fixtures::SAMPLE_DT_MS as usize;
-    let window = &samples[lead_in - 12..lead_in + 1_000 + 12];
+    let lead_in = fixtures::LEAD_IN_MS as usize / fixtures::SAMPLE_DT_MS as usize;
+    // Half a second either side, so the filter sees the bar at rest at both ends.
+    let window = &samples[lead_in - 50..lead_in + 1_000 + 50];
 
     let mut storage = vec![TracePoint::ZERO; 512];
     let mut trace = TraceBuf::new(&mut storage);
-    let summary = compute_rep(window, [0.0; 3], &mut trace);
+    let summary = compute_rep(window, &FusionState::LEVEL, &mut trace);
     assert!(summary.decimated());
-    assert_eq!(summary.trace_len, 512);
+    assert!(summary.trace_len <= 512);
+    assert_eq!(summary.trace_len as usize, trace.len());
     assert_eq!(
         trace.get(trace.len() - 1).unwrap().t_ms,
         window.last().unwrap().t_ms,

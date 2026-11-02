@@ -8,8 +8,6 @@ use calypso_core::uuid::{fixture_uuid, RepUuid};
 use calypso_sim::fixtures::{detect_and_trace, squat_set};
 use common::{mount, reads, reset_reads, BigFlash, MockFlash, WideFlash};
 
-const Q_ID: [i16; 4] = [QUAT_SCALE as i16, 0, 0, 0];
-
 fn pipeline(samples: &[Sample]) -> (Vec<Vec<TracePoint>>, Vec<msg::RepSummary>) {
     let reps = detect_and_trace(samples, 512);
     (
@@ -101,7 +99,7 @@ fn oldest_reps_fall_off_when_the_ring_wraps() {
             t_ms: i * 10,
             pos: [0.0, 0.0, -0.1 * i as f32],
             accel: [0, 0, -100],
-            quat: Q_ID,
+            quat: [QUAT_SCALE as i16, 0, 0, 0],
         })
         .collect();
 

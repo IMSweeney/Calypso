@@ -1,9 +1,12 @@
 //! 100 Hz IMU sampling: fixed-point sample format and a RAM ring buffer.
 
-/// Linear-acceleration scale: LSB per m/s² (the BNO055's native fixed-point output, so no conversion is needed on the device).
+/// Specific-force scale: LSB per m/s² (the BNO055's accelerometer registers, so no conversion is needed on the device).
 pub const ACCEL_SCALE: i32 = 100;
 
-/// Quaternion scale: LSB per unit quaternion component (the BNO055's native 1/2^14 output).
+/// Angular-rate scale: LSB per degree per second (the BNO055's gyroscope registers).
+pub const GYRO_SCALE: i32 = 16;
+
+/// Quaternion scale: LSB per unit quaternion component, for the attitude computed here rather than measured.
 pub const QUAT_SCALE: i32 = 1 << 14;
 
 pub const SAMPLE_RATE_HZ: u32 = 100;
@@ -11,39 +14,40 @@ pub const SAMPLE_RATE_HZ: u32 = 100;
 /// One IMU sample, fixed point.
 ///
 /// - `t_ms`: monotonic timestamp in milliseconds.
-/// - `accel`: linear (gravity-removed) acceleration, `ACCEL_SCALE` LSB/m/s².
-/// - `quat`: orientation quaternion `[w, x, y, z]`, `QUAT_SCALE` LSB/unit.
+/// - `accel`: **specific force**, `ACCEL_SCALE` LSB/m/s² — gravity still in it, so a still sensor
+///   reads 1 g up its own up axis. This is the raw accelerometer, not an acceleration.
+/// - `gyro`: angular rate, `GYRO_SCALE` LSB/dps, in the sensor's own frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Sample {
     pub t_ms: u32,
     pub accel: [i16; 3],
-    pub quat: [i16; 4],
+    pub gyro: [i16; 3],
 }
 
 impl Sample {
     pub const ZERO: Sample = Sample {
         t_ms: 0,
         accel: [0; 3],
-        quat: [0; 4],
+        gyro: [0; 3],
     };
 
-    /// Build from floating-point readings (m/s², unit quaternion).
-    pub fn from_f32(t_ms: u32, accel: [f32; 3], quat_wxyz: [f32; 4]) -> Self {
+    /// Build from floating-point readings (m/s² of specific force, degrees per second).
+    pub fn from_f32(t_ms: u32, specific_force: [f32; 3], gyro_dps: [f32; 3]) -> Self {
         Sample {
             t_ms,
-            accel: accel.map(|a| quantize(a, ACCEL_SCALE)),
-            quat: quat_wxyz.map(|q| quantize(q, QUAT_SCALE)),
+            accel: specific_force.map(|a| quantize(a, ACCEL_SCALE)),
+            gyro: gyro_dps.map(|g| quantize(g, GYRO_SCALE)),
         }
     }
 
-    /// Linear acceleration in m/s².
-    pub fn accel_f32(&self) -> [f32; 3] {
+    /// The specific force in m/s², gravity included.
+    pub fn specific_force_f32(&self) -> [f32; 3] {
         self.accel.map(|a| a as f32 / ACCEL_SCALE as f32)
     }
 
-    /// Unit quaternion `[w, x, y, z]`.
-    pub fn quat_f32(&self) -> [f32; 4] {
-        self.quat.map(|q| q as f32 / QUAT_SCALE as f32)
+    /// Angular rate in degrees per second.
+    pub fn gyro_f32(&self) -> [f32; 3] {
+        self.gyro.map(|g| g as f32 / GYRO_SCALE as f32)
     }
 }
 

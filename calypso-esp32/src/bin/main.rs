@@ -40,6 +40,7 @@ use bno055::{BNO055_CALIB_SIZE, BNO055Calibration, BNO055OperationMode};
 use calypso_core::calibration::Calibration;
 use calypso_core::clock::{self, Boots};
 use calypso_core::flashlog::{self, FlashLog};
+use calypso_core::fusion::{Fusion, GRAVITY, conjugate, rotate_by_quat};
 use calypso_core::gatt::{
     CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncCalibrationValue, SyncImuValue,
     SyncReportsValue,
@@ -48,7 +49,7 @@ use calypso_core::pb::msg;
 use calypso_core::pipe::{self, Session, Stalled};
 use calypso_core::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, compute_rep};
 use calypso_core::report::Latch;
-use calypso_core::sampler::{QUAT_SCALE, SAMPLE_RATE_HZ, Sample, SampleRing, quantize};
+use calypso_core::sampler::{SAMPLE_RATE_HZ, Sample, SampleRing};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::sync::{SummaryCursor, trace_request};
 use calypso_core::uuid::{self, RepUuid};
@@ -110,7 +111,7 @@ static REPORTS: critical_section::Mutex<RefCell<Latch>> =
 /// The last sample the sampler read, for the app's read of the `Imu` characteristic.
 ///
 /// A critical-section mutex for the reason [`REPORTS`] is one: the sampler writes it a hundred times a second and the BLE task copies it out on its tick, and a sample assembled from two different reads — an acceleration from one tick beside a quaternion from the next — would be a reading the sensor never gave.
-static LAST_SAMPLE: critical_section::Mutex<RefCell<Option<Sample>>> =
+static LAST_SAMPLE: critical_section::Mutex<RefCell<Option<(Sample, [f32; 4])>>> =
     critical_section::Mutex::new(RefCell::new(None));
 
 /// Room for one `BootClock` record: a varint field, its tag, and the record envelope (`proto/calypso.proto`).
@@ -127,7 +128,9 @@ const FAKE_REP_MS: u32 = 6_000;
 /// Ring-buffer window: how much history the detector can be asked for, plus headroom.
 ///
 /// When the detector closes a rep, the sampler copies `[start - margin, end + margin]` out of the ring.
-/// The longest rep the detector can close is 8 s and the margins are 200 ms each side, so 9 s is the most that is ever needed and 12 s leaves a third of the ring spare.
+/// The longest rep the detector can close is 8 s and the margins are 500 ms each side — as long as they
+/// are because the filter only calls a bar at rest after it has held still for 400 ms — so 9 s is the
+/// most that is ever needed and 12 s leaves a third of the ring spare.
 ///
 /// Growing it costs heap the radio also lives in: read `Radio up, heap free N B` and `Sync buffers ready, heap free N B` in the boot log before changing it.
 const SAMPLE_RING_LEN: usize = REP_WINDOW_SAMPLES + 3 * SAMPLE_RATE_HZ as usize;
@@ -177,7 +180,11 @@ fn log_changed() {
 }
 
 /// Window handed to the detector when a rep closes: `MAX_REP_MS` plus the ZUPT margins (9 s at 100 Hz).
-const REP_WINDOW_SAMPLES: usize = 900;
+///
+/// Ten seconds, and not the nine a window can ask for: a window is inclusive at both ends, so the longest
+/// one is 901 samples, and a buffer that fits it exactly would drop the newest sample — the one a trace is
+/// most worth having.
+const REP_WINDOW_SAMPLES: usize = 1000;
 /// Trace points kept per rep; longer reps are decimated uniformly.
 const TRACE_POINTS: usize = 512;
 
@@ -622,6 +629,7 @@ async fn main(spawner: Spawner) -> ! {
             let rng = Rng::new();
             let mut ticker = Ticker::every(Duration::from_hz(SAMPLE_RATE_HZ as u64));
             // The detector runs inline at 100 Hz: it's a few comparisons per sample, and a closed rep does one trace computation.
+            let mut fusion = Fusion::new();
             let mut detector = Detector::new();
             let mut reps: u32 = 0;
             let mut n: u32 = 0;
@@ -673,18 +681,25 @@ async fn main(spawner: Spawner) -> ! {
                     report(msg::ReportKind::ImuReadFailed);
                     continue;
                 };
-                let sample = Sample {
-                    t_ms,
-                    accel: [accel.x, accel.y, accel.z],
-                    quat: [
-                        quantize(q.s, QUAT_SCALE),
-                        quantize(q.v.x, QUAT_SCALE),
-                        quantize(q.v.y, QUAT_SCALE),
-                        quantize(q.v.z, QUAT_SCALE),
-                    ],
-                };
+                // **A stopgap until the chip is read raw.** The fused output is a linear acceleration
+                // and an attitude, and what the filter takes is specific force — the bar's
+                // acceleration plus the gravity the attitude implies. Rebuilding it is exact, and it
+                // is the same acceleration the fusion reported, so this changes nothing about what a
+                // rep reads; what it cannot supply is the gyroscope, which is why the attitude here
+                // is still the chip's. Reading `ACC_DATA`/`GYR_DATA` is what replaces this.
+                let attitude = [q.s, q.v.x, q.v.y, q.v.z];
+                let up = rotate_by_quat(conjugate(attitude), [0.0, 0.0, 1.0]);
+                let specific_force = [
+                    accel.x as f32 / 100.0 + up[0] * GRAVITY,
+                    accel.y as f32 / 100.0 + up[1] * GRAVITY,
+                    accel.z as f32 / 100.0 + up[2] * GRAVITY,
+                ];
+                let sample = Sample::from_f32(t_ms, specific_force, [0.0; 3]);
                 samples.borrow_mut().push(sample);
-                critical_section::with(|cs| *LAST_SAMPLE.borrow(cs).borrow_mut() = Some(sample));
+                critical_section::with(|cs| {
+                    *LAST_SAMPLE.borrow(cs).borrow_mut() = Some((sample, attitude));
+                });
+                let filtered = fusion.update(&sample);
 
                 // Detect reps; on close, slice the window out of the ring and compute the ZUPT-anchored trace + summary, then persist it.
                 //
@@ -714,18 +729,24 @@ async fn main(spawner: Spawner) -> ! {
                         None
                     }
                 } else if calibration.can_record() {
-                    detector.update(&sample)
+                    // The filter is fed every sample, so its offsets and its attitude keep up with the
+                    // sensor; only the detector is gated, because a rep is not recordable until the
+                    // filter knows which way is down.
+                    if fusion.ready() {
+                        detector.update(&filtered)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
                 if let Some(span) = span {
-                    let copied = samples.borrow().copy_window(
-                        span.start_ms,
-                        span.end_ms,
-                        MARGIN_MS,
-                        MARGIN_MS,
-                        rep_window,
-                    );
+                    // The window starts where the filter state does, which is not always `MARGIN_MS`
+                    // before the rep: one close behind the boot has no filtered history that far back.
+                    let (from_ms, state) = detector.rep_state();
+                    let copied = samples
+                        .borrow()
+                        .copy_window(from_ms, span.end_ms, 0, MARGIN_MS, rep_window);
                     // Logged at the moment the detector closes one, before anything can reject it: without this line a session that stores nothing cannot tell "the detector never fired" from "every rep was thrown away", and the two have different fixes.
                     info!(
                         "span closed: {}..{} ({} ms)",
@@ -737,9 +758,14 @@ async fn main(spawner: Spawner) -> ! {
                         warn!("rep window unavailable (ring too short)");
                         report(msg::ReportKind::RepWindowUnavailable);
                     } else {
-                        // The velocity the integration starts from: the detector's edge velocity for a real rep, zero for a synthetic one the fake-reps build fabricates wholesale.
-                        let v0 = if FAKE_REPS { [0.0; 3] } else { detector.rep_v0() };
-                        let mut sum = compute_rep(&rep_window[..copied], v0, &mut rep_trace);
+                        // Where the filter stood at the window's edge: the detector's for a real rep,
+                        // level for a synthetic one the fake-reps build fabricates wholesale.
+                        let state = if FAKE_REPS {
+                            calypso_core::fusion::FusionState::LEVEL
+                        } else {
+                            state
+                        };
+                        let mut sum = compute_rep(&rep_window[..copied], &state, &mut rep_trace);
                         if !sum.is_a_rep() {
                             info!(
                                 "rep discarded: {} m of travel, under the {} m a rep needs",
@@ -834,9 +860,9 @@ async fn main(spawner: Spawner) -> ! {
                     //
                     // A session that stores nothing has two causes that look identical from outside — the sensor's offset never came out of the signal, or the bar really was still — and the once-a-minute sampler line says neither.
                     if calibration.can_record() && n.is_multiple_of(SAMPLE_RATE_HZ * 5) {
-                        let b = detector.bias();
+                        let b = fusion.state().accel_bias;
                         // Centimetres per second squared, because defmt has no precision hint and whole numbers read better than raw floats.
-                        let a = calypso_core::rep::accel_magnitude(&sample);
+                        let a = calypso_core::fusion::magnitude(filtered.linear_accel);
                         let speed = detector.speed();
                         info!(
                             "detector: bias ({}, {}, {}) cm/s², |a| {} cm/s², |v| {} cm/s, legs {}, open {}",
@@ -1873,10 +1899,11 @@ async fn push_report(
 ///
 /// Called on connection and every 100 ms after, so a client polling the read sees the sensor moving rather than a rep's stroke in one frame.
 fn publish_imu(gatt: &CalypsoGatt<'_>) {
-    let Some(sample) = critical_section::with(|cs| *LAST_SAMPLE.borrow(cs).borrow()) else {
+    let Some((sample, attitude)) = critical_section::with(|cs| *LAST_SAMPLE.borrow(cs).borrow())
+    else {
         return;
     };
-    match SyncImuValue::encode(&calypso_core::pb::imu_state_message(&sample)) {
+    match SyncImuValue::encode(&calypso_core::pb::imu_state_message(&sample, attitude)) {
         Some(value) => {
             if gatt.set(&gatt.sync.imu, &value).is_err() {
                 warn!("imu: the table refused the sample");

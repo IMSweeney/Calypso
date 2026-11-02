@@ -1,26 +1,28 @@
 //! Rep detection and per-rep trace computation.
 
+use crate::fusion::{magnitude, roll_pitch_deg, Filtered, Fusion, FusionState};
 use crate::pb::msg;
-use crate::sampler::Sample;
+use crate::sampler::{quantize, Sample, QUAT_SCALE};
 
 /// Linear-acceleration magnitude (m/s²) that counts as "moving".
 pub const ACCEL_ON_THRESHOLD: f32 = 0.20;
-/// Magnitude below which the sensor counts as at rest (hysteresis below [`ACCEL_ON_THRESHOLD`] so a rep doesn't chatter on/off near the threshold).
-pub const ACCEL_REST_THRESHOLD: f32 = 0.12;
 /// How long motion must persist before a rep starts.
 pub const T_ON_MS: u32 = 50;
-/// How long rest must persist before a rep closes.
-pub const T_REST_MS: u32 = 400;
 /// Shortest motion span still counted as a rep (noise/movement blips).
 pub const MIN_REP_MS: u32 = 400;
 /// Longest motion span that can be a rep; beyond this it's a set-up adjustment or an unrack, and the span is discarded.
 pub const MAX_REP_MS: u32 = 8000;
-/// Rest samples kept either side of the motion span so ZUPT has an at-rest window to anchor to, and the app can plot the rep's endpoints.
-pub const MARGIN_MS: u32 = 200;
-/// Sample times, velocities and heights the detector keeps, so a leg can name the point it began
+/// Rest kept either side of the motion span, so the filter has an at-rest window to anchor the trace
+/// to and the app can plot the rep's endpoints.
+///
+/// Half a second, because the filter only calls a bar at rest after it has held still for 400 ms
+/// (a stroke's own shoulder reads the same for a third of a second). A shorter margin leaves the
+/// trace with no anchor at its ends, and the position drifts with nothing to pull it back.
+pub const MARGIN_MS: u32 = 500;
+/// Sample times, filter states and heights the detector keeps, so a leg can name the point it began
 /// at after the fact: at most `MARGIN_MS` behind a turn, or `T_ON_MS` behind a motion onset, plus
 /// headroom.
-const HIST: usize = 48;
+const HIST: usize = 64;
 /// Smallest dominant-axis travel (metres) that counts as a rep. A hand on a rack, a bar being unracked, a bump: each crosses the motion thresholds, none of them moves the sensor far enough to be a rep.
 pub const MIN_ROM_M: f32 = 0.07;
 
@@ -28,21 +30,14 @@ pub const MIN_ROM_M: f32 = 0.07;
 pub const VEL_MIN: f32 = 0.07;
 /// How long the bar's velocity must stay near zero for it to count as a reversal.
 pub const T_TURN_MS: u32 = 20;
-/// Time constant of the accelerometer's bias estimate, which is learned only while the bar is still and then takes about a second to settle.
-const BIAS_TAU_STILL_S: f32 = 0.5;
-/// Largest accelerometer offset the bias will adopt, m/s².
-///
-/// A real offset is a fraction of a metre per second squared. Anything near ten is gravity the fusion has not removed yet — the BNO055 reports that for the first seconds after a boot, before its own calibration settles — and adopting it as "the zero" subtracts gravity from every reading afterwards for the life of the boot. Observed: a bias of 13.9 m/s² learned in the first seconds, frozen there, and every rep since invisible.
-const BIAS_MAX_M_S2: f32 = 2.0;
-/// Samples the stillness test looks at (400 ms at 100 Hz).
-const STILL_WINDOW: usize = 40;
-/// Per-axis spread (m/s²) under which the bar has stopped.
-///
-/// A **spread**, not a magnitude: a resting sensor still reads its offset, so asking "is the reading small" is the circular question that stopped the bias bootstrapping. Asking "is the reading constant" is not — a still bar varies by 0.01 m/s², a moving one by whole m/s².
-const STILL_SPREAD: f32 = 0.15;
 /// Longest integration step honoured, so a stalled sampler cannot turn a gap in the samples into a jump in velocity.
 const MAX_DT_S: f32 = 0.1;
-/// Time constant over which a velocity is pulled back to zero while the detector is idle and the bar is still — the velocity form of "it is not moving, so it is not going anywhere".
+/// Time constant over which the detector's velocity is pulled back to zero while it is idle and the
+/// bar is still — the velocity form of "it is not moving, so it is not going anywhere".
+///
+/// The filter has its own, and deliberately: the detector goes on integrating the acceleration
+/// itself so that a change in what the device stores can be attributed to the detection or to the
+/// filter, and the two velocities disagreeing is the measurement.
 const V_TAU_S: f32 = 0.5;
 
 /// The motion span of a detected rep (milliseconds). Add [`MARGIN_MS`] at each end to get the trace window.
@@ -67,8 +62,8 @@ struct Leg {
     disp_z: f32,
     /// Whether the bar came to rest before this leg moved — a hold, not a grind.
     had_rest: bool,
-    /// The bar's velocity one [`MARGIN_MS`] before the leg started.
-    v0: [f32; 3],
+    /// The filter state one [`MARGIN_MS`] before the leg started, and the moment it was taken.
+    state: (u32, FusionState),
 }
 
 /// Turning-point detector: **a rep is an out-and-back**.
@@ -91,38 +86,26 @@ struct Leg {
 /// could still catch it. Motion must also clear [`ACCEL_ON_THRESHOLD`] for [`T_ON_MS`] to open a
 /// leg at all.
 ///
-/// **The bias lives in the world frame; the velocity lives in the body frame.** Two frames, and the
-/// split is the point.
+/// **Everything here is in the world frame**, because the filter supplies one worth the name: tilt
+/// comes from the gyro, and the accelerometer is believed only while the bar is still. The
+/// detector still integrates the acceleration into its own velocity rather than taking the
+/// filter's, so that the two can be compared on a real session before either is trusted.
 ///
-/// The offset is a world-frame vector. At rest this sensor reads `(0.01, 0.03, -0.34) m/s²` sideways
-/// and `(0.12, -0.10, -0.14) m/s²` upright — different in the body frame at every orientation, and
-/// pointing at the floor in the world frame at both, which is gravity the fusion never finished
-/// taking out. So it is learned in the world frame, where it is one vector, and rotated into the
-/// body frame to be subtracted.
-///
-/// The velocity is integrated in the body frame, where it does not depend on the orientation at all.
-/// That matters because the fusion's tilt is least trustworthy exactly when it matters most: in IMU
-/// mode roll and pitch come partly from the accelerometer, so a stroke's own acceleration pulls the
-/// estimate off by however many degrees `a/g` is worth. Rotating the *whole* signal into the world
-/// would make every velocity — and so every turn — depend on that estimate. Rotating only the bias
-/// leaves the error in a term that is a fraction of a metre per second squared, not in the motion.
-///
-/// [`Detector::rep_v0`] is reported in the world frame, which is what [`compute_rep`] integrates in.
+/// [`Detector::rep_state`] is the filter's state where the stored window begins, which is what
+/// [`compute_rep`] replays from.
 pub struct Detector {
-    /// Body-frame velocity: the acceleration integrated where it does not depend on the orientation estimate.
+    /// World-frame velocity, integrated here rather than taken from the filter.
     v: [f32; 3],
-    /// World-frame estimate of the acceleration's offset — one vector, because that is the frame the offset is constant in.
-    bias: [f32; 3],
     /// Timestamp of the previous sample, for the integration step.
     prev_t_ms: u32,
-    /// The previous step's vertical velocity, in the world frame, for the trapezoid.
-    prev_world_vz: f32,
+    /// The previous step's vertical velocity, for the trapezoid.
+    prev_vz: f32,
     /// Vertical displacement accumulated since the last rebase; only differences are ever used.
     pos_z: f32,
-    /// The open leg: where it began, the height it began at, and the velocity the bar carried into it.
+    /// The open leg: where it began, the height it began at, and the state the bar carried into it.
     leg_start: Option<u32>,
     leg_pos0_z: f32,
-    leg_v0: [f32; 3],
+    leg_state: (u32, FusionState),
     leg_had_rest: bool,
     /// Whether the bar has moved since the leg opened. A turn only counts once it has.
     moved: bool,
@@ -130,63 +113,60 @@ pub struct Detector {
     still_since: Option<u32>,
     /// When the acceleration first rose above [`ACCEL_ON_THRESHOLD`], as a candidate motion onset.
     above_since: Option<u32>,
-    /// When the sensor first went quiet, as a candidate rest.
-    rest_since: Option<u32>,
     /// Whether a rest has been seen and not yet claimed by a leg.
     gap_rest: bool,
     /// The last completed leg not yet paired into a rep.
     pending: Option<Leg>,
-    /// Recent sample times, velocities and heights, for naming a leg's start after the fact.
+    /// Recent sample times, filter states and heights, for naming a leg's start after the fact.
     hist_t: [u32; HIST],
-    hist_v: [[f32; 3]; HIST],
+    hist_state: [FusionState; HIST],
     hist_z: [f32; HIST],
     hist_head: usize,
-    /// The bar's velocity at the left edge of the rep that just closed, captured as it began.
-    v0: [f32; 3],
-    /// Whether [`Detector::bias`] has been seeded from the first sample.
-    seeded: bool,
+    /// How much of the history has been written, so a lookup cannot read a slot that is still zero.
+    hist_len: usize,
+    /// The filter state at the left edge of the rep that just closed, and the moment it was taken.
+    state: (u32, FusionState),
+    /// The first sample the detector was ever fed, which is as far back as its history goes.
+    first_t_ms: Option<u32>,
     /// Legs completed since the detector started. A leg is one stroke between two turns, and a rep is two of them, so this is the count that says whether detection got past its first stage.
     legs: u32,
-    /// Recent raw accelerations, for the stillness test: a bar that reads the same for [`STILL_WINDOW`] samples is stopped, whatever the value is.
-    still_buf: [[f32; 3]; STILL_WINDOW],
-    still_head: usize,
-    still_len: usize,
 }
 
 impl Detector {
     pub const fn new() -> Self {
         Detector {
             v: [0.0; 3],
-            bias: [0.0; 3],
             prev_t_ms: 0,
-            prev_world_vz: 0.0,
+            prev_vz: 0.0,
             pos_z: 0.0,
             leg_start: None,
             leg_pos0_z: 0.0,
-            leg_v0: [0.0; 3],
+            leg_state: (0, FusionState::LEVEL),
             leg_had_rest: false,
             moved: false,
             still_since: None,
             above_since: None,
-            rest_since: None,
             gap_rest: false,
             pending: None,
             hist_t: [0; HIST],
-            hist_v: [[0.0; 3]; HIST],
+            hist_state: [FusionState::LEVEL; HIST],
             hist_z: [0.0; HIST],
             hist_head: 0,
-            v0: [0.0; 3],
-            seeded: false,
+            hist_len: 0,
+            state: (0, FusionState::LEVEL),
+            first_t_ms: None,
             legs: 0,
-            still_buf: [[0.0; 3]; STILL_WINDOW],
-            still_head: 0,
-            still_len: 0,
         }
     }
 
-    /// The bar's velocity at the left edge of the rep that just closed, captured as it began.
-    pub fn rep_v0(&self) -> [f32; 3] {
-        self.v0
+    /// The filter state at the left edge of the rep that just closed, captured as it began, and the
+    /// sample it was taken at.
+    ///
+    /// That moment is the start of the stored window: everything before it describes motion the
+    /// filter was not yet filtering, so a trace that reached further back would be replaying samples
+    /// from a frame that does not exist.
+    pub fn rep_state(&self) -> (u32, FusionState) {
+        self.state
     }
 
     /// Legs completed since the detector started.
@@ -195,10 +175,8 @@ impl Detector {
     }
 
     /// Speed the bar is taken to be moving at (m/s) — the number the turn test compares against [`VEL_MIN`].
-    ///
-    /// A magnitude, so the frame it is taken in does not change it: rotating a vector cannot change its length.
     pub fn speed(&self) -> f32 {
-        sqrtf(self.v[0] * self.v[0] + self.v[1] * self.v[1] + self.v[2] * self.v[2])
+        magnitude(self.v)
     }
 
     /// Whether a leg is open right now.
@@ -206,121 +184,64 @@ impl Detector {
         self.leg_start.is_some()
     }
 
-    /// The accelerometer offset the detector is currently subtracting.
-    ///
-    /// Exposed so a boot log can say whether the stillness filter has taken the sensor's offset out: a detector that reads the mount instead of the bar looks identical from outside either way.
-    pub fn bias(&self) -> [f32; 3] {
-        self.bias
-    }
-
-    /// Feed one sample; returns the span when a rep closes.
-    pub fn update(&mut self, s: &Sample) -> Option<RepSpan> {
-        let dt = self.step_ms(s);
-        let q = s.quat_f32();
-        let a_body = s.accel_f32();
-        // The world frame, for the two things that are one vector there: the offset, and the stillness test that learns it.
-        let a = rotate_by_quat(q, a_body);
-        // The first sample is the sensor's zero.
-        //
-        // A BNO055's linear acceleration carries a constant offset — a degree or two of gravity the fusion never took out — and at rest that offset is the whole reading (0.35 m/s² on one axis here). While it is there `quiet` is never true, so the bias below can never bootstrap and the offset integrates into a velocity that outruns `VEL_MIN` for good. Seeding from the first sample means the detector measures the bar rather than the mount.
-        if !self.seeded {
-            // Guarded like every other adoption of a zero: a boot's first sample can still carry gravity, and seeding from that would subtract it for the life of the boot.
-            let amag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-            self.bias = if amag <= BIAS_MAX_M_S2 { a } else { [0.0; 3] };
-            self.seeded = true;
-        }
-        // Is the bar still? A spread over the last 400 ms, not a magnitude: the offset a resting sensor reports is large, and asking whether the reading is *small* is the question that could not be answered until the offset was known.
-        self.still_buf[self.still_head] = a;
-        self.still_head = (self.still_head + 1) % STILL_WINDOW;
-        self.still_len = (self.still_len + 1).min(STILL_WINDOW);
-        let mut still = self.still_len == STILL_WINDOW;
-        if still {
-            for k in 0..3 {
-                let (mut lo, mut hi) = (f32::MAX, f32::MIN);
-                for v in &self.still_buf {
-                    if v[k] < lo {
-                        lo = v[k];
-                    }
-                    if v[k] > hi {
-                        hi = v[k];
-                    }
-                }
-                if hi - lo > STILL_SPREAD {
-                    still = false;
-                    break;
-                }
-            }
-        }
-        // Brought back into the body frame to be subtracted, so the integration below never touches the orientation estimate.
-        let off = rotate_by_quat([q[0], -q[1], -q[2], -q[3]], self.bias);
-        let (cx, cy, cz) = (a_body[0] - off[0], a_body[1] - off[1], a_body[2] - off[2]);
-        let mag = sqrtf(cx * cx + cy * cy + cz * cz);
-        let quiet = mag < ACCEL_REST_THRESHOLD;
+    /// Feed one filtered sample; returns the span when a rep closes.
+    pub fn update(&mut self, f: &Filtered) -> Option<RepSpan> {
+        let dt = self.step_ms(f.t_ms);
+        let a = f.linear_accel;
+        let mag = magnitude(a);
 
         if dt > 0.0 {
             for k in 0..3 {
-                self.v[k] += (a_body[k] - off[k]) * dt;
+                self.v[k] += a[k] * dt;
             }
-            // The bias is learned while the bar is still, and stillness is the *spread* rather than the magnitude.
-            //
-            // Gating on `quiet` was circular: the offset is what made `quiet` false, so a sensor reporting itself calibrated while carrying half a metre per second squared could never bootstrap its own bias. A still bar is still however large that offset is.
-            //
-            // Frozen while the bar moves, deliberately — a bias learned from a stroke is a motion-remover.
-            let amag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-            if still && amag <= BIAS_MAX_M_S2 {
-                for k in 0..3 {
-                    self.bias[k] += (a[k] - self.bias[k]) * (dt / BIAS_TAU_STILL_S);
-                }
-            }
-            if quiet && !self.moved {
+            if f.still && !self.moved {
                 for k in 0..3 {
                     // Only anchor the velocity while the bar is still: at the midpoint of a stroke the acceleration crosses zero while the velocity is at its peak.
                     self.v[k] += (0.0 - self.v[k]) * (dt / V_TAU_S);
                 }
             }
+            self.pos_z += 0.5 * (self.prev_vz + self.v[2]) * dt;
         }
+        self.prev_vz = self.v[2];
 
-        // Rotated out for the travel, which is the one thing that has to be taken on the vertical.
-        let world_v = rotate_by_quat(q, self.v);
-        if dt > 0.0 {
-            self.pos_z += 0.5 * (self.prev_world_vz + world_v[2]) * dt;
-        }
-        self.prev_world_vz = world_v[2];
-
-        self.hist_t[self.hist_head] = s.t_ms;
-        self.hist_v[self.hist_head] = world_v;
+        self.first_t_ms.get_or_insert(f.t_ms);
+        self.hist_t[self.hist_head] = f.t_ms;
+        self.hist_state[self.hist_head] = f.state;
         self.hist_z[self.hist_head] = self.pos_z;
         self.hist_head = (self.hist_head + 1) % HIST;
+        self.hist_len = (self.hist_len + 1).min(HIST);
 
-        // A real rest: a hold, not a grind.
-        if quiet {
-            let since = *self.rest_since.get_or_insert(s.t_ms);
-            if s.t_ms.saturating_sub(since) >= T_REST_MS {
-                self.gap_rest = true;
-                if let Some(start) = self.leg_start.take() {
-                    let moved = self.moved;
-                    self.moved = false;
-                    self.still_since = None;
-                    if moved {
-                        // **A rest ends a leg, and it is not only a kindness.** Quiet for `T_REST_MS` means the bar has stopped, whatever the integrated speed says; on a real capture the speed can sit above `VEL_MIN` for a whole window because the integration has drifted, and a leg that could only end on a speed would run from the first rep to the last and store nothing. The leg ends where the bar stopped, and the next one starts when it moves again.
-                        let leg = Leg {
-                            start_ms: start,
-                            end_ms: since,
-                            disp_z: self.pos_at_z(since) - self.leg_pos0_z,
-                            had_rest: self.leg_had_rest,
-                            v0: self.leg_v0,
-                        };
-                        self.legs += 1;
-                        return self.pair(leg);
-                    }
+        // A real rest: a hold, not a grind. `still` is the filter's, and it has already waited — it
+        // means the reading has held at 1 g for long enough that a slow stroke's own shoulder
+        // cannot be what is being seen.
+        if f.still {
+            self.gap_rest = true;
+            if let Some(start) = self.leg_start.take() {
+                let moved = self.moved;
+                self.moved = false;
+                self.still_since = None;
+                if moved {
+                    // **A rest ends a leg, and it is not only a kindness.** A stopped bar means the
+                    // bar has stopped, whatever the integrated speed says; on a real capture the
+                    // speed can sit above `VEL_MIN` for a whole window because the integration has
+                    // drifted, and a leg that could only end on a speed would run from the first
+                    // rep to the last and store nothing. The leg ends where the bar stopped, and
+                    // the next one starts when it moves again.
+                    let leg = Leg {
+                        start_ms: start,
+                        end_ms: f.t_ms,
+                        disp_z: self.pos_at_z(f.t_ms) - self.leg_pos0_z,
+                        had_rest: self.leg_had_rest,
+                        state: self.leg_state,
+                    };
+                    self.legs += 1;
+                    return self.pair(leg);
                 }
             }
-        } else {
-            self.rest_since = None;
         }
 
         // Rebase the height while nothing depends on it, so a long session cannot walk it into the range where an f32 has no millimetres left.
-        if quiet && self.leg_start.is_none() && self.pending.is_none() && absf(self.pos_z) > 2.0 {
+        if f.still && self.leg_start.is_none() && self.pending.is_none() && absf(self.pos_z) > 2.0 {
             let shift = self.pos_z;
             self.pos_z -= shift;
             for z in self.hist_z.iter_mut() {
@@ -328,13 +249,13 @@ impl Detector {
             }
         }
 
-        let speed = sqrtf(self.v[0] * self.v[0] + self.v[1] * self.v[1] + self.v[2] * self.v[2]);
+        let speed = magnitude(self.v);
 
         if self.leg_start.is_none() {
             // Looking for a motion onset, which is only needed at the start of a stream: every leg after the first begins where the previous one turned.
             if mag > ACCEL_ON_THRESHOLD {
-                let since = *self.above_since.get_or_insert(s.t_ms);
-                if s.t_ms.saturating_sub(since) >= T_ON_MS {
+                let since = *self.above_since.get_or_insert(f.t_ms);
+                if f.t_ms.saturating_sub(since) >= T_ON_MS {
                     self.open_leg(since);
                     self.leg_had_rest = self.gap_rest;
                     self.gap_rest = false;
@@ -351,15 +272,15 @@ impl Detector {
             self.moved = true;
             self.still_since = None;
         } else if self.moved {
-            let since = *self.still_since.get_or_insert(s.t_ms);
-            if s.t_ms.saturating_sub(since) >= T_TURN_MS {
+            let since = *self.still_since.get_or_insert(f.t_ms);
+            if f.t_ms.saturating_sub(since) >= T_TURN_MS {
                 let start = self.leg_start.unwrap();
                 let leg = Leg {
                     start_ms: start,
                     end_ms: since,
                     disp_z: self.pos_at_z(since) - self.leg_pos0_z,
                     had_rest: self.leg_had_rest,
-                    v0: self.leg_v0,
+                    state: self.leg_state,
                 };
                 // The bar turns, it does not restart: the next leg begins where this one ended, so a turnaround with no pause either side is still two legs.
                 self.open_leg(since);
@@ -371,11 +292,11 @@ impl Detector {
         None
     }
 
-    /// Start a leg at `t_ms`, with the height and the velocity the bar had there.
+    /// Start a leg at `t_ms`, with the height and the filter state the bar had there.
     fn open_leg(&mut self, t_ms: u32) {
         self.leg_start = Some(t_ms);
         self.leg_pos0_z = self.pos_at_z(t_ms);
-        self.leg_v0 = self.velocity_at(t_ms.saturating_sub(MARGIN_MS));
+        self.leg_state = self.state_at(t_ms.saturating_sub(MARGIN_MS));
         self.moved = false;
         self.still_since = None;
     }
@@ -403,7 +324,7 @@ impl Detector {
                 end_ms: leg.end_ms,
             };
             self.pending = None;
-            self.v0 = p.v0;
+            self.state = p.state;
             if span.duration_ms() >= MIN_REP_MS && span.duration_ms() <= MAX_REP_MS {
                 return Some(span);
             }
@@ -416,7 +337,7 @@ impl Detector {
                 end_ms: leg.end_ms,
                 disp_z: p.disp_z + leg.disp_z,
                 had_rest: p.had_rest,
-                v0: p.v0,
+                state: p.state,
             }
         } else {
             leg
@@ -432,7 +353,7 @@ impl Detector {
     /// The height at the newest sample at or before `t_ms`.
     fn pos_at_z(&self, t_ms: u32) -> f32 {
         let mut newest: Option<(u32, f32)> = None;
-        for i in 0..HIST {
+        for i in self.history() {
             let t = self.hist_t[i];
             if t <= t_ms && newest.is_none_or(|(bt, _)| t > bt) {
                 newest = Some((t, self.hist_z[i]));
@@ -441,22 +362,33 @@ impl Detector {
         newest.map_or(self.pos_z, |(_, z)| z)
     }
 
-    /// The velocity at the newest sample at or before `t_ms`.
-    fn velocity_at(&self, t_ms: u32) -> [f32; 3] {
-        let mut newest: Option<(u32, [f32; 3])> = None;
-        for i in 0..HIST {
+    /// The filter state at the newest sample at or before `t_ms`, or the oldest one held if
+    /// `t_ms` is older than any of them.
+    fn state_at(&self, t_ms: u32) -> (u32, FusionState) {
+        let mut newest: Option<(u32, FusionState)> = None;
+        let mut oldest: Option<(u32, FusionState)> = None;
+        for i in self.history() {
             let t = self.hist_t[i];
+            if oldest.is_none_or(|(bt, _)| t < bt) {
+                oldest = Some((t, self.hist_state[i]));
+            }
             if t <= t_ms && newest.is_none_or(|(bt, _)| t > bt) {
-                newest = Some((t, self.hist_v[i]));
+                newest = Some((t, self.hist_state[i]));
             }
         }
-        newest.map_or([0.0; 3], |(_, v)| v)
+        newest.or(oldest).unwrap_or(self.state)
+    }
+
+    /// The slots the history holds, oldest first — the ring is not contiguous and may not be full.
+    fn history(&self) -> impl Iterator<Item = usize> + '_ {
+        let oldest = (self.hist_head + HIST - self.hist_len) % HIST;
+        (0..self.hist_len).map(move |i| (oldest + i) % HIST)
     }
 
     /// Seconds since the previous sample, bounded so a stall in the sampler cannot become a jump in velocity.
-    fn step_ms(&mut self, s: &Sample) -> f32 {
-        let dt = (s.t_ms.saturating_sub(self.prev_t_ms) as f32 / 1000.0).min(MAX_DT_S);
-        self.prev_t_ms = s.t_ms;
+    fn step_ms(&mut self, t_ms: u32) -> f32 {
+        let dt = (t_ms.saturating_sub(self.prev_t_ms) as f32 / 1000.0).min(MAX_DT_S);
+        self.prev_t_ms = t_ms;
         dt
     }
 }
@@ -467,47 +399,16 @@ impl Default for Detector {
     }
 }
 
-/// Linear-acceleration magnitude (m/s²) of a sample.
-pub fn accel_magnitude(s: &Sample) -> f32 {
-    let a = s.accel_f32();
-    sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
-}
-
-/// Rotate a body-frame vector into the world frame by a unit quaternion `[w, x, y, z]`: `v' = q ⊗ v ⊗ q*`.
-pub fn rotate_by_quat(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
-    let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
-    // t = 2 * (q.xyz × v)
-    let tx = 2.0 * (y * v[2] - z * v[1]);
-    let ty = 2.0 * (z * v[0] - x * v[2]);
-    let tz = 2.0 * (x * v[1] - y * v[0]);
-    // v + w*t + (q.xyz × t)
-    [
-        v[0] + w * tx + (y * tz - z * ty),
-        v[1] + w * ty + (z * tx - x * tz),
-        v[2] + w * tz + (x * ty - y * tx),
-    ]
-}
-
-/// Roll and pitch (degrees) from a unit quaternion `[w, x, y, z]`.
-/// Yaw is deliberately not reported: it drifts without a magnetometer.
-pub fn roll_pitch_deg(q: [f32; 4]) -> (f32, f32) {
-    let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
-    let roll = atan2f(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y));
-    let pitch_arg = clamp(2.0 * (w * y - z * x), -1.0, 1.0);
-    let pitch = asinf(pitch_arg);
-    (roll.to_degrees(), pitch.to_degrees())
-}
-
 /// One point of a stored rep trace.
-/// The raw `accel`/`quat` are kept alongside the computed `pos` so the app can re-derive traces with better algorithms later without a firmware update.
+/// The raw `accel` and the attitude are kept alongside the computed `pos` so the app can re-derive traces with better algorithms later without a firmware update.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct TracePoint {
     pub t_ms: u32,
     /// ZUPT-anchored displacement from the rep start (m).
     pub pos: [f32; 3],
-    /// Raw linear acceleration (fixed point, `sampler::ACCEL_SCALE` LSB/m/s²).
+    /// Raw specific force (fixed point, `sampler::ACCEL_SCALE` LSB/m/s²), gravity included.
     pub accel: [i16; 3],
-    /// Raw orientation quaternion `[w, x, y, z]` (`sampler::QUAT_SCALE` LSB).
+    /// The attitude the filter computed at this point `[w, x, y, z]` (`sampler::QUAT_SCALE` LSB).
     pub quat: [i16; 4],
 }
 
@@ -583,7 +484,7 @@ pub const REP_FLAG_CALIBRATED: u32 = 1 << 1;
 impl msg::RepSummary {
     /// Whether this is a rep at all: the bar has to have gone up or down [`MIN_ROM_M`].
     ///
-    /// The detector already refuses to pair a leg shorter than [`MIN_ROM_M`], so this is the same question asked of a different measurement: the travel the stored trace computes, detrended and decimated, rather than the travel integrated on the way in. The two can disagree — a rep that spans a hole in the samples reads long — so the log holds only summaries where the number itself says the bar moved, and that is measured on the vertical, the only axis with a right answer.
+    /// The detector already refuses to pair a leg shorter than [`MIN_ROM_M`], so this is the same question asked of a different measurement: the travel the stored trace computes, decimated, rather than the travel integrated on the way in. The two can disagree — a rep that spans a hole in the samples reads long — so the log holds only summaries where the number itself says the bar moved, and that is measured on the vertical, the only axis with a right answer.
     pub fn is_a_rep(&self) -> bool {
         self.rom >= MIN_ROM_M
     }
@@ -597,16 +498,22 @@ impl msg::RepSummary {
     }
 }
 
-/// Compute the ZUPT-anchored world-frame trace and summary for one rep.
+/// Compute the trace and summary for one rep by replaying the filter over its window.
 ///
-/// `samples` should be the detector's span plus margin at each end, and `v0` the bar's velocity
-/// at the first sample (the detector's [`Detector::rep_v0`]), so the integration starts from the
-/// true velocity rather than a forced zero. Any number of samples is accepted; if more than `N`
-/// are supplied the trace is decimated uniformly to fit.
+/// `samples` should be the detector's span plus margin at each end, and `from` the filter state the
+/// detector captured where that window begins ([`Detector::rep_state`]). The filter is
+/// deterministic from that state, so the same window and the same state always give the same
+/// summary — which is what makes a stored trace re-derivable.
 ///
-/// Each sample's linear acceleration is rotated into the world frame by its quaternion, integrated to velocity and position by trapezoid, then the linear drift is removed so the rep ends at rest.
-/// That rejects constant bias exactly and bounds the remaining position error to within one rep, which is what bar-path plotting needs.
-pub fn compute_rep(samples: &[Sample], v0: [f32; 3], out: &mut TraceBuf<'_>) -> msg::RepSummary {
+/// The trace's position is the filter's velocity integrated; the filter sets that velocity to zero
+/// whenever the bar is still, and a lift guarantees stillness at both ends of every stroke, so the
+/// window is anchored at both of them and the drift is bounded to within the rep. Any number of
+/// samples is accepted; if more than `N` are supplied the trace is decimated uniformly to fit.
+pub fn compute_rep(
+    samples: &[Sample],
+    from: &FusionState,
+    out: &mut TraceBuf<'_>,
+) -> msg::RepSummary {
     out.clear();
     let mut summary = msg::RepSummary {
         roll_min_deg: f32::MAX,
@@ -636,63 +543,21 @@ pub fn compute_rep(samples: &[Sample], v0: [f32; 3], out: &mut TraceBuf<'_>) -> 
     // Anchor the decimation grid at the *last* sample, so the rep's end is always stored (it is the most interesting point when plotting) and the count stays within capacity.
     let first = if capacity == 0 { 0 } else { (n - 1) % stride };
 
-    let t0 = samples[0].t_ms;
-    let t_end = samples[n - 1].t_ms;
-    let total_dt = (t_end - t0) as f32 / 1000.0;
-    let detrend = total_dt > 0.0;
-
-    // Pass 1: world-frame accel → raw velocity, for the endpoint the detrend takes out and for the summary stats.
-    let mut v_raw = v0;
-    let mut prev_a = rotate_by_quat(samples[0].quat_f32(), samples[0].accel_f32());
-    let mut a_max = 0.0f32;
-    let mut v_sum = 0.0f32;
-    for i in 0..n {
-        let a = rotate_by_quat(samples[i].quat_f32(), samples[i].accel_f32());
-        if i > 0 {
-            let dt = (samples[i].t_ms - samples[i - 1].t_ms) as f32 / 1000.0;
-            for k in 0..3 {
-                v_raw[k] += 0.5 * (prev_a[k] + a[k]) * dt;
-            }
-        }
-        prev_a = a;
-        let amag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-        if amag > a_max {
-            a_max = amag;
-        }
-        v_sum += sqrtf(v_raw[0] * v_raw[0] + v_raw[1] * v_raw[1] + v_raw[2] * v_raw[2]);
-    }
-    let v_end = v_raw;
-
-    // Pass 2: detrended velocity → the position the detrend ends at.
-    let mut p_end = [0.0f32; 3];
-    let mut v_max = 0.0f32;
-    let mut walk = Velocity::new(samples, v_end, t0, total_dt, detrend, v0);
-    let mut v_prev = [0.0f32; 3];
-    for i in 0..n {
-        let v = walk.step();
-        if i > 0 {
-            let dt = (samples[i].t_ms - samples[i - 1].t_ms) as f32 / 1000.0;
-            for k in 0..3 {
-                p_end[k] += 0.5 * (v_prev[k] + v[k]) * dt;
-                if absf(v[k]) > v_max {
-                    v_max = absf(v[k]);
-                }
-            }
-        }
-        v_prev = v;
-    }
-
-    // Pass 3: detrended position, emitting trace points and angle/ROM stats.
+    let mut fusion = Fusion::from_state(*from);
     let mut p = [0.0f32; 3];
+    let mut v_prev = from.velocity;
+    let mut a_max = 0.0f32;
+    let mut v_max = 0.0f32;
+    let mut v_sum = 0.0f32;
+    let mut lo = [f32::MAX; 3];
+    let mut hi = [f32::MIN; 3];
     let mut roll_offset = 0.0f32;
     let mut roll_prev = 0.0f32;
     let mut roll_seen = false;
-    let mut walk = Velocity::new(samples, v_end, t0, total_dt, detrend, v0);
-    let mut v_prev = [0.0f32; 3];
-    let mut lo = [f32::MAX; 3];
-    let mut hi = [f32::MIN; 3];
+
     for i in 0..n {
-        let v = walk.step();
+        let filtered = fusion.update(&samples[i]);
+        let v = filtered.state.velocity;
         if i > 0 {
             let dt = (samples[i].t_ms - samples[i - 1].t_ms) as f32 / 1000.0;
             for k in 0..3 {
@@ -700,22 +565,26 @@ pub fn compute_rep(samples: &[Sample], v0: [f32; 3], out: &mut TraceBuf<'_>) -> 
             }
         }
         v_prev = v;
-        let f = if detrend {
-            (samples[i].t_ms - t0) as f32 / 1000.0 / total_dt
-        } else {
-            0.0
-        };
-        let mut pos = p;
+
+        let amag = magnitude(filtered.linear_accel);
+        if amag > a_max {
+            a_max = amag;
+        }
+        let speed = magnitude(v);
+        if speed > v_max {
+            v_max = speed;
+        }
+        v_sum += speed;
         for k in 0..3 {
-            pos[k] -= p_end[k] * f;
-            if pos[k] < lo[k] {
-                lo[k] = pos[k];
+            if p[k] < lo[k] {
+                lo[k] = p[k];
             }
-            if pos[k] > hi[k] {
-                hi[k] = pos[k];
+            if p[k] > hi[k] {
+                hi[k] = p[k];
             }
         }
-        let (roll, pitch) = roll_pitch_deg(samples[i].quat_f32());
+
+        let (roll, pitch) = roll_pitch_deg(filtered.state.attitude);
         // Roll is reported in (-180, 180], so a rep that crosses the seam reads as a full turn between its minimum and
         // its maximum. Unwrapping it first is what makes the range a rotation rather than an artefact of the branch cut.
         if roll_seen {
@@ -741,129 +610,41 @@ pub fn compute_rep(samples: &[Sample], v0: [f32; 3], out: &mut TraceBuf<'_>) -> 
         if pitch > summary.pitch_max_deg {
             summary.pitch_max_deg = pitch;
         }
+
         if i >= first && (i - first) % stride == 0 {
             out.push(TracePoint {
                 t_ms: samples[i].t_ms,
-                pos,
+                pos: p,
                 accel: samples[i].accel,
-                quat: samples[i].quat,
+                quat: filtered.state.attitude.map(|q| quantize(q, QUAT_SCALE)),
             });
         }
     }
 
-    // Range of motion is the vertical travel, and Z is the only axis that can say what vertical is: the fusion pins it
+    // Range of motion is the vertical travel, and Z is the only axis that can say what vertical is: the filter pins it
     // to gravity, while X and Y are the mount's heading and drift with yaw. Whichever axis moved furthest is not the
     // same question — on the horizontal axes it is as often the estimate's error as the bar.
     summary.rom = hi[2] - lo[2];
-    summary.t_start_ms = t0;
-    summary.t_end_ms = t_end;
-    summary.duration_ms = t_end - t0;
+    summary.t_start_ms = samples[0].t_ms;
+    summary.t_end_ms = samples[n - 1].t_ms;
+    summary.duration_ms = summary.t_end_ms - summary.t_start_ms;
     summary.peak_accel = a_max;
     summary.peak_velocity = v_max;
     summary.mean_velocity = v_sum / n as f32;
     summary.trace_len = out.len() as u32;
-    // The summary started here, so it carries the velocity the integration was seeded from: the app can tell a rep
+    // The summary started here, so it carries the velocity the replay was seeded from: the app can tell a rep
     // that started mid-set from one that started at rest, and can re-derive the trace from the same origin.
     summary.set_v0(msg::TraceOrigin {
-        vx: v0[0],
-        vy: v0[1],
-        vz: v0[2],
+        vx: from.velocity[0],
+        vy: from.velocity[1],
+        vz: from.velocity[2],
     });
     summary
-}
-
-/// The rep's velocity, integrated one sample at a time.
-///
-/// A pass over the rep costs one integration step per point, which is what keeps [`compute_rep`] linear: it needs the velocity at every point, and re-integrating from the start for each one is quadratic in the length of a rep.
-struct Velocity<'a> {
-    samples: &'a [Sample],
-    /// Index of the next sample to read.
-    i: usize,
-    /// Raw velocity, before the endpoint drift is taken out.
-    v: [f32; 3],
-    prev_a: [f32; 3],
-    /// Raw velocity at the last sample: taking it out proportionally is what makes both ends read zero.
-    v_end: [f32; 3],
-    t0: u32,
-    total_dt: f32,
-    detrend: bool,
-}
-
-impl<'a> Velocity<'a> {
-    fn new(
-        samples: &'a [Sample],
-        v_end: [f32; 3],
-        t0: u32,
-        total_dt: f32,
-        detrend: bool,
-        v0: [f32; 3],
-    ) -> Self {
-        Velocity {
-            samples,
-            i: 0,
-            v: v0,
-            prev_a: rotate_by_quat(samples[0].quat_f32(), samples[0].accel_f32()),
-            v_end,
-            t0,
-            total_dt,
-            detrend,
-        }
-    }
-
-    /// World-frame velocity at the next sample, oldest first.
-    fn step(&mut self) -> [f32; 3] {
-        let i = self.i;
-        self.i += 1;
-        let s = &self.samples[i];
-        let a = rotate_by_quat(s.quat_f32(), s.accel_f32());
-        if i > 0 {
-            let dt = (s.t_ms - self.samples[i - 1].t_ms) as f32 / 1000.0;
-            let (v, prev_a) = (self.v, self.prev_a);
-            self.v = trapezoid(v, prev_a, a, dt);
-        }
-        self.prev_a = a;
-        if self.detrend {
-            let f = (s.t_ms - self.t0) as f32 / 1000.0 / self.total_dt;
-            let (v, v_end) = (self.v, self.v_end);
-            core::array::from_fn(|k| v[k] - v_end[k] * f)
-        } else {
-            self.v
-        }
-    }
-}
-
-// --- small no_std helpers -------------------------------------------------
-
-/// One trapezoid step of the integration: `v + ½(a + b)·Δt`, on every axis.
-fn trapezoid(v: [f32; 3], a: [f32; 3], b: [f32; 3], dt: f32) -> [f32; 3] {
-    core::array::from_fn(|k| v[k] + 0.5 * (a[k] + b[k]) * dt)
-}
-
-fn sqrtf(x: f32) -> f32 {
-    libm::sqrtf(x)
-}
-
-fn atan2f(y: f32, x: f32) -> f32 {
-    libm::atan2f(y, x)
-}
-
-fn asinf(x: f32) -> f32 {
-    libm::asinf(x)
 }
 
 fn absf(x: f32) -> f32 {
     if x < 0.0 {
         -x
-    } else {
-        x
-    }
-}
-
-fn clamp(x: f32, lo: f32, hi: f32) -> f32 {
-    if x < lo {
-        lo
-    } else if x > hi {
-        hi
     } else {
         x
     }

@@ -93,27 +93,45 @@ One struct, in `calypso-core`, shared by the device and the simulator.
 
 ```
 Fusion::update(&Sample) -> Filtered {
-    linear_accel_world,  // the specific force with gravity taken out
-    velocity_world,
-    attitude,            // quaternion
-    still: bool,
+    t_ms,
+    linear_accel,   // the specific force with gravity and the offset taken out, world frame
+    still,          // the bar is at rest
+    state,          // the whole of its memory, which is what a replay starts from
 }
 ```
 
-State: a quaternion, an accelerometer bias, a gyroscope bias, and a velocity.
+State: a quaternion, an accelerometer offset, a gyroscope offset, a velocity, and whether the
+bar was at rest when the state was taken.
 
-- **Attitude** integrates the gyro every sample. While the bar is still it is pulled toward the
-  direction the accelerometer measures, with a time constant around a second, which is also when
-  both biases are learned. The gyro is what carries tilt through a stroke; the accelerometer is
-  only believed when it cannot be wrong.
-- **Velocity** integrates the linear acceleration, and is set to zero whenever the bar is still
+- **Attitude** integrates the gyro every sample. While the bar is at rest it is pulled toward the
+  direction the accelerometer measures, with a time constant around a second: the gyro carries
+  tilt through a stroke, and the accelerometer is only believed when it cannot be wrong. At a
+  boot there is no attitude worth protecting, so it is **set** rather than filtered — one exact
+  rotation onto the measured gravity — because a filter leaves degrees of error and a degree of
+  tilt is a sixth of a metre per second squared of gravity left in the horizontal.
+- **Velocity** integrates the linear acceleration, and is set to zero whenever the bar is at rest
   (ZUPT). That is what bounds drift to within one rep, and a lift guarantees the conditions at
   both ends of every stroke.
-- **Stillness** takes three terms instead of one: specific-force magnitude within a fraction of
-  1 g, per-axis spread under a threshold over ~400 ms, and gyro magnitude near zero. The gyro
-  term is the substantive addition — a bar that is travelling is not rotating and vice versa —
-  and the magnitude term is the one that was unavailable before, because in fusion mode "is it
-  1 g" is not a question the output can answer.
+- **Offsets** are learned from a window that has stopped changing, with both time constants set
+  by whether the filter has finished booting.
+
+**Three predicates, not one**, and the difference between them is the design. Landing on one
+question is what a first attempt at this does, and it fails in both directions at once —
+recorded here because the map is what found it.
+
+| predicate | what it asks | what it is for |
+|---|---|---|
+| quiet | the reading has not changed across 400 ms, and nothing is turning | learning, while the offset is unknown |
+| resting | the reading, with the offset taken out, is 1 g, and nothing is turning | the bar is not accelerating |
+| still | resting for 400 ms | the bar is at rest |
+
+Asking "is it 1 g" to decide whether the offset may be learned is circular — an unknown offset
+makes a still sensor read something else — so the learning uses the spread instead. Asking
+"has it stopped changing" to decide whether the bar is at rest is wrong the other way: a slow
+stroke spends a third of a second crossing zero acceleration at its fastest point, where it
+reads 1 g and barely moves, and calling that a rest caps the stroke in half. Only the wait tells
+them apart, and everything downstream — the trace's anchoring, a leg's close, the detector's
+idea of a hold — hangs off the third.
 
 Nothing here consults the chip's calibration or a config register. It also deletes the
 body-frame/world-frame split in `Detector`: bias was learned in the world frame and subtracted
@@ -151,7 +169,7 @@ which carried only `v0`.
 
 ## Stages
 
-### 1. Library and simulator — todo
+### 1. Library and simulator — done
 
 No device, no wire format, no app. The whole of the risk lives here and it is testable in a
 closed loop.
@@ -170,6 +188,31 @@ check that the filter is not distorting anything; then the things that were impo
 a rep at 0°, 30° and 90° about each axis storing the same ROM, a gyro bias not rotating the
 ground, an accelerometer bias learned while still and not fabricating motion, and a boot into
 motion with no lead-in rest not storing a garbage rep.
+
+**What the implementation changed against this plan.**
+
+- `Filtered` carries `t_ms` and the whole state rather than a bare velocity, because the caller
+  has to hand the state on and nothing else knows when it was taken.
+- The state is `FusionState` here and becomes `RepState` on the wire in stage 2. It carries
+  `settled`, which the plan did not list: whether the bar was at rest is a fact about the last
+  400 ms, and a replay without it spends its first sample earning it back and skips the ZUPT.
+- The detector's history is 640 ms, not `MARGIN_MS`, and `MARGIN_MS` is 500 ms, not 200: the
+  filter only calls a bar at rest after 400 ms of it, so a window with 200 ms of rest either
+  side has nothing to anchor to.
+- `rep_state()` returns the state *and the moment it was taken*. The detector's history begins
+  when it is first fed, which is when the filter becomes ready, so a rep close behind a boot has
+  no filtered history `MARGIN_MS` back — and the window must start where the state does.
+- `T_REST_MS` is gone: the debounce a rest needs is the filter's, and doing it twice made a rest
+  take 800 ms to recognise when it happens in 400.
+- `compute_rep` no longer detrends. The position is the filter's velocity integrated, the
+  window's rest anchors both ends, and nothing is forced to zero — which is why the ROM a
+  summary reports now runs a few percent over the travel rather than under it. The endpoint the
+  integration leaves is the drift the ZUPT did not take out, and it is a real property of the
+  window rather than an artefact of the maths. On a rep so short and fast that the margins are a
+  large fraction of it, that residue is worth tens of percent, which is the trade: the old
+  detrend forced the ends together and read short instead.
+- The trace keeps its quaternion in this stage, computed from the filter's attitude, so the wire
+  format and the app are untouched. Stage 2 swaps it for the gyro.
 
 ### 2. Wire format, trace and app — todo
 
@@ -250,8 +293,9 @@ way the trace being the archive implies.
 
 ## Status
 
-- **Written:** this document. Nothing is implemented.
-- **Stage 1: todo.** Library and simulator.
+- **Stage 1: done.** The filter is in `calypso-core`, the simulator replays it, and the four
+  tests that could not be written before are in place. Everything downstream still reads the old
+  wire format, so the device builds and the app is untouched.
 - **Stage 2: todo.** Wire format, trace header, app.
 - **Stage 3: todo.** Device, with the input-swap A/B.
 - **Stage 4: todo.** Reality, retune, and the three deferred decisions.

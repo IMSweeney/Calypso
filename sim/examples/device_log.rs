@@ -266,6 +266,8 @@ fn main() {
             let mut out_text = format!("# {prefix}\n");
             for i in 0..n {
                 let p = out.get(i).unwrap();
+                // The last three columns are the sensor's own reading: **specific force**, gravity
+                // still in it, so a point at rest sits near 9.8 on the up axis rather than at 0.
                 out_text.push_str(&format!(
                     "{}, {:.4}, {:.4}, {:.4}, {:.4}, {:.4}, {:.4}\n",
                     p.t_ms,

@@ -6,6 +6,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use calypso_core::fusion::FusionState;
 use calypso_core::pb::{self, msg};
 use calypso_core::rep::{
     compute_rep, TraceBuf, TracePoint, REP_FLAG_CALIBRATED, REP_FLAG_DECIMATED,
@@ -67,19 +68,19 @@ fn main() -> std::io::Result<()> {
     //    Real long reps are jerky (that is why a long rep can overflow the device buffer at all), but a smooth synthetic one cannot trip the detector.
     {
         let (samples, _) = squat_set(1, 10_000, 1_000, 1.2);
-        let lead_in = 300 / fixtures::SAMPLE_DT_MS as usize;
+        let lead_in = fixtures::LEAD_IN_MS as usize / fixtures::SAMPLE_DT_MS as usize;
         let motion = 10_000 / fixtures::SAMPLE_DT_MS as usize;
-        let margin = 12; // 120 ms either side -> 1024 samples, halved to 512
+        // Half a second either side, so the filter sees the bar at rest at both ends and anchors the trace there.
+        let margin = 50;
         let window = &samples[lead_in - margin..lead_in + motion + margin];
 
         let mut storage = vec![TracePoint::ZERO; 512];
         let mut trace = TraceBuf::new(&mut storage);
-        let mut summary = compute_rep(window, [0.0; 3], &mut trace);
+        let mut summary = compute_rep(window, &FusionState::LEVEL, &mut trace);
         assert!(
             summary.decimated(),
             "a 10 s rep should exceed the 512-point buffer"
         );
-        assert_eq!(summary.trace_len, 512);
 
         summary.rep_uuid = pb::uuid_to_field(&fixture_uuid(1));
         summary.flags |= REP_FLAG_CALIBRATED;

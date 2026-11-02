@@ -31,8 +31,8 @@ const SPEED: Sweep = Sweep::new(0.30, 2.50, 21);
 /// How fast a wobble oscillates: a hand on the rack, to a rattle.
 const HZ: Sweep = Sweep::new(0.5, 5.0, 21);
 
-/// A push needs rest at the top long enough to close the span (`T_REST_MS`), so the hold is fixed
-/// comfortably above it; the wobble is fixed at a few seconds of shaking.
+/// A push needs rest at the top long enough for the filter to call the bar at rest, so the hold is
+/// fixed comfortably above it; the wobble is fixed at a few seconds of shaking.
 const HOLD_MS: u32 = 500;
 const WOBBLE_MS: u32 = 3000;
 

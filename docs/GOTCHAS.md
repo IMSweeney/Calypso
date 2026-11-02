@@ -328,16 +328,16 @@ reps back to back with rest only after the last: before the change it was one sp
 whole set, now it is five. That test also had to fix its own motion model — a sine is a
 push that never comes back, and a detector tuned on one has nothing to learn about reps.
 The generated motion lives in `calypso-sim`, which is where the detector's behaviour is
-pinned now; `calypso-core/tests/rep.rs` is the arithmetic underneath it — the rotation,
-the angles, the integration and its detrend — on hand-written samples with answers worked
-out on paper, so a failure there says the maths is wrong rather than that a threshold
-moved.
+pinned now; `calypso-core/tests/fusion.rs` is the filter under it and
+`calypso-core/tests/rep.rs` the trace on top — the angles, the integration, the span — on
+hand-written samples with answers worked out on paper, so a failure there says the maths
+is wrong rather than that a threshold moved.
 
 ### A turn is a speed, so a gentle return is invisible
 
 **Symptom.** A rep whose lowering is slow and controlled is not stored at all. For a bench
-the boundary is between 0.26 and 0.27 m/s of peak return speed — comfortably in range of
-a deliberate negative.
+the boundary sits between 0.12 and 0.14 m/s of peak return speed — at the very slow end
+of a deliberate negative, and inside the range of a lifter lowering under control.
 
 **Cause.** The detector delimits a rep by turning points, and a turn is the speed falling
 below `VEL_MIN` (0.15 m/s) for `T_TURN_MS`. A stroke that never reaches that speed never
@@ -376,9 +376,11 @@ consequence is that a leg can *open* in the middle of a hold, so the rep's span 
 `MARGIN_MS` — begins while the bar is still finishing the previous stroke, and the
 unexplained travel in the window is the previous stroke's tail.
 
-**Fix.** A confirmed rest (`T_REST_MS` of quiet before the leg has moved) abandons the open
-leg, and the next one starts at the motion onset instead. The rule is: a turn continues a
-chain, a hold breaks it.
+**Fix.** A confirmed rest before the leg has moved abandons the open leg, and the next
+one starts at the motion onset instead. The rule is: a turn continues a chain, a hold
+breaks it. "Confirmed" is the filter's stillness — the reading holding at 1 g for 400 ms
+— rather than a threshold on a single sample, so the rule does not depend on how slowly
+the bar was set down.
 
 ### A hole in the timeline is bridged as one step
 

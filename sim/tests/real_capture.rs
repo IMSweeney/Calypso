@@ -5,20 +5,16 @@
 //! for here.
 //!
 //! **What a stored window can and cannot say.** It can say that the device stored this rep, that its trace is
-//! whole, and what the summary's numbers are. It cannot be replayed as a stream: the window is the motion span with
-//! `MARGIN_MS` *requested* before it and whatever had been sampled after it — the tail is cut at the close, so the
-//! margin there is a few samples at most. On this rep even the 200 ms before the onset are inside motion (the first
-//! sample carries 7.0 m/s², against a 0.6 m/s² on-threshold), and the last carries 1.1, against a 0.25 m/s² rest
-//! threshold. Neither end is rest, so a detector fed this window cold has nothing to anchor on and nothing to close
-//! against — which is why nothing here asserts what a replay finds. `examples/replay_dump.rs` labels every window
-//! it is given with the timeline it found, and the timeline is the half of this that *is* checkable from a file.
+//! whole, and what the summary's numbers are. It cannot be replayed: the trace keeps specific force and an
+//! attitude, not the gyroscope the filter integrates, so a window is enough to plot and not enough to filter. A
+//! reader that wants a summary re-derived needs a full-rate capture with `RepState` beside it, which is what a
+//! fresh session produces and the archive cannot be made to.
 
 use std::fs;
 use std::path::PathBuf;
 
 use calypso_core::pb::{self, msg, Record};
-use calypso_core::rep::{compute_rep, TraceBuf, TracePoint, MAX_REP_MS, MIN_ROM_M};
-use calypso_core::sampler::Sample;
+use calypso_core::rep::{TracePoint, MAX_REP_MS, MIN_ROM_M};
 use calypso_sim::fixtures::read_dump;
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -34,26 +30,6 @@ struct RealRep {
     points: Vec<TracePoint>,
     /// Unix seconds at the boot's uptime zero, from the newest clock record before the summary.
     epoch_s: u32,
-}
-
-impl RealRep {
-    /// The trace as the samples the detector would have been fed: the stored points are what `compute_rep` kept of
-    /// them, so this is not the stream, only what the device still knows of it.
-    fn samples(&self) -> Vec<Sample> {
-        self.points
-            .iter()
-            .map(|p| Sample {
-                t_ms: p.t_ms,
-                accel: p.accel,
-                quat: p.quat,
-            })
-            .collect()
-    }
-
-    fn v0(&self) -> [f32; 3] {
-        let v = &self.summary.v0;
-        [v.vx, v.vy, v.vz]
-    }
 }
 
 /// Read one fixture, checking as it goes that it is a dump a reader can trust: it ends on a record, every record
@@ -190,47 +166,5 @@ fn a_real_rep_carries_the_time_it_was_lifted() {
         "lifted {} ms into that second, {} ms into the boot",
         unix_ms % 1000,
         rep.summary.t_start_ms
-    );
-}
-
-/// The trace maths re-reads the same window from the bytes the device kept: the summary's `v0` and its own trace,
-/// integrated again over real motion rather than over a cosine.
-///
-/// The window, though, is not the sample set the summary was computed from: the trace keeps every second sample, so
-/// the same integration over it reads **1.10 m against the 0.94 m stored** — and every second sample again reads
-/// 1.42 m. Travel rises steeply as the step coarsens on this motion, which is what makes the summary a function of
-/// the rate it was read at rather than of the window alone. The tolerance is loose enough for that and tight enough
-/// to catch a maths change; the duration and the point count, which do not depend on the decimation, are pinned
-/// hard.
-#[test]
-fn the_stored_trace_recomputes_the_stored_window() {
-    let rep = real_rep("real-deadlift");
-    let samples = rep.samples();
-    let mut storage = [TracePoint::ZERO; 512];
-    let mut trace = TraceBuf::new(&mut storage);
-    let again = compute_rep(&samples, rep.v0(), &mut trace);
-
-    assert_eq!(trace.len(), rep.summary.trace_len as usize);
-    assert!(
-        again.duration_ms.abs_diff(rep.summary.duration_ms) <= 20,
-        "the recomputed span is {} ms against {}",
-        again.duration_ms,
-        rep.summary.duration_ms
-    );
-    assert!(
-        again.is_a_rep(),
-        "{} m of travel was read from a rep that stored {} m",
-        again.rom,
-        rep.summary.rom
-    );
-    assert!(
-        (again.rom - rep.summary.rom).abs() < rep.summary.rom * 0.25,
-        "the recomputed travel {:.3} m is far from the stored {:.3} m",
-        again.rom,
-        rep.summary.rom
-    );
-    println!(
-        "recomputed: rom {:.3} m (stored {:.3}), duration {} ms (stored {})",
-        again.rom, rep.summary.rom, again.duration_ms, rep.summary.duration_ms
     );
 }

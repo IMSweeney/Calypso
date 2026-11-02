@@ -1,10 +1,10 @@
-use calypso_core::sampler::{Sample, SampleRing, QUAT_SCALE};
+use calypso_core::sampler::{Sample, SampleRing};
 
 fn sample(t_ms: u32) -> Sample {
     Sample {
         t_ms,
         accel: [1, 2, 3],
-        quat: [QUAT_SCALE as i16, 0, 0, 0],
+        gyro: [4, 5, 6],
     }
 }
 
@@ -40,23 +40,24 @@ fn ring_evicts_oldest_on_overflow() {
     assert_eq!(ring.latest().unwrap().t_ms, 9);
 }
 
+/// The scales are the sensor's register scales, and a sample is exactly those registers.
 #[test]
 fn sample_fixed_point_round_trip() {
-    let s = Sample::from_f32(1234, [1.23, -9.81, 0.0], [1.0, 0.0, 0.0, -0.5]);
+    let s = Sample::from_f32(1234, [1.23, -9.81, 0.0], [1.0, -90.0, 16.0]);
     assert_eq!(s.accel, [123, -981, 0]);
-    assert_eq!(s.quat, [16384, 0, 0, -8192]);
-    let a = s.accel_f32();
+    assert_eq!(s.gyro, [16, -1440, 256]);
+    let a = s.specific_force_f32();
     assert!((a[0] - 1.23).abs() < 1e-6);
     assert!((a[1] + 9.81).abs() < 1e-6);
-    let q = s.quat_f32();
-    assert_eq!(q, [1.0, 0.0, 0.0, -0.5]);
+    let g = s.gyro_f32();
+    assert_eq!(g, [1.0, -90.0, 16.0]);
 }
 
 #[test]
 fn sample_clamps_out_of_range() {
-    let s = Sample::from_f32(0, [1000.0, -1000.0, 0.0], [2.0, -2.0, 0.0, 0.0]);
+    let s = Sample::from_f32(0, [1000.0, -1000.0, 0.0], [5000.0, -5000.0, 0.0]);
     assert_eq!(s.accel, [i16::MAX, i16::MIN, 0]);
-    assert_eq!(s.quat, [i16::MAX, i16::MIN, 0, 0]);
+    assert_eq!(s.gyro, [i16::MAX, i16::MIN, 0]);
 }
 
 #[test]

@@ -105,17 +105,19 @@ pub fn trace_sample_message(p: &TracePoint, t0_ms: u32) -> msg::TraceSample {
 
 /// The last sample the sampler read, as the app's read of the `Imu` characteristic returns it.
 ///
-/// The sample is the wire type already — the same fixed point, at the same scales, as one point of a stored trace — so this is the boundary and nothing is converted.
-pub fn imu_state_message(sample: &Sample) -> msg::ImuState {
+/// The acceleration is **specific force**, at the same fixed point and scale as one point of a
+/// stored trace, so this is the boundary and nothing is converted. The attitude is the one the
+/// filter computed, because the sensor no longer reports one.
+pub fn imu_state_message(sample: &Sample, attitude: [f32; 4]) -> msg::ImuState {
     msg::ImuState {
         t_uptime_ms: sample.t_ms,
         ax: sample.accel[0] as i32,
         ay: sample.accel[1] as i32,
         az: sample.accel[2] as i32,
-        qw: sample.quat[0] as i32,
-        qx: sample.quat[1] as i32,
-        qy: sample.quat[2] as i32,
-        qz: sample.quat[3] as i32,
+        qw: crate::sampler::quantize(attitude[0], crate::sampler::QUAT_SCALE) as i32,
+        qx: crate::sampler::quantize(attitude[1], crate::sampler::QUAT_SCALE) as i32,
+        qy: crate::sampler::quantize(attitude[2], crate::sampler::QUAT_SCALE) as i32,
+        qz: crate::sampler::quantize(attitude[3], crate::sampler::QUAT_SCALE) as i32,
     }
 }
 

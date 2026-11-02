@@ -2,33 +2,27 @@
 //!
 //! The generators are code, not files: a scenario is built where it is needed, so a tuning
 //! change is measured against the same motion instead of a stale `.pblog`. Everything is
-//! replayed through the real pipeline (`Detector`, `compute_rep`) inside [`detect_and_trace`],
-//! so a scenario is the summary the device would have produced.
+//! replayed through the real pipeline (`Fusion`, `Detector`, `compute_rep`) inside
+//! [`detect_and_trace`], so a scenario is the summary the device would have produced.
 //!
 //! The one physical fact behind all of it: a stroke is half a cosine at its peak speed, so
 //! its peak acceleration is `2v²/A` and its duration `πA/(2v)`, and its acceleration integral
 //! is zero — the bar starts and ends the stroke at rest, which is what ZUPT anchoring assumes.
+//!
+//! A generator states the bar's own acceleration; [`at`] adds gravity and hands back what a
+//! sensor bolted level to the bar would measure. Everything below therefore reads as motion,
+//! and only [`Impairments`] speaks in sensor readings.
 
+use calypso_core::fusion::{conjugate, quat_from_rotvec, rotate_by_quat};
 use calypso_core::pb::msg;
-use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, QUAT_SCALE};
+use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, GYRO_SCALE};
 
-use crate::fixtures::{detect_and_trace, SAMPLE_DT_MS};
+use crate::fixtures::{at, detect_and_trace, LEAD_IN_MS, SAMPLE_DT_MS};
 
 /// The trace capacity a scenario replays through, matching a device's stored trace.
 pub const TRACE_POINTS: usize = 512;
-/// Milliseconds still before the motion begins, so the detector starts settled.
-const LEAD_IN_MS: u32 = 300;
 
 const PI: f32 = core::f32::consts::PI;
-
-/// A sample with the identity orientation: synthetic motion is level by construction.
-fn at(t_ms: u32, accel: [f32; 3]) -> Sample {
-    Sample {
-        t_ms,
-        accel: accel.map(|a| quantize(a, ACCEL_SCALE)),
-        quat: [QUAT_SCALE as i16, 0, 0, 0],
-    }
-}
 
 /// `ms` milliseconds of rest, appended after `from_ms`. Returns the next timestamp.
 fn push_rest(out: &mut Vec<Sample>, from_ms: u32, ms: u32) -> u32 {
@@ -391,31 +385,36 @@ impl Rng {
     }
 }
 
-/// The impairments the capture showed, added to synthetic motion — never to a captured rep,
-/// which already carries the device's own error. Every field is zero by default (a no-op), so
-/// a loss can be attributed to the one error that was turned up.
+/// The ways a sensor reading is not the motion, added to synthetic motion — never to a captured
+/// rep, which already carries the device's own error. Every field is zero by default (a no-op),
+/// so a loss can be attributed to the one error that was turned up.
+///
+/// These are the sensor's faults, not the filter's: the mount is real and the offsets are real,
+/// so a scenario built from them is motion the device could actually have seen. What is *not*
+/// injectable any more is a wrong attitude — there is no estimate here to bias.
 #[derive(Debug, Clone, Copy)]
 pub struct Impairments {
-    /// Per-sample white acceleration noise (m/s²).
+    /// Per-sample white noise on the accelerometer (m/s²).
     pub noise_sigma: f32,
-    /// Bias that ramps through the rep (m/s² per second).
-    pub bias_drift: f32,
-    /// Attitude offset the fusion settles on (degrees).
-    pub attitude_offset_deg: f32,
-    /// Attitude drift while the bar moves (degrees per second).
-    pub attitude_drift_dps: f32,
-    /// A constant body bias (m/s²), removed exactly by the velocity detrend.
-    pub constant_bias: f32,
+    /// The accelerometer's offset, in the sensor's own frame (m/s²).
+    pub accel_bias: [f32; 3],
+    /// The gyroscope's offset, in the sensor's own frame (degrees per second).
+    pub gyro_bias_dps: [f32; 3],
+    /// The angle the sensor is bolted to the bar at, as a rotation vector in degrees `(x, y, z)`.
+    ///
+    /// A real mount is never square to the bar. It rotates every reading into another frame, and
+    /// the filter is supposed to be indifferent to it: what a tilt costs is a different attitude,
+    /// not a different travel.
+    pub tilt_deg: [f32; 3],
 }
 
 impl Default for Impairments {
     fn default() -> Self {
         Impairments {
             noise_sigma: 0.0,
-            bias_drift: 0.0,
-            attitude_offset_deg: 0.0,
-            attitude_drift_dps: 0.0,
-            constant_bias: 0.0,
+            accel_bias: [0.0; 3],
+            gyro_bias_dps: [0.0; 3],
+            tilt_deg: [0.0; 3],
         }
     }
 }
@@ -423,26 +422,20 @@ impl Default for Impairments {
 impl Impairments {
     /// Add the impairments to generated samples, in place.
     ///
-    /// The tilt turns the bar's own vertical acceleration `a` into `a·sin θ` of sideways span
-    /// and `a·cos θ` of vertical — the ROM that survives to the summary is the bar's travel
-    /// scaled by `cos θ`. The constant bias is left to the detrend, which removes it exactly.
+    /// The generators emit specific force in the world frame with the sensor level, so this is
+    /// where a sample becomes a *sensor* reading: rotated into the mount's frame, then given the
+    /// accelerometer's offset and the platform noise.
     pub fn apply(&self, samples: &mut [Sample], rng: &mut Rng) {
-        let t0 = samples.first().map(|s| s.t_ms).unwrap_or(0);
+        let mount = quat_from_rotvec(self.tilt_deg.map(|d| d.to_radians()));
         for s in samples.iter_mut() {
-            let az = s.accel_f32()[2];
-            let t_s = (s.t_ms - t0) as f32 / 1000.0;
-            let theta = (self.attitude_offset_deg + self.attitude_drift_dps * t_s).to_radians();
-            let ax = rng.gauss() * self.noise_sigma;
-            let ay = az * libm::sinf(theta) + rng.gauss() * self.noise_sigma;
-            let az = az * libm::cosf(theta)
-                + self.constant_bias
-                + self.bias_drift * t_s
-                + rng.gauss() * self.noise_sigma;
-            s.accel = [
-                quantize(ax, ACCEL_SCALE),
-                quantize(ay, ACCEL_SCALE),
-                quantize(az, ACCEL_SCALE),
-            ];
+            let body = rotate_by_quat(conjugate(mount), s.specific_force_f32());
+            s.accel = [0, 1, 2].map(|k| {
+                quantize(
+                    body[k] + self.accel_bias[k] + rng.gauss() * self.noise_sigma,
+                    ACCEL_SCALE,
+                )
+            });
+            s.gyro = self.gyro_bias_dps.map(|d| quantize(d, GYRO_SCALE));
         }
     }
 }

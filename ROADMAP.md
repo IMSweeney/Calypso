@@ -87,6 +87,18 @@ Where Calypso is and what is left. Feature documentation lives in
 
 ## Open
 
+### The raw IMU
+
+- [ ] **Read the accelerometer and gyroscope raw, and filter them in firmware.** The chip's
+      fused orientation cannot say whether its own reading is right — "linear acceleration" is
+      zero at rest by definition — and a residue it left behind kept the device from storing a
+      rep for a whole session. Reading `ACC_DATA`/`GYR_DATA` and running the filter here makes
+      gravity an input rather than an estimate. The plan and its four stages are
+      [docs/RAW_IMU.md](docs/RAW_IMU.md): the filter and the simulator are done, and what is
+      left is the wire format (the trace gains the gyro and the filter state, the sample loses
+      its quaternion), the device's `ACCGYRO` read with the calibration surface deleted, and a
+      real session to retune against. Until stage 3 lands, the device keeps working the old way.
+
 ### The recording gate
 
 - [ ] **Settle whether the saved calibration is what the chip wants.** Applying
@@ -249,10 +261,11 @@ Where Calypso is and what is left. Feature documentation lives in
       the rate its window was read at, not of the window: `real-deadlift` stores 0.937 m,
       its own stored `pos` agrees to 0.1 mm, and re-integrating its `accel`/`quat` — every
       second sample, ~20 ms — reads 1.10 m. Seeding that re-integration with the stored
-      `v0` rather than zero moves it by 0.9 mm, so the missing input is the samples and not
-      the detector's state: `v0` and the span are already in the summary, and nothing else
-      in `Detector` reaches `compute_rep` (the bias it learns is what the velocity detrend
-      takes out). Nor can the edges recover it — a set is fluid, so a window rarely begins
+      `v0` rather than zero moves it by 0.9 mm, so what is missing is the samples: the
+      trace carries no gyroscope, and it keeps every second point. The state is no longer
+      part of the problem — a filter replayed from a recorded state tracks the run that
+      produced it (`docs/RAW_IMU.md`, stage 1) — so the raw trace format is what closes
+      this, and full rate is stage 4's decision. Nor can the edges recover it — a set is fluid, so a window rarely begins
       or ends at rest, the detrend is always removing a real ramp, and the result is always
       grid-sensitive. That retires "a rep's window must begin and end at rest" as a
       reproducibility fix; if it is wanted at all it is an accuracy question, on its own.
@@ -276,9 +289,9 @@ Where Calypso is and what is left. Feature documentation lives in
 - [ ] On-device tests with [`embedded-test`](https://crates.io/crates/embedded-test):
       the flash partition layer first, then the radio path.
 - [ ] **A gentle return is not detected.** The turning-point detector ends a leg on a
-      turn, and a turn is a speed: a return that never reaches `VEL_MIN` (0.15 m/s) at its
-      peak never turns, so the rep is never stored. On a bench the boundary is between 0.26
-      and 0.27 m/s — inside the range of a deliberately slow negative. Closing a leg on
+      turn, and a turn is a speed: a return that never reaches `VEL_MIN` (0.07 m/s) at its
+      peak never turns, so the rep is never stored. On a bench the boundary is between 0.12
+      and 0.14 m/s — the very slow end of a deliberate negative. Closing a leg on
       bounded travel as well as on a turn would cover it; the cost of doing so is not yet
       measured against the maps, which is why it is not done yet. Pinned meanwhile by
       `a_gentle_return_is_not_detected_yet`, which fails with instructions when fixed. See

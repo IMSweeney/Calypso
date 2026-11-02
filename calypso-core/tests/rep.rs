@@ -1,32 +1,29 @@
-//! The arithmetic inside a rep: the rotation into the world frame, the angles, and what `compute_rep` makes of a
-//! known motion — the pieces a stored trace and summary are built from.
+//! The arithmetic inside a rep: what `compute_rep` makes of a known motion, and the pieces a stored
+//! trace and summary are built from — the position it integrates, the angles it reports, and the
+//! decimation that fits it into the device's buffer.
 //!
-//! **The detector is not in this file.** Whether a given motion is a rep is pinned in `calypso-sim`, against the
-//! motion generators (`sim/src/motion.rs`) and the sets they assemble, because that question needs a stream rather
-//! than a sample list and because a detector change is measured on the sweeps there. Nothing here should grow one:
-//! these tests are the seam below it, where a failure says the integration or the angles are wrong rather than that
-//! the thresholds moved.
+//! **The detector is not in this file.** Whether a given motion is a rep is pinned in `calypso-sim`,
+//! against the motion generators (`sim/src/motion.rs`) and the sets they assemble, because that
+//! question needs a stream rather than a sample list and because a detector change is measured on
+//! the sweeps there. Nothing here should grow one: these tests are the seam below it, where a
+//! failure says the integration or the angles are wrong rather than that the thresholds moved.
 //!
-//! The motion here is written out by hand (`known_motion`), not generated: each one is a case with an answer worked
-//! out on paper — a cosine out-and-back whose travel is known, a constant bias that must come out as nothing.
+//! The motion here is written out by hand (`known_motion`), not generated: each one is a case with
+//! an answer worked out on paper — a cosine out-and-back whose travel is known, a still sensor whose
+//! offset must come out as nothing.
 
-use calypso_core::rep::{
-    accel_magnitude, compute_rep, roll_pitch_deg, rotate_by_quat, TraceBuf, TracePoint, MARGIN_MS,
-};
+use calypso_core::fusion::{roll_pitch_deg, Fusion, FusionState, GRAVITY};
+use calypso_core::rep::{compute_rep, TraceBuf, TracePoint, MARGIN_MS};
 use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, QUAT_SCALE};
 
 const HZ: u32 = 100;
 const DT_MS: u32 = 1000 / HZ;
 const TRACE_CAP: usize = 512;
 
-const Q_ID: [i16; 4] = [QUAT_SCALE as i16, 0, 0, 0];
-
-fn sample(t_ms: u32, accel: [f32; 3], quat: [i16; 4]) -> Sample {
-    Sample {
-        t_ms,
-        accel: accel.map(|a| quantize(a, ACCEL_SCALE)),
-        quat,
-    }
+/// A sample of a level sensor: `linear` is the bar's own acceleration, and a sensor reads that
+/// plus gravity.
+fn sample(t_ms: u32, linear: [f32; 3], gyro_dps: [f32; 3]) -> Sample {
+    Sample::from_f32(t_ms, [linear[0], linear[1], linear[2] + GRAVITY], gyro_dps)
 }
 
 /// Stillness, then one out-and-back of `t_ms` that travels `a` metres on Z, then stillness.
@@ -37,7 +34,7 @@ fn known_motion(a: f32, t_ms: u32, margin_ms: u32) -> Vec<Sample> {
     let mut out = Vec::new();
     let mut t = 0u32;
     while t < margin_ms {
-        out.push(sample(t, [0.0, 0.0, 0.0], Q_ID));
+        out.push(sample(t, [0.0, 0.0, 0.0], [0.0; 3]));
         t += DT_MS;
     }
     let steps = t_ms / DT_MS;
@@ -46,11 +43,11 @@ fn known_motion(a: f32, t_ms: u32, margin_ms: u32) -> Vec<Sample> {
     for i in 0..=steps {
         let time = i as f32 * DT_MS as f32 / 1000.0;
         let accel = -peak_accel * libm::cosf(2.0 * core::f32::consts::PI * time / tt);
-        out.push(sample(t, [0.0, 0.0, accel], Q_ID));
+        out.push(sample(t, [0.0, 0.0, accel], [0.0; 3]));
         t += DT_MS;
     }
     for _ in 0..(margin_ms / DT_MS) {
-        out.push(sample(t, [0.0, 0.0, 0.0], Q_ID));
+        out.push(sample(t, [0.0, 0.0, 0.0], [0.0; 3]));
         t += DT_MS;
     }
     out
@@ -71,44 +68,12 @@ fn peak_to_peak_z(buf: &TraceBuf<'_>) -> f32 {
 }
 
 #[test]
-fn rotate_by_quat_maps_body_to_world() {
-    let s = core::f32::consts::FRAC_1_SQRT_2;
-    let q = [s, s, 0.0, 0.0];
-    let v = rotate_by_quat(q, [0.0, 1.0, 0.0]);
-    assert!((v[0]).abs() < 1e-5);
-    assert!((v[1]).abs() < 1e-5);
-    assert!((v[2] - 1.0).abs() < 1e-5);
-    assert_eq!(
-        rotate_by_quat([1.0, 0.0, 0.0, 0.0], [1.0, 2.0, 3.0]),
-        [1.0, 2.0, 3.0]
-    );
-}
-
-#[test]
-fn roll_pitch_from_quaternion() {
-    let r = 30f32.to_radians() / 2.0;
-    let (roll, pitch) = roll_pitch_deg([libm::cosf(r), libm::sinf(r), 0.0, 0.0]);
-    assert!((roll - 30.0).abs() < 0.5, "roll {roll}");
-    assert!(pitch.abs() < 0.5, "pitch {pitch}");
-    let p = 20f32.to_radians() / 2.0;
-    let (roll, pitch) = roll_pitch_deg([libm::cosf(p), 0.0, libm::sinf(p), 0.0]);
-    assert!(roll.abs() < 0.5, "roll {roll}");
-    assert!((pitch - 20.0).abs() < 0.5, "pitch {pitch}");
-}
-
-#[test]
-fn accel_magnitude_matches_vector_length() {
-    let s = sample(0, [3.0, 4.0, 0.0], Q_ID);
-    assert!((accel_magnitude(&s) - 5.0).abs() < 0.02);
-}
-
-#[test]
 fn compute_rep_recovers_known_displacement() {
     let a = 0.4f32;
     let samples = known_motion(a, 1500, MARGIN_MS);
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, [0.0; 3], &mut buf);
+    let sum = compute_rep(&samples, &FusionState::LEVEL, &mut buf);
 
     assert!(!sum.decimated());
     assert_eq!(sum.trace_len, samples.len() as u32);
@@ -120,34 +85,55 @@ fn compute_rep_recovers_known_displacement() {
     );
     assert!(sum.peak_velocity > 0.0);
     assert!(
-        sum.peak_velocity < 1.5,
+        sum.peak_velocity < 1.0,
         "peak velocity {}",
         sum.peak_velocity
     );
+    // The window has rest at both ends, so the filter's velocity is anchored at both of them and the
+    // bar is back where it started — to within what the integration leaves, which is a few
+    // centimetres over a rep this long: nothing is detrended to zero here, so an endpoint reads what
+    // the sensor and the anchor leave it at.
     let first = buf.get(0).unwrap();
     let last = buf.get(buf.len() - 1).unwrap();
     assert!(first.pos[2].abs() < 1e-3);
-    assert!(last.pos[2].abs() < 1e-3);
+    assert!(
+        last.pos[2].abs() < 0.15 * a,
+        "a rep that came back to where it started ends {} m away",
+        last.pos[2]
+    );
 }
 
-/// A constant acceleration that never changes is bias, not motion: the detrend has to take out all of it.
+/// A still sensor carrying an offset integrates nothing once that offset is known — which is what a
+/// trace's own header says it is.
 ///
-/// This is the property the whole trace rests on — a rep's displacement is read off a velocity that has had its
-/// endpoint drift removed, so an offset that is constant over the rep must leave nothing behind on any axis.
+/// This is the property the whole trace rests on, and it is the one the raw accelerometer can state
+/// plainly: a fused "linear acceleration" reads zero at rest whatever the truth is, so a constant
+/// offset there is only distinguishable from motion by its constancy. Here the offset is what has to
+/// be explained, the seed says what it is, and a window of a sensor that never moved is nothing.
 #[test]
-fn constant_bias_is_fully_rejected() {
+fn a_still_window_seeded_with_its_offset_integrates_nothing() {
     let mut samples = Vec::new();
     let mut t = 0;
-    for _ in 0..400 {
-        samples.push(sample(t, [0.0, 0.0, 0.3], Q_ID));
+    for _ in 0..800 {
+        // 1 g up, and 0.3 m/s² of offset on the same axis.
+        samples.push(Sample::from_f32(t, [0.0, 0.0, GRAVITY + 0.3], [0.0; 3]));
         t += DT_MS;
     }
+
+    // A boot at rest: the filter learns the offset from the still window, and that is the state a
+    // stored rep carries.
+    let mut boot = Fusion::new();
+    for s in &samples[..300] {
+        boot.update(s);
+    }
+    assert!(boot.ready(), "the boot never settled");
+
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, [0.0; 3], &mut buf);
-    assert!(sum.rom < 1e-3, "rom {}", sum.rom);
-    assert!(peak_to_peak_z(&buf) < 1e-3);
-    assert!(sum.peak_velocity < 1e-3);
+    let sum = compute_rep(&samples[300..], &boot.state(), &mut buf);
+    assert!(sum.rom < 0.01, "rom {}", sum.rom);
+    assert!(peak_to_peak_z(&buf) < 0.02);
+    assert!(sum.peak_velocity < 0.02);
 }
 
 /// A rep that swung sideways further than it went up: what the range of motion must not be measured on.
@@ -155,14 +141,15 @@ fn constant_bias_is_fully_rejected() {
 fn rom_is_the_vertical_travel_not_the_biggest_excursion() {
     let vertical = 0.4f32;
     let mut samples = known_motion(vertical, 1500, MARGIN_MS);
-    // A sideways push of five times the vertical acceleration: same shape, five times the excursion, so the largest
-    // range in the trace is on X and the answer has to ignore it.
+    // A sideways push of five times the vertical acceleration: same shape, five times the excursion,
+    // so the largest range in the trace is on X and the answer has to ignore it.
     for s in samples.iter_mut() {
-        s.accel[0] = s.accel[2] * 5;
+        let z = s.specific_force_f32()[2] - GRAVITY;
+        s.accel[0] = quantize(z * 5.0, ACCEL_SCALE);
     }
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, [0.0; 3], &mut buf);
+    let sum = compute_rep(&samples, &FusionState::LEVEL, &mut buf);
 
     let range = |f: &dyn Fn(&TracePoint) -> f32| {
         let values: Vec<f32> = buf.as_slice().iter().map(f).collect();
@@ -186,7 +173,7 @@ fn trace_is_decimated_when_it_does_not_fit() {
     let samples = known_motion(0.4, 3000, MARGIN_MS);
     let mut storage = [TracePoint::ZERO; 64];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, [0.0; 3], &mut buf);
+    let sum = compute_rep(&samples, &FusionState::LEVEL, &mut buf);
     assert!(sum.decimated());
     assert!(sum.trace_len <= 64);
     assert!(sum.trace_len >= 50, "trace_len {}", sum.trace_len);
@@ -197,23 +184,20 @@ fn trace_is_decimated_when_it_does_not_fit() {
     );
 }
 
+/// The angles a summary reports come from the attitude the filter integrates, not from a sensor's
+/// own answer: a rep during which the clip rolls reports that roll.
 #[test]
-fn roll_pitch_range_is_reported_in_summary() {
+fn roll_range_is_reported_in_summary() {
+    // 25° over four seconds, about the sensor's x axis.
     let mut samples = Vec::new();
     let mut t = 0;
-    for i in 0..400 {
-        let roll = 25.0f32.to_radians() * (i as f32 / 400.0);
-        let q = [libm::cosf(roll / 2.0), libm::sinf(roll / 2.0), 0.0, 0.0];
-        samples.push(sample(
-            t,
-            [0.0, 0.0, 0.5],
-            [quantize(q[0], QUAT_SCALE), quantize(q[1], QUAT_SCALE), 0, 0],
-        ));
+    for _ in 0..400 {
+        samples.push(sample(t, [0.0, 0.0, 0.0], [6.25, 0.0, 0.0]));
         t += DT_MS;
     }
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, [0.0; 3], &mut buf);
+    let sum = compute_rep(&samples, &FusionState::LEVEL, &mut buf);
     assert!(
         sum.roll_min_deg.abs() < 1.0,
         "roll min {}",
@@ -225,13 +209,17 @@ fn roll_pitch_range_is_reported_in_summary() {
         sum.roll_max_deg
     );
     assert!(sum.pitch_max_deg.abs() < 1.0);
+    // The stored attitude is the same one the angles came from.
+    let last = buf.get(buf.len() - 1).unwrap();
+    let (roll, _) = roll_pitch_deg(last.quat.map(|q| q as f32 / QUAT_SCALE as f32));
+    assert!((roll - sum.roll_max_deg).abs() < 0.1, "trace roll {roll}");
 }
 
 #[test]
 fn empty_input_is_handled() {
     let mut storage = [TracePoint::ZERO; 64];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&[], [0.0; 3], &mut buf);
+    let sum = compute_rep(&[], &FusionState::LEVEL, &mut buf);
     assert_eq!(sum.trace_len, 0);
     assert!(buf.is_empty());
     assert_eq!(sum.duration_ms, 0);

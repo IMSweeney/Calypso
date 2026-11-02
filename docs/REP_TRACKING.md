@@ -24,9 +24,12 @@ Flash log (ring of 4 KB sectors) ──► BLE sync to the app
   magnetometer (unreliable next to a barbell's steel). Fused output at 100 Hz:
   linear acceleration with gravity removed, plus a quaternion orientation.
 - I²C at 400 kHz. One sample is ~14 bytes, so ~0.5 ms of the 10 ms period.
-- Sample format, fixed point, 20 bytes:
-  `{ t_ms: u32, accel: [i16; 3], quat: [i16; 4] }` — accel at 0.01 m/s² per LSB
-  (BNO055 native), quaternion at 1/2¹⁴ per LSB in `[w, x, y, z]` order.
+- Sample format, fixed point, 16 bytes:
+  `{ t_ms: u32, accel: [i16; 3], gyro: [i16; 3] }` — accel at 0.01 m/s² per LSB
+  (BNO055 native) and gyro at 1/16 dps per LSB. The acceleration is **specific
+  force**, gravity still in it: a still sensor reads 1 g, which is the fact the filter
+  is built on ([`RAW_IMU.md`](RAW_IMU.md)). The device still fills it from the chip's
+  fused output — a stopgap — while it waits to be read raw.
   `t_ms` is monotonic device uptime; the device has no RTC, so a rep's wall-clock
   time comes from the boot's clock, which the app sets ([`APP_SYNC.md`](APP_SYNC.md)).
 - Samples go into a RAM ring of `SAMPLE_RING_LEN` = 12 s (`REP_WINDOW_SAMPLES` = 900
@@ -66,23 +69,24 @@ stroke, so their travel is summed. After a rest they are not — that is a hold,
 older leg is the one that was already finished.
 
 **What it cannot see is a stroke slower than `VEL_MIN`.** A leg ends on a turn, and a turn
-is a *speed*: a return that never reaches 0.15 m/s at its peak never turns, so it never
-closes a rep. For a bench that boundary sits between 0.26 and 0.27 m/s, and it is accepted
+is a *speed*: a return that never reaches 0.07 m/s at its peak never turns, so it never
+closes a rep. For a bench that boundary sits between 0.12 and 0.14 m/s, and it is accepted
 for now (`ROADMAP.md`, and the test that pins it is the one to delete when it is fixed).
 
-**The velocity is integrated in the world frame**, which is also what makes the `v0`
-handed to `compute_rep` the frame that function integrates in. The bias is learned, and
-the velocity anchored to zero, only while the bar is still: a bias learned from motion is
-the rep taken out of itself, and a velocity damped mid-rep is the same mistake one step
-later.
+**The velocity is integrated in the world frame.** The offset is learned, and the velocity
+anchored to zero, only while the bar is still: a bias learned from motion is the rep taken
+out of itself, and a velocity damped mid-rep is the same mistake one step later. The
+detector keeps its own integrator rather than taking the filter's, deliberately, so that a
+change in what the device stores can be attributed to the detection or to the filter.
 
 ## Computing a rep
 
 On rep close, the sampler copies `[start - MARGIN_MS, end + MARGIN_MS]` out of the
 ring and calls `rep::compute_rep`, which:
 
-1. Rotates each sample's linear acceleration into the world frame using that
-   sample's quaternion.
+1. Runs the filter ([`fusion.rs`]) over the window from the state the detector recorded
+   where the window begins, so the rotation, the offsets and the anchoring are the ones
+   the device had, and the replay reproduces the summary rather than approximating it.
 2. Integrates it, **anchored at both ends by ZUPT**: velocity is forced to zero at
    rest, so double-integration drift is bounded within one rep rather than
    accumulating over a set. The result is displacement relative to the rep start, in
@@ -94,11 +98,11 @@ ring and calls `rep::compute_rep`, which:
 **ROM is measured on Z, not on whichever axis moved furthest.** A barbell lift is the
 bar going up and down, and Z is the only axis that knows which way up is — it is pinned
 to gravity. X and Y are the mount's heading, fixed at power-up and drifting with yaw, so
-an excursion there is as likely to be the estimate's error as the bar: the endpoints are
-detrended to zero velocity, which cancels a *constant* bias, but an orientation that
-wanders during the rep (real reps in one capture swing 47–82° of pitch) leaves an
-acceleration the endpoint constraints cannot remove, and it double-integrates into
-metres. Five of the fourteen reps in one capture had a horizontal axis as the furthest
+an excursion there is as likely to be the estimate's error as the bar: the ends of the
+window are anchored by the filter, which cancels a *constant* bias but cannot remove an
+orientation that wanders during the rep — real reps in one capture swung 47–82° of pitch,
+and that double-integrates into metres. (The raw path is what stops the estimate from
+wandering; see `RAW_IMU.md`.) Five of the fourteen reps in one capture had a horizontal axis as the furthest
 from its start, so their ROM described a direction the bar never travelled. Picking the
 largest axis picks the error; the horizontal ranges are a check on the frame, not a
 range of motion.
@@ -117,8 +121,8 @@ that, it is decimated and `RepSummary.decimated` is set. The decimation grid is
 anchored at the **last** sample, so a rep's end is always stored — the end is one of
 the two samples you judge a bar path by.
 
-Both the derived displacement **and** the raw inputs (accel, quaternion) are stored,
-so the app can re-derive traces with better algorithms later without a firmware
+Both the derived displacement **and** the raw inputs (specific force, attitude) are
+stored, so the app can re-derive traces with better algorithms later without a firmware
 update.
 
 ## The frame

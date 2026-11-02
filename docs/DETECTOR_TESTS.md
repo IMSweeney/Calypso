@@ -103,10 +103,13 @@ and what each does.
 | axis | range | what it does | where the number comes from |
 |---|---|---|---|
 | white acceleration noise, σ | 0 – 0.2 m/s², anchored at 0.13 | changes nothing measurable — the rep still closes and reads the same ROM | the per-sample spread at rest, 13–17 mg |
-| bias drift inside a rep | 0 – 0.02 m/s²/s | the residual this map is really about | half-to-half change measured at 0.003–0.02 |
-| attitude offset θ | 0 – 3° | leaks the bar's own acceleration sideways: `A·sin θ` of sideways span, and `A·cos θ` of ROM — which is 0.06 % at 2°, too small to measure | the frame the fusion settles on |
-| attitude drift while moving | 0 – 1 °/s | a leak that changes within the rep, which the endpoint detrend removes only partly | the gyro's zero-rate spec, and the fusion runs on the gyro while the bar moves |
-| constant body bias | 0 – 0.2 m/s² | nothing at all: the velocity detrend removes a constant acceleration exactly, which `constant_bias_is_fully_rejected` already pins | the measured rest offsets, 2–11 mg |
+| mount tilt | 0 – 90° about any axis | nothing, once the filter has found gravity: a tilt is an attitude, and the vertical is still the world's | a clip is never square to the bar |
+| accelerometer offset | 0 – 0.5 m/s² on any axis | nothing at rest — the filter learns it — and a sideways part is a tilt of `b/g`, which cancels out of the acceleration | the measured rest offsets, 2–11 mg |
+| gyroscope offset | 0 – 5 °/s | a heading drift, and a tilt leak left in the horizontal for as long as the estimate takes to learn it | the gyro's zero-rate spec |
+
+All four are `Impairments` in `sim/src/motion.rs`, and they are the sensor's faults rather
+than the filter's: a wrong *attitude* is no longer something that can be injected, because
+there is no estimate here to bias — the mount is real and so are the offsets.
 
 ## 3. False positives — done
 
@@ -123,7 +126,7 @@ something stored that is not a rep. With the noise map on top it becomes a rate.
 
 A one-way push is not stored anywhere in the swept range — not at three times `MIN_ROM_M`,
 not at any speed. That is structural rather than a tuned margin: a rep is two opposite legs,
-each past `MIN_ROM_M`, and a push is one leg, so the travel the detrend reads is not the
+each past `MIN_ROM_M`, and a push is one leg, so the travel the trace integrates is not the
 quantity being asked about. (The earlier note that an unrack had to travel about twice
 `MIN_ROM_M` described the detector that keyed on momentum, before a rep became a pair of
 turns.)

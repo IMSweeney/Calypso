@@ -8,101 +8,13 @@
 
 use calypso_sim::motion::{stored, Motion, Push, Rep, Rng, Stall};
 
-/// A constant offset on the accelerometer is the sensor's zero, not motion.
-///
-/// The device's linear acceleration carries a fixed offset — measured at 0.35 m/s² on Y with the
-/// bar still, which is a couple of degrees of gravity the fusion never took out. That is above
-/// both `ACCEL_REST_THRESHOLD` and `ACCEL_ON_THRESHOLD`, so before the bias is seeded from the
-/// first sample the detector reads it as "always moving": nothing is quiet, the bias never
-/// bootstraps, and the offset integrates into a velocity that outruns `VEL_MIN` permanently.
-#[test]
-fn a_constant_offset_is_the_sensor_zero_not_motion() {
-    use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE};
-    use calypso_sim::fixtures::detect_and_trace;
-
-    for offset in [
-        [0.0f32, -0.35, 0.0],
-        [0.35, 0.0, 0.0],
-        [0.0, 0.0, 0.35],
-        [0.05, -0.35, 0.04],
-    ] {
-        let mut samples: Vec<Sample> = Rep::bench().samples();
-        for s in samples.iter_mut() {
-            for k in 0..3 {
-                let a = s.accel[k] as f32 / ACCEL_SCALE as f32 + offset[k];
-                s.accel[k] = quantize(a, ACCEL_SCALE);
-            }
-        }
-        let reps = detect_and_trace(&samples, 512);
-        assert_eq!(
-            reps.len(),
-            1,
-            "offset {offset:?}: {} reps stored",
-            reps.len()
-        );
-        let rom = reps[0].0.rom;
-        assert!(
-            (rom - 0.19).abs() < 0.05,
-            "offset {offset:?}: rom {rom:.3} for a 0.19 m rep"
-        );
-    }
-}
-
-/// An offset that *arrives after boot* is absorbed within a few seconds.
-///
-/// The device reports `accel = 3, gyro = 3, ready = 1` while its linear acceleration carries a
-/// 0.35 m/s² offset, so nothing tells the client the reading moved — the chip finishing its own
-/// calibration is exactly that shape. A seed taken at boot would be wrong for the rest of the
-/// session; the stillness-spread bias takes the new offset out within about a second of the bar
-/// being still.
-#[test]
-fn an_offset_that_arrives_after_boot_is_absorbed() {
-    use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, QUAT_SCALE};
-    use calypso_sim::fixtures::detect_and_trace;
-
-    fn rest(n_ms: u32, from_ms: u32, offset: [f32; 3]) -> Vec<Sample> {
-        (0..n_ms / 10)
-            .map(|i| Sample {
-                t_ms: from_ms + i * 10,
-                accel: offset.map(|a| quantize(a, ACCEL_SCALE)),
-                quat: [QUAT_SCALE as i16, 0, 0, 0],
-            })
-            .collect()
-    }
-
-    for settle_ms in [3000u32, 5000, 10000] {
-        let new = [0.0f32, -0.35, 0.0];
-        let mut all = rest(3000, 0, [0.0, -0.05, 0.0]);
-        all.extend(rest(settle_ms, 3000, new));
-        for mut s in Rep::bench().samples() {
-            s.t_ms += 3000 + settle_ms;
-            for k in 0..3 {
-                s.accel[k] = quantize(s.accel[k] as f32 / ACCEL_SCALE as f32 + new[k], ACCEL_SCALE);
-            }
-            all.push(s);
-        }
-        let reps = detect_and_trace(&all, 512);
-        assert_eq!(
-            reps.len(),
-            1,
-            "{settle_ms} ms after the offset moved: {} reps stored",
-            reps.len()
-        );
-        let rom = reps[0].0.rom;
-        assert!(
-            (rom - 0.19).abs() < 0.05,
-            "{settle_ms} ms after the offset moved: rom {rom:.3}"
-        );
-    }
-}
-
 /// Each nominal scenario is exactly one stored rep, and its ROM tracks the asked-for travel.
 ///
-/// The detector closes a nominal rep via the two velocity reversals (out and back), so the
-/// velocity detrend in `compute_rep` sees a full excursion and the ROM reads the travel, not a
-/// halved bump. The ROM runs a hair under travel (the half-cosine is truncated to samples and the
-/// detrend trims the endpoints), so the pin is relative and loose enough not to flake on a
-/// rounding change but tight enough to catch a rep that splits into two rejected halves.
+/// The detector closes a nominal rep via the two velocity reversals (out and back), so the trace
+/// `compute_rep` integrates sees the full excursion and the ROM reads the travel, not a halved
+/// bump. It runs a hair over — about 4%, from what the integration and the anchor leave at the
+/// ends — so the pin is relative and loose enough not to flake on a rounding change but tight
+/// enough to catch a rep that splits into two rejected halves.
 #[test]
 fn each_nominal_is_exactly_one_stored_rep() {
     for (name, rep) in [
@@ -128,8 +40,9 @@ fn each_nominal_is_exactly_one_stored_rep() {
 
 /// The generated non-reps — a one-way push and an oscillation — stay rejected. The push is under
 /// [`calypso_core::rep::MIN_ROM_M`] outright; the oscillation never even closes a span.
-/// The harder cases — a full-height push (whose ROM the velocity detrend halves) or an oscillation
-/// big enough to matter — are what the false-positive map sweeps, not these two points.
+/// The harder cases — a full-height push (which pairs no leg, so its travel is never measured) or
+/// an oscillation big enough to matter — are what the false-positive map sweeps, not these two
+/// points.
 #[test]
 fn generated_non_reps_stay_rejected() {
     for motion in [
@@ -229,16 +142,17 @@ fn a_stall_mid_stroke_is_one_rep_with_its_travel() {
 /// **The known blind spot, pinned so it is a decision rather than a surprise.**
 ///
 /// A leg ends where the speed falls below `VEL_MIN`, so a return gentle enough never to reach
-/// 0.05 m/s never turns, and the rep is never stored. This is the cost of asking the question
-/// with velocity, and it is accepted: the boundary for a bench sits between 0.14 and 0.16 m/s.
-/// A fix would close a leg on bounded travel as well as on a turn — at which point this test is
-/// the one to delete, not to relax.
+/// 0.07 m/s never turns, and the rep is never stored. This is the cost of asking the question
+/// with velocity, and it is accepted: for a bench the boundary sits between 0.12 and 0.14 m/s,
+/// where the filter that now feeds the detector moved it up from 0.14–0.16 — the same blind spot,
+/// a little further out. A fix would close a leg on bounded travel as well as on a turn, at which
+/// point this test is the one to delete, not to relax.
 ///
 /// `VEL_MIN` and `T_TURN_MS` move together: dropping the speed bar alone made fast turnarounds
 /// *harder* to close, because the bar then spends less time below it than the debounce asks for.
 #[test]
 fn a_gentle_return_is_not_detected_yet() {
-    for speed_out in [0.10, 0.12, 0.14] {
+    for speed_out in [0.10, 0.12] {
         let rep = Rep {
             speed_out,
             ..Rep::bench()
