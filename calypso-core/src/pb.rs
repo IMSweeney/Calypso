@@ -3,11 +3,11 @@
 //! The schema is `proto/calypso.proto` (shared with the app) and the Rust types are generated from it at build time (see `build.rs`); those types **are** the records and messages.
 //! What is left here is the framing above them — the log's `[u32 len][record]` frame, the BLE envelope, and encode/decode into a caller's buffer, since the device has no allocator — and the boundary types where the on-chip representation is not the wire one.
 //!
-//! Log layout: each rep is one `RepSummary` record followed by `chunk_count` `TraceChunk` records carrying the same `rep_uuid`, because a log record must fit one 4 KB erase sector (see [`crate::flashlog`]).
+//! Log layout: each rep is one `RepSummary` record followed by its `computed_chunks` `TraceChunk` records and then, on a device that recorded them, its `raw_chunks` `RawChunk` records — all carrying the same `rep_uuid` — because a log record must fit one 4 KB erase sector (see [`crate::flashlog`]). The order is what lets a trace be found from the summary's record id alone.
 
-use crate::calibration::Calibration;
+use crate::fusion::FusionState;
 use crate::rep::TracePoint;
-use crate::sampler::Sample;
+use crate::sampler::{quantize, RepConfig, Sample, QUAT_SCALE};
 use crate::uuid::{RepUuid, UUID_LEN};
 use micropb::MessageDecode;
 
@@ -34,20 +34,22 @@ pub enum Error {
 }
 
 /// A decoded log record.
-/// `Trace` stores a whole chunk inline (~2 KB, bounded by [`TRACE_CHUNK_SAMPLES`]); the `#[allow]` is deliberate rather than a `Box`, which would need an allocator.
+/// The two chunk kinds store a whole chunk inline (~2 KB, bounded by [`TRACE_CHUNK_SAMPLES`]); the `#[allow]` is deliberate rather than a `Box`, which would need an allocator.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, PartialEq)]
 pub enum Record {
     Summary(msg::RepSummary),
-    Trace(msg::TraceChunk),
+    Computed(msg::TraceChunk),
+    Raw(msg::RawChunk),
     Clock(msg::BootClock),
 }
 
-pub fn chunk_count_for(trace_len: usize) -> u32 {
-    if trace_len == 0 {
+/// How many records a trace of `len` points takes, either kind: the two chunk messages hold the same number of samples.
+pub fn chunk_count_for(len: usize) -> u32 {
+    if len == 0 {
         return 0;
     }
-    trace_len.div_ceil(TRACE_CHUNK_SAMPLES) as u32
+    len.div_ceil(TRACE_CHUNK_SAMPLES) as u32
 }
 
 /// A rep UUID in its wire form: 16 bytes in a fixed-capacity container.
@@ -71,35 +73,81 @@ pub fn summary_uuid(s: &msg::RepSummary) -> Option<RepUuid> {
     uuid_from_field(&s.rep_uuid)
 }
 
-pub fn chunk_uuid(c: &msg::TraceChunk) -> Option<RepUuid> {
+pub fn computed_uuid(c: &msg::TraceChunk) -> Option<RepUuid> {
     uuid_from_field(&c.rep_uuid)
 }
 
-/// Convert calibration levels into their wire form. `ready` is the device's own gate ([`Calibration::can_record`]), not something the app re-derives.
-pub fn calibration_message(c: &Calibration) -> msg::CalibrationStatus {
-    msg::CalibrationStatus {
-        sys: c.sys as u32,
-        accel: c.accel as u32,
-        gyro: c.gyro as u32,
-        mag: c.mag as u32,
-        ready: c.can_record(),
+pub fn raw_uuid(c: &msg::RawChunk) -> Option<RepUuid> {
+    uuid_from_field(&c.rep_uuid)
+}
+
+/// A rep's sensor configuration in its wire form.
+pub fn config_message(c: &RepConfig) -> msg::RepConfig {
+    msg::RepConfig {
+        accel_range_g: c.accel_range_g,
+        gyro_range_dps: c.gyro_range_dps,
+        accel_bandwidth_hz: c.accel_bandwidth_hz,
+        gyro_bandwidth_hz: c.gyro_bandwidth_hz,
+        sample_rate_hz: c.sample_rate_hz,
+        detector_version: c.detector_version,
     }
 }
 
-/// Convert one trace point into its wire form, with timestamps relative to `t0_ms` (the rep's first trace point).
-pub fn trace_sample_message(p: &TracePoint, t0_ms: u32) -> msg::TraceSample {
-    msg::TraceSample {
+/// The filter state a stored window begins from, in its wire form.
+pub fn state_message(state: &FusionState) -> msg::RepState {
+    msg::RepState {
+        vx: state.velocity[0],
+        vy: state.velocity[1],
+        vz: state.velocity[2],
+        qw: state.attitude[0],
+        qx: state.attitude[1],
+        qy: state.attitude[2],
+        qz: state.attitude[3],
+        accel_bias_x: state.accel_bias[0],
+        accel_bias_y: state.accel_bias[1],
+        accel_bias_z: state.accel_bias[2],
+        gyro_bias_x: state.gyro_bias[0],
+        gyro_bias_y: state.gyro_bias[1],
+        gyro_bias_z: state.gyro_bias[2],
+        settled: state.settled,
+    }
+}
+
+/// Back-convert a wire state, which is what a stored rep is replayed from.
+pub fn state_from_message(s: &msg::RepState) -> FusionState {
+    FusionState {
+        velocity: [s.vx, s.vy, s.vz],
+        attitude: [s.qw, s.qx, s.qy, s.qz],
+        accel_bias: [s.accel_bias_x, s.accel_bias_y, s.accel_bias_z],
+        gyro_bias: [s.gyro_bias_x, s.gyro_bias_y, s.gyro_bias_z],
+        settled: s.settled,
+    }
+}
+
+/// One point of the plotted trace, with the time relative to `t0_ms` (the rep's first sample).
+pub fn computed_point_message(p: &TracePoint, t0_ms: u32) -> msg::TraceComputedPoint {
+    msg::TraceComputedPoint {
         t_offset_ms: p.t_ms.saturating_sub(t0_ms),
         px: p.pos[0],
         py: p.pos[1],
         pz: p.pos[2],
-        ax: p.accel[0] as i32,
-        ay: p.accel[1] as i32,
-        az: p.accel[2] as i32,
-        qw: p.quat[0] as i32,
-        qx: p.quat[1] as i32,
-        qy: p.quat[2] as i32,
-        qz: p.quat[3] as i32,
+        qw: p.quat[0] as f32 / QUAT_SCALE as f32,
+        qx: p.quat[1] as f32 / QUAT_SCALE as f32,
+        qy: p.quat[2] as f32 / QUAT_SCALE as f32,
+        qz: p.quat[3] as f32 / QUAT_SCALE as f32,
+    }
+}
+
+/// One sample of the raw trace, with the time relative to `t0_ms` (the rep's first sample).
+pub fn raw_point_message(s: &Sample, t0_ms: u32) -> msg::TraceRawPoint {
+    msg::TraceRawPoint {
+        t_offset_ms: s.t_ms.saturating_sub(t0_ms),
+        ax: s.accel[0] as i32,
+        ay: s.accel[1] as i32,
+        az: s.accel[2] as i32,
+        gx: s.gyro[0] as i32,
+        gy: s.gyro[1] as i32,
+        gz: s.gyro[2] as i32,
     }
 }
 
@@ -114,27 +162,38 @@ pub fn imu_state_message(sample: &Sample, attitude: [f32; 4]) -> msg::ImuState {
         ax: sample.accel[0] as i32,
         ay: sample.accel[1] as i32,
         az: sample.accel[2] as i32,
-        qw: crate::sampler::quantize(attitude[0], crate::sampler::QUAT_SCALE) as i32,
-        qx: crate::sampler::quantize(attitude[1], crate::sampler::QUAT_SCALE) as i32,
-        qy: crate::sampler::quantize(attitude[2], crate::sampler::QUAT_SCALE) as i32,
-        qz: crate::sampler::quantize(attitude[3], crate::sampler::QUAT_SCALE) as i32,
+        qw: quantize(attitude[0], QUAT_SCALE) as i32,
+        qx: quantize(attitude[1], QUAT_SCALE) as i32,
+        qy: quantize(attitude[2], QUAT_SCALE) as i32,
+        qz: quantize(attitude[3], QUAT_SCALE) as i32,
+        gx: sample.gyro[0] as i32,
+        gy: sample.gyro[1] as i32,
+        gz: sample.gyro[2] as i32,
     }
 }
 
-/// Back-convert a wire sample. `t_ms` is relative to the rep's first point (see `TraceChunk::first_t_offset_ms`).
-pub fn trace_point_from_message(s: &msg::TraceSample) -> TracePoint {
+/// Back-convert one point of the plotted trace. `t_ms` is relative to the rep's first sample (see `TraceChunk::first_t_offset_ms`).
+pub fn computed_point_from_message(s: &msg::TraceComputedPoint) -> TracePoint {
     TracePoint {
         t_ms: s.t_offset_ms,
         pos: [s.px, s.py, s.pz],
-        accel: [s.ax as i16, s.ay as i16, s.az as i16],
-        quat: [s.qw as i16, s.qx as i16, s.qy as i16, s.qz as i16],
+        quat: [s.qw, s.qx, s.qy, s.qz].map(|q| quantize(q, QUAT_SCALE)),
     }
 }
 
-/// Build a chunk message from trace points (at most [`TRACE_CHUNK_SAMPLES`] are taken), timestamps relative to `t0_ms`.
+/// Back-convert one sample of the raw trace, ready to replay: the same fixed point the device read.
+pub fn raw_point_from_message(s: &msg::TraceRawPoint) -> Sample {
+    Sample {
+        t_ms: s.t_offset_ms,
+        accel: [s.ax as i16, s.ay as i16, s.az as i16],
+        gyro: [s.gx as i16, s.gy as i16, s.gz as i16],
+    }
+}
+
+/// Build a chunk of the plotted trace (at most [`TRACE_CHUNK_SAMPLES`] points are taken), times relative to `t0_ms`.
 ///
 /// `total_chunks` is the number of chunks in the stream this record belongs to, or 0 for a record being stored in the log (see the field's comment in `proto/calypso.proto`).
-pub fn chunk_message(
+pub fn computed_chunk_message(
     rep_uuid: RepUuid,
     index: u32,
     t0_ms: u32,
@@ -153,7 +212,31 @@ pub fn chunk_message(
     };
     for p in points.iter().take(TRACE_CHUNK_SAMPLES) {
         // Capacity is TRACE_CHUNK_SAMPLES, so this cannot fail.
-        let _ = chunk.samples.push(trace_sample_message(p, t0_ms));
+        let _ = chunk.samples.push(computed_point_message(p, t0_ms));
+    }
+    chunk
+}
+
+/// Build a chunk of the raw trace, the same way.
+pub fn raw_chunk_message(
+    rep_uuid: RepUuid,
+    index: u32,
+    t0_ms: u32,
+    total_chunks: u32,
+    samples: &[Sample],
+) -> msg::RawChunk {
+    let mut chunk = msg::RawChunk {
+        rep_uuid: uuid_to_field(&rep_uuid),
+        index,
+        first_t_offset_ms: samples
+            .first()
+            .map(|s| s.t_ms.saturating_sub(t0_ms))
+            .unwrap_or(0),
+        total_chunks,
+        samples: heapless::Vec::new(),
+    };
+    for s in samples.iter().take(TRACE_CHUNK_SAMPLES) {
+        let _ = chunk.samples.push(raw_point_message(s, t0_ms));
     }
     chunk
 }
@@ -164,8 +247,8 @@ pub fn encode_summary(summary: &msg::RepSummary, out: &mut [u8]) -> Result<usize
     record(msg::RepRecord_::Body::Summary(summary.clone()), out)
 }
 
-/// Encode a trace chunk as a log record. Returns the encoded length.
-pub fn encode_trace_chunk(
+/// Encode a chunk of the plotted trace as a log record. Returns the encoded length.
+pub fn encode_computed_chunk(
     rep_uuid: RepUuid,
     index: u32,
     t0_ms: u32,
@@ -174,7 +257,34 @@ pub fn encode_trace_chunk(
     out: &mut [u8],
 ) -> Result<usize, Error> {
     record(
-        msg::RepRecord_::Body::Trace(chunk_message(rep_uuid, index, t0_ms, total_chunks, points)),
+        msg::RepRecord_::Body::Computed(computed_chunk_message(
+            rep_uuid,
+            index,
+            t0_ms,
+            total_chunks,
+            points,
+        )),
+        out,
+    )
+}
+
+/// Encode a chunk of the raw trace as a log record. Returns the encoded length.
+pub fn encode_raw_chunk(
+    rep_uuid: RepUuid,
+    index: u32,
+    t0_ms: u32,
+    total_chunks: u32,
+    samples: &[Sample],
+    out: &mut [u8],
+) -> Result<usize, Error> {
+    record(
+        msg::RepRecord_::Body::Raw(raw_chunk_message(
+            rep_uuid,
+            index,
+            t0_ms,
+            total_chunks,
+            samples,
+        )),
         out,
     )
 }
@@ -226,7 +336,8 @@ pub fn decode_record(bytes: &[u8]) -> Result<Record, Error> {
     decode_record_into(&mut message, bytes)?;
     match message.body {
         Some(msg::RepRecord_::Body::Summary(s)) => Ok(Record::Summary(s)),
-        Some(msg::RepRecord_::Body::Trace(t)) => Ok(Record::Trace(t)),
+        Some(msg::RepRecord_::Body::Computed(t)) => Ok(Record::Computed(t)),
+        Some(msg::RepRecord_::Body::Raw(r)) => Ok(Record::Raw(r)),
         Some(msg::RepRecord_::Body::Clock(c)) => Ok(Record::Clock(c)),
         None => Err(Error::Empty),
     }
@@ -275,6 +386,14 @@ pub fn decode_sync(bytes: &[u8]) -> Result<msg::SyncMessage, Error> {
 pub fn decode_trace_request(bytes: &[u8]) -> Result<msg::TraceRequest, Error> {
     Ok(match decode_sync_request(bytes)?.body {
         Some(msg::SyncRequest_::Body::Trace(trace)) => trace,
-        None => return Err(Error::Empty),
+        _ => return Err(Error::Empty),
     })
+}
+
+/// Encode the dev switch inside the `SyncRequest` envelope. Its arm of `SyncRequest` is an operation rather than a value, so it travels on the pipe like a trace request does.
+pub fn encode_dev_mode(enabled: bool, out: &mut [u8]) -> Result<usize, Error> {
+    let envelope = msg::SyncRequest {
+        body: Some(msg::SyncRequest_::Body::DevMode(msg::DevMode { enabled })),
+    };
+    encode_message(&envelope, out)
 }

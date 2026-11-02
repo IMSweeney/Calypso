@@ -225,11 +225,11 @@ impl<'a> Session<'a> {
         let Some(points) = self.points.get(start..end) else {
             return false;
         };
-        let chunk = pb::chunk_message(rep_uuid, index, t0_ms, total_chunks, points);
+        let chunk = pb::computed_chunk_message(rep_uuid, index, t0_ms, total_chunks, points);
         self.send(
             Kind::Trace,
             &msg::SyncMessage {
-                body: Some(msg::SyncMessage_::Body::Trace(chunk)),
+                body: Some(msg::SyncMessage_::Body::Computed(chunk)),
             },
         )
     }

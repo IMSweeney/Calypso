@@ -26,9 +26,10 @@ cd "$(dirname "$0")/../.."
 #                        window of 127 is not flow control").
 #   --chunk-max 244      the pipe characteristic's backing buffer: one
 #                        notification's worth at a 247-byte MTU.
-#   --pipe-msg-max 4096  a whole `TraceChunk` (48 samples, 2459 bytes worst
-#                        case), which is what makes a trace one transfer per
-#                        stored chunk instead of three points a notification.
+#   --pipe-msg-max 4096  a whole chunk — 48 `TraceComputedPoint`s at ~1.9 KB,
+#                        or 48 `TraceRawPoint`s at ~1.4 KB — which is what makes
+#                        a trace one transfer per stored chunk instead of three
+#                        points a notification.
 #   --xfer-timeout 5000  no progress for this long abandons a transfer.
 cargo run --quiet --manifest-path tools/gatt-gen/Cargo.toml -- \
   rust-trouble \

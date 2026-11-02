@@ -9,15 +9,26 @@ use crate::uuid::RepUuid;
 /// their traces in, so the requests a batch causes are answered from the index rather than by reading the log.
 pub const REP_INDEX_LEN: usize = 16;
 
-/// Where one rep's records sit in the log: the record after its summary, and how many chunk records follow it.
+/// Where one rep's records sit in the log: the record after its summary, and how many chunk records of each kind
+/// follow it.
 ///
-/// `append_rep` writes a rep's summary and chunks together under the log's lock, so the chunks are the records after
-/// the summary with none of anyone else's among them.
+/// `append_rep` writes a rep's summary, its plotted chunks and then its raw chunks together under the log's lock, so
+/// both runs are the records after the summary with none of anyone else's among them — and the raw run starts
+/// exactly where the plotted one ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RepPlace {
     pub rep_uuid: RepUuid,
     pub first_chunk_id: u32,
-    pub chunk_count: u32,
+    pub computed_chunks: u32,
+    /// 0 when this rep has no raw trace.
+    pub raw_chunks: u32,
+}
+
+impl RepPlace {
+    /// Where the raw run starts, given that the plotted one came first.
+    pub fn first_raw_chunk_id(&self) -> u32 {
+        self.first_chunk_id + self.computed_chunks
+    }
 }
 
 /// Where the reps the summary stream has handed out sit in the log.
@@ -44,11 +55,18 @@ impl RepIndex {
 
     /// Record where a rep is, overwriting the oldest entry when full: the entry the app is least likely to ask for
     /// next is the one it was sent longest ago.
-    pub fn record(&mut self, rep_uuid: RepUuid, first_chunk_id: u32, chunk_count: u32) {
+    pub fn record(
+        &mut self,
+        rep_uuid: RepUuid,
+        first_chunk_id: u32,
+        computed_chunks: u32,
+        raw_chunks: u32,
+    ) {
         self.entries[self.next] = Some(RepPlace {
             rep_uuid,
             first_chunk_id,
-            chunk_count,
+            computed_chunks,
+            raw_chunks,
         });
         self.next = (self.next + 1) % REP_INDEX_LEN;
     }
@@ -101,15 +119,29 @@ pub fn summary_message(summary: msg::RepSummary) -> msg::SyncMessage {
 }
 
 /// The trace request inside a `SyncRequest` the app wrote, or `None` if it is not one this device will serve.
+///
+/// A request for the **raw** trace is refused: this end serves the plotted one, and the raw kind exists in the schema
+/// for the read that fills it in. Answering a raw request with the plotted trace would be worse than refusing it.
 pub fn trace_request(request: &msg::SyncRequest) -> Option<msg::TraceRequest> {
     let trace = match &request.body {
         Some(msg::SyncRequest_::Body::Trace(trace)) => trace.clone(),
-        None => return None,
+        _ => return None,
     };
     // A short uuid is not an identity.
     pb::uuid_from_field(&trace.rep_uuid)?;
     if !trace.all_chunks && trace.chunk_index >= 64 {
         return None;
     }
+    if trace.kind == msg::TraceKind::Raw {
+        return None;
+    }
     Some(trace)
+}
+
+/// Whether a `SyncRequest` is the dev switch, and which way it sets it.
+pub fn dev_mode(request: &msg::SyncRequest) -> Option<bool> {
+    match &request.body {
+        Some(msg::SyncRequest_::Body::DevMode(dev)) => Some(dev.enabled),
+        _ => None,
+    }
 }

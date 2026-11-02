@@ -33,13 +33,12 @@ fn worst_case_chunk_fits_a_transfer() {
     let worst = TracePoint {
         t_ms: u32::MAX,
         pos: [f32::MAX, f32::MIN, -1.5e30],
-        accel: [i16::MIN, i16::MAX, -32767],
         quat: [i16::MIN, i16::MAX, -16384, 16383],
     };
     let points = vec![worst; pb::TRACE_CHUNK_SAMPLES];
-    let chunk = pb::chunk_message(fixture_uuid(1), 0, 0, 1, &points);
+    let chunk = pb::computed_chunk_message(fixture_uuid(1), 0, 0, 1, &points);
     let (_, n) = wire(&msg::SyncMessage {
-        body: Some(msg::SyncMessage_::Body::Trace(chunk)),
+        body: Some(msg::SyncMessage_::Body::Computed(chunk)),
     });
     // 2459 bytes worst case: the generated table's assertion is what makes this a build failure rather than a transfer that stalls part-way, and this says the number is what the wire really produces.
     assert!(
@@ -62,39 +61,47 @@ fn worst_case_summary_fits_a_transfer() {
         roll_min_deg: f32::MIN,
         pitch_min_deg: f32::MIN,
         pitch_max_deg: f32::MAX,
-        trace_len: u32::MAX,
-        chunk_count: u32::MAX,
-        flags: calypso_core::rep::REP_FLAG_DECIMATED,
+        computed_len: u32::MAX,
+        computed_chunks: u32::MAX,
+        raw_len: u32::MAX,
+        raw_chunks: u32::MAX,
         t_unix_ms: u64::MAX,
         ..Default::default()
     };
-    // The origin is a submessage, so its presence and its three floats each cost wire bytes: put a worst case in.
-    summary.set_v0(msg::TraceOrigin {
+    // Both headers are submessages, so their presence and every field cost wire bytes: put a worst case in each.
+    summary.set_state(msg::RepState {
         vx: f32::MAX,
         vy: f32::MAX,
         vz: f32::MAX,
+        qw: f32::MAX,
+        qx: f32::MAX,
+        qy: f32::MAX,
+        qz: f32::MAX,
+        accel_bias_x: f32::MAX,
+        accel_bias_y: f32::MAX,
+        accel_bias_z: f32::MAX,
+        gyro_bias_x: f32::MAX,
+        gyro_bias_y: f32::MAX,
+        gyro_bias_z: f32::MAX,
+        settled: true,
+    });
+    summary.set_config(msg::RepConfig {
+        accel_range_g: u32::MAX,
+        gyro_range_dps: u32::MAX,
+        accel_bandwidth_hz: u32::MAX,
+        gyro_bandwidth_hz: u32::MAX,
+        sample_rate_hz: u32::MAX,
+        detector_version: u32::MAX,
     });
     let (_, n) = wire(&summary_message(summary));
     assert!(n <= MESSAGE_MAX, "worst-case summary is {n} bytes");
-}
-
-/// The widest status the device can build has to fit the characteristic the schema declares for it (`max_len` 20).
-/// This is the one size check that cannot be a compile-time assertion: `gatt-gen` sees `micropb`'s bound for the message type, not the payload the device actually fills in, so `SyncCalibrationValue::encode` answering `None` is what the firmware would hit and this is where it is caught on the host instead.
-#[test]
-fn worst_case_calibration_fits_its_characteristic() {
-    use calypso_core::calibration::Calibration;
-    use calypso_core::gatt::{max_len, SyncCalibrationValue};
-
-    let widest = pb::calibration_message(&Calibration::new(u8::MAX, u8::MAX, u8::MAX, u8::MAX));
-    let value = SyncCalibrationValue::encode(&widest).expect("the widest status fits max_len");
-    assert!(value.as_bytes().len() <= max_len::SYNC_CALIBRATION);
 }
 
 #[test]
 fn a_summary_survives_the_envelope() {
     let summary = msg::RepSummary {
         rep_uuid: pb::uuid_to_field(&fixture_uuid(5)),
-        chunk_count: 2,
+        computed_chunks: 2,
         ..Default::default()
     };
     let (buf, n) = wire(&summary_message(summary));
@@ -127,6 +134,7 @@ fn trace_requests_are_validated() {
     let mut encode = |rep_uuid, all_chunks, chunk_index| {
         let n = pb::encode_trace_request(
             &msg::TraceRequest {
+                kind: msg::TraceKind::Computed,
                 rep_uuid: pb::uuid_to_field(&rep_uuid),
                 all_chunks,
                 chunk_index,
@@ -153,6 +161,7 @@ fn trace_requests_are_validated() {
             rep_uuid: too_short,
             all_chunks: true,
             chunk_index: 0,
+            kind: msg::TraceKind::Computed,
         },
         &mut scratch,
     )
@@ -171,19 +180,20 @@ fn the_device_remembers_where_a_reps_records_are() {
     let mut index = RepIndex::new();
     assert_eq!(index.find(&fixture_uuid(1)), None, "nothing yet");
 
-    index.record(fixture_uuid(1), 42, 5);
+    index.record(fixture_uuid(1), 42, 5, 0);
     assert_eq!(
         index.find(&fixture_uuid(1)),
         Some(RepPlace {
             rep_uuid: fixture_uuid(1),
             first_chunk_id: 42,
-            chunk_count: 5,
+            computed_chunks: 5,
+            raw_chunks: 0,
         })
     );
 
     // A full index forgets the oldest place first: the asks a batch causes come in the order it was sent.
     for i in 0..REP_INDEX_LEN as u32 {
-        index.record(fixture_uuid(100 + i), 1000 + i, 1);
+        index.record(fixture_uuid(100 + i), 1000 + i, 1, 0);
     }
     assert_eq!(index.find(&fixture_uuid(1)), None, "the oldest is gone");
     assert!(
@@ -191,6 +201,6 @@ fn the_device_remembers_where_a_reps_records_are() {
         "and the ones after it are not"
     );
     // Re-recording a rep that is in the index moves nothing: same uuid, same place.
-    index.record(fixture_uuid(101), 1001, 1);
+    index.record(fixture_uuid(101), 1001, 1, 0);
     assert_eq!(index.find(&fixture_uuid(101)).unwrap().first_chunk_id, 1001);
 }

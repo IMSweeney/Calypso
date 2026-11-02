@@ -20,6 +20,9 @@ fn the_widest_imu_sample_fits_its_characteristic() {
         qx: i16::MIN as i32,
         qy: i16::MAX as i32,
         qz: i16::MIN as i32,
+        gx: i16::MAX as i32,
+        gy: i16::MIN as i32,
+        gz: i16::MAX as i32,
     };
 
     let value = SyncImuValue::encode(&widest).expect("the widest sample fits the characteristic");

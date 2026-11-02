@@ -37,7 +37,8 @@ fn main() {
         // order, and dropping the one that dates a rep would leave that rep undated.
         let keep = match decode_record(record) {
             Ok(Record::Summary(s)) => prefix_matches(&s.rep_uuid, &wanted, &mut found),
-            Ok(Record::Trace(c)) => prefix_matches(&c.rep_uuid, &wanted, &mut found),
+            Ok(Record::Computed(c)) => prefix_matches(&c.rep_uuid, &wanted, &mut found),
+            Ok(Record::Raw(r)) => prefix_matches(&r.rep_uuid, &wanted, &mut found),
             Ok(Record::Clock(_)) => true,
             Err(e) => panic!("a record in the capture does not decode: {e:?}"),
         };
@@ -65,7 +66,7 @@ fn main() {
                 short(&s.rep_uuid),
                 s.rom,
                 s.duration_ms,
-                s.trace_len,
+                s.computed_len,
                 if s.t_unix_ms == 0 {
                     "no".to_string()
                 } else {

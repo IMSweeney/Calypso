@@ -42,8 +42,7 @@ use calypso_core::clock::{self, Boots};
 use calypso_core::flashlog::{self, FlashLog};
 use calypso_core::fusion::{Fusion, GRAVITY, conjugate, rotate_by_quat};
 use calypso_core::gatt::{
-    CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncCalibrationValue, SyncImuValue,
-    SyncReportsValue,
+    CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncImuValue, SyncReportsValue,
 };
 use calypso_core::pb::msg;
 use calypso_core::pipe::{self, Session, Stalled};
@@ -85,7 +84,7 @@ const BNO055_CALIBRATION_ADDR: u32 = 0x00;
 /// The BLE device name: a compile-time constant, and read-only over GATT.
 const DEVICE_NAME: &str = "Calypso";
 
-/// The IMU's calibration levels (`Calibration::to_bits`), written by the 1 Hz poll and read by the BLE task to serve the app's read of the `Calibration` characteristic.
+/// The IMU's calibration levels (`Calibration::to_bits`), written by the 1 Hz poll and read by the sampler to decide whether reps are recordable.
 /// Zero until the first poll, which reads as "not calibrated" — the safe thing to believe.
 static CALIBRATION_BITS: AtomicU32 = AtomicU32::new(0);
 
@@ -120,6 +119,14 @@ const CLOCK_RECORD_BYTES: usize = 16;
 /// Bench mode: store a synthetic "rep" every this many seconds instead of detecting real ones (`--features fake-reps`).
 /// A build flag rather than a runtime setting, so the device is not one accidental setting away from recording fiction as a measurement.
 const FAKE_REPS: bool = cfg!(feature = "fake-reps");
+
+/// What a stored rep's summary says about the sensor that recorded it.
+///
+/// The rate and the detector's version are this build's; the sensor's own range and bandwidth settings are
+/// not configured yet — the chip's fused output is what is being read — so they travel as 0, which is the
+/// schema's "not recorded" rather than a claim about a setting nobody made.
+const SAMPLER_CONFIG: calypso_core::sampler::RepConfig =
+    calypso_core::sampler::RepConfig::of(SAMPLE_RATE_HZ, calypso_core::rep::DETECTOR_VERSION);
 
 /// Bench mode's period, and how much of the ring each synthetic rep covers, which has to leave room for the ZUPT margins inside `REP_WINDOW_SAMPLES` (9 s).
 const FAKE_REP_PERIOD_S: u32 = 30;
@@ -186,7 +193,7 @@ fn log_changed() {
 /// most worth having.
 const REP_WINDOW_SAMPLES: usize = 1000;
 /// Trace points kept per rep; longer reps are decimated uniformly.
-const TRACE_POINTS: usize = 512;
+const TRACE_POINTS: usize = calypso_core::rep::TRACE_POINTS;
 
 // A default app-descriptor, required by the esp-idf bootloader: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -429,7 +436,6 @@ async fn main(spawner: Spawner) -> ! {
                     pipe::frame_ceiling(conn.raw().att_mtu() as usize)
                 );
                 // A read returns the last value published, so both are published before a client can ask for them.
-                publish_calibration(&gatt);
                 publish_imu(&gatt);
 
                 // Sync state: how many summaries this subscriber has been sent, the batch they are read from, and the clock the pipe's timeouts are measured against.
@@ -445,7 +451,7 @@ async fn main(spawner: Spawner) -> ! {
 
                 let mut ticks: u32 = 0;
                 loop {
-                    // Service GATT events; on every tenth tick (a second), keep the table's copy of the IMU's calibration levels current, which is what the app reads to turn its hint into progress.
+                    // Service GATT events; on every tenth tick (a second), keep the table's copy of the last IMU sample current.
                     //
                     // The tick itself is 100 ms because the app's read of the `Imu` characteristic is a snapshot of the sensor: at a second it would show a rep's whole stroke as one frame. Everything else in this arm is a second's business.
                     let event = match select(conn.next(), Timer::after(Duration::from_millis(100))).await {
@@ -457,8 +463,7 @@ async fn main(spawner: Spawner) -> ! {
                                 continue;
                             }
                             let now = now_ms(start);
-                            publish_calibration(&gatt);
-                            // Who is listening, asked of the server rather than inferred from a notify result, because a notify result says nothing (see `is_subscribed`). Once a tick is often enough to say when it changes.
+                                        // Who is listening, asked of the server rather than inferred from a notify result, because a notify result says nothing (see `is_subscribed`). Once a tick is often enough to say when it changes.
                             let listening =
                                 is_subscribed(&gatt, &conn, gatt.sync.messages.cccd_handle);
                             if listening != subscribed {
@@ -780,10 +785,8 @@ async fn main(spawner: Spawner) -> ! {
                             };
                             // Identity is minted when the rep closes, so it is set here rather than computed with the stats.
                             sum.rep_uuid = calypso_core::pb::uuid_to_field(&rep_uuid);
-                            // The gate asks only for the gyroscope, so whether the accelerometer was calibrated too is a fact only the summary can carry — the app has no other way to weigh the reps taken while it wandered.
-                            if calibration.accel_calibrated() {
-                                sum.flags |= calypso_core::rep::REP_FLAG_CALIBRATED;
-                            }
+                            // What the sensor was set to, so the trace can be read without assuming today's build.
+                            sum.set_config(calypso_core::pb::config_message(&SAMPLER_CONFIG));
                             // Persist the rep (summary + trace chunks). This happens right after the rest debounce, i.e. while the sensor is at rest, so the tens of ms an erase takes here can't land in the middle of a rep.
                             let stored = {
                                 let mut guard = store.lock().await;
@@ -811,18 +814,12 @@ async fn main(spawner: Spawner) -> ! {
                                 }
                             }
                             info!(
-                                "rep {}: {}..{} ms ({} ms), {} trace pts{}{}, rom {=f32} m, peak v {=f32} m/s, mean v {=f32} m/s, peak a {=f32} m/s^2, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
+                                "rep {}: {}..{} ms ({} ms), {} trace pts, rom {=f32} m, peak v {=f32} m/s, mean v {=f32} m/s, peak a {=f32} m/s^2, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
                                 UuidShort(Some(&rep_uuid)),
                                 span.start_ms,
                                 span.end_ms,
                                 sum.duration_ms,
-                                sum.trace_len,
-                                if sum.decimated() { " (decimated)" } else { "" },
-                                if sum.calibrated() {
-                                    ""
-                                } else {
-                                    " (accel not calibrated)"
-                                },
+                                sum.computed_len,
                                 sum.rom,
                                 sum.peak_velocity,
                                 sum.mean_velocity,
@@ -1427,7 +1424,7 @@ fn collect_summaries(
                 // A trace request for this rep comes as soon as this summary lands on the phone, and its chunks are
                 // the records that follow it (`store::append_rep` writes them together).
                 if let Some(rep_uuid) = calypso_core::pb::summary_uuid(s) {
-                    index.record(rep_uuid, id + 1, s.chunk_count);
+                    index.record(rep_uuid, id + 1, s.computed_chunks, s.raw_chunks);
                 }
                 batch.push(summary);
             }
@@ -1534,7 +1531,7 @@ fn read_trace_from_log(
             rec_buf,
             rec,
             place.first_chunk_id,
-            place.chunk_count,
+            place.computed_chunks,
             rep_uuid,
             trace,
         ),
@@ -1661,7 +1658,9 @@ fn store_rep(
         let mut region = log_partition.as_embedded_storage(flash);
         FlashLog::mount(&mut region)
             .map_err(store::Error::Log)
-            .and_then(|mut log| store::append_rep(&mut log, rec_buf, summary, trace.as_slice()))
+            .and_then(|mut log| {
+                store::append_rep(&mut log, rec_buf, summary, trace.as_slice(), None)
+            })
     };
     match appended {
         Ok(records) => Ok(records),
@@ -1910,22 +1909,6 @@ fn publish_imu(gatt: &CalypsoGatt<'_>) {
             }
         }
         None => warn!("imu: the sample is larger than the characteristic"),
-    }
-}
-
-/// The characteristic is a value rather than a pipe message, so this end only keeps the table's copy current; called on connection and once a second after, the levels being the chip's own 1 Hz poll ([`CALIBRATION_BITS`]).
-///
-/// A message too large for the characteristic's `max_len` is `None` rather than a truncation, and nothing this device holds can be.
-fn publish_calibration(gatt: &CalypsoGatt<'_>) {
-    let calibration = Calibration::from_bits(CALIBRATION_BITS.load(Ordering::Relaxed));
-    let status = calypso_core::pb::calibration_message(&calibration);
-    match SyncCalibrationValue::encode(&status) {
-        Some(value) => {
-            if gatt.set(&gatt.sync.calibration, &value).is_err() {
-                warn!("calibration: the table refused the status");
-            }
-        }
-        None => warn!("calibration: the status is larger than the characteristic"),
     }
 }
 

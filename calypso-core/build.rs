@@ -50,9 +50,13 @@ fn messages(out_dir: &Path) {
         ".calypso",
         micropb_gen::Config::new().max_bytes(REP_UUID_LEN as u32),
     );
-    // Trace chunks are the only repeated field. The capacity must be a compile-time constant here; `pb::TRACE_CHUNK_SAMPLES` declares the same value and a unit test asserts they match.
+    // Trace chunks are the only repeated fields, one per trace. The capacity must be a compile-time constant here; `pb::TRACE_CHUNK_SAMPLES` declares the same value and a unit test asserts they match.
     generator.configure(
         ".calypso.TraceChunk.samples",
+        micropb_gen::Config::new().max_len(TRACE_CHUNK_SAMPLES as u32),
+    );
+    generator.configure(
+        ".calypso.RawChunk.samples",
         micropb_gen::Config::new().max_len(TRACE_CHUNK_SAMPLES as u32),
     );
     generator

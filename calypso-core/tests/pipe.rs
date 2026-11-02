@@ -47,7 +47,6 @@ fn point(i: usize) -> TracePoint {
     TracePoint {
         t_ms: 1000 + (i as u32) * 10,
         pos: [0.01 * i as f32, 0.2, -0.3],
-        accel: [0, -981, 12],
         quat: [16384, 0, 1024, -2048],
     }
 }
@@ -55,8 +54,8 @@ fn point(i: usize) -> TracePoint {
 fn rep_summary(index: u32) -> msg::RepSummary {
     msg::RepSummary {
         rep_uuid: pb::uuid_to_field(&fixture_uuid(index)),
-        trace_len: 96,
-        chunk_count: 2,
+        computed_len: 96,
+        computed_chunks: 2,
         ..Default::default()
     }
 }
@@ -69,13 +68,9 @@ fn summary(index: u32) -> msg::SyncMessage {
 fn chunk() -> msg::SyncMessage {
     let points: Vec<TracePoint> = (0..TRACE_CHUNK_SAMPLES).map(point).collect();
     msg::SyncMessage {
-        body: Some(msg::SyncMessage_::Body::Trace(pb::chunk_message(
-            fixture_uuid(1),
-            0,
-            0,
-            TRACE_CHUNK_SAMPLES as u32,
-            &points,
-        ))),
+        body: Some(msg::SyncMessage_::Body::Computed(
+            pb::computed_chunk_message(fixture_uuid(1), 0, 0, TRACE_CHUNK_SAMPLES as u32, &points),
+        )),
     }
 }
 
@@ -86,18 +81,13 @@ fn wide_chunk() -> msg::SyncMessage {
         .map(|i| TracePoint {
             t_ms: u32::MAX - i as u32,
             pos: [12345.678, -98765.43, 3.4028235e38],
-            accel: [-30000, 27000, -12345],
             quat: [i16::MAX, i16::MIN, 12345, -12345],
         })
         .collect();
     msg::SyncMessage {
-        body: Some(msg::SyncMessage_::Body::Trace(pb::chunk_message(
-            fixture_uuid(2),
-            0,
-            0,
-            TRACE_CHUNK_SAMPLES as u32,
-            &points,
-        ))),
+        body: Some(msg::SyncMessage_::Body::Computed(
+            pb::computed_chunk_message(fixture_uuid(2), 0, 0, TRACE_CHUNK_SAMPLES as u32, &points),
+        )),
     }
 }
 
@@ -313,6 +303,7 @@ fn a_single_frame_request_is_acknowledged_where_the_app_expects() {
     let request_len = pipe_sync::encode_request(
         &msg::SyncRequest {
             body: Some(msg::SyncRequest_::Body::Trace(msg::TraceRequest {
+                kind: msg::TraceKind::Computed,
                 rep_uuid: pb::uuid_to_field(&fixture_uuid(3)),
                 chunk_index: 0,
                 all_chunks: true,
@@ -373,7 +364,7 @@ fn a_busy_pipe_does_not_consume_the_trace_cursor() {
                 now += 10;
                 if let Some(bytes) = phone.take(&mut session, &frame, now) {
                     match pb::decode_sync(&bytes).expect("a message").body {
-                        Some(msg::SyncMessage_::Body::Trace(chunk)) => indices.push(chunk.index),
+                        Some(msg::SyncMessage_::Body::Computed(chunk)) => indices.push(chunk.index),
                         other => panic!("expected a trace chunk, got {other:?}"),
                     }
                 }
@@ -437,6 +428,7 @@ fn a_request_written_by_the_app_arrives_with_an_acknowledgement_to_send() {
             rep_uuid: pb::uuid_to_field(&fixture_uuid(9)),
             all_chunks: true,
             chunk_index: 0,
+            kind: msg::TraceKind::Computed,
         })),
     };
     let mut bytes = [0u8; 64];
@@ -560,11 +552,11 @@ fn a_trace_stream_survives_the_transfers_it_is_made_of() {
         }
         let bytes = got.expect("the chunk arrived");
         match pb::decode_sync(&bytes).unwrap().body {
-            Some(msg::SyncMessage_::Body::Trace(chunk)) => {
+            Some(msg::SyncMessage_::Body::Computed(chunk)) => {
                 chunks += 1;
                 indices.push(chunk.index);
                 for s in chunk.samples.iter() {
-                    samples.push(pb::trace_point_from_message(s));
+                    samples.push(pb::computed_point_from_message(s));
                 }
             }
             other => panic!("expected a trace chunk, got {other:?}"),
@@ -598,7 +590,7 @@ fn a_single_chunk_request_sends_the_one_chunk() {
         got = phone.take(&mut session, frame, now).or(got);
     }
     match pb::decode_sync(&got.expect("it arrived")).unwrap().body {
-        Some(msg::SyncMessage_::Body::Trace(chunk)) => {
+        Some(msg::SyncMessage_::Body::Computed(chunk)) => {
             assert_eq!(chunk.index, 0);
             assert_eq!(chunk.samples.len(), TRACE_CHUNK_SAMPLES);
         }

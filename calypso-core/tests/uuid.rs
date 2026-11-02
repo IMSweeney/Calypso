@@ -77,13 +77,13 @@ fn a_uuid_survives_both_record_kinds() {
     assert_eq!(pb::summary_uuid(&summary), Some(uuid));
 
     let points = [calypso_core::rep::TracePoint::ZERO];
-    let chunk = pb::chunk_message(uuid, 0, 0, 1, &points);
-    assert_eq!(pb::chunk_uuid(&chunk), Some(uuid));
+    let chunk = pb::computed_chunk_message(uuid, 0, 0, 1, &points);
+    assert_eq!(pb::computed_uuid(&chunk), Some(uuid));
 
     let mut buf = [0u8; 4096];
-    let n = pb::encode_trace_chunk(uuid, 0, 0, 0, &points, &mut buf).unwrap();
+    let n = pb::encode_computed_chunk(uuid, 0, 0, 0, &points, &mut buf).unwrap();
     match pb::decode_record(&buf[..n]).unwrap() {
-        pb::Record::Trace(chunk) => assert_eq!(pb::chunk_uuid(&chunk), Some(uuid)),
+        pb::Record::Computed(chunk) => assert_eq!(pb::computed_uuid(&chunk), Some(uuid)),
         other => panic!("expected a trace chunk, got {other:?}"),
     }
 }

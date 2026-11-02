@@ -1,6 +1,6 @@
 use calypso_core::fusion::FusionState;
 use calypso_core::pb::{self, msg, Record};
-use calypso_core::rep::{compute_rep, TraceBuf, TracePoint};
+use calypso_core::rep::{compute_rep, TraceBuf, TracePoint, TRACE_POINTS};
 use calypso_core::store::RECORD_BUF_BYTES;
 use calypso_core::uuid::fixture_uuid;
 use calypso_sim::fixtures::{self, push_record, push_rep, read_dump, squat_dump, squat_set};
@@ -14,8 +14,12 @@ fn squat_set_is_detected_and_traced() {
     assert_eq!(reps.len(), 3, "the detector should find three reps");
     for (summary, trace) in &reps {
         assert!(!trace.is_empty());
-        assert_eq!(summary.trace_len, trace.len() as u32);
-        assert!(!summary.decimated());
+        assert_eq!(summary.computed_len, trace.len() as u32);
+        assert_eq!(
+            summary.computed_len as usize,
+            trace.len(),
+            "one chunk per whatever the budget holds"
+        );
         assert!(
             (summary.rom - 0.4).abs() < 0.15,
             "rom {} for a 0.4 m squat",
@@ -36,7 +40,8 @@ fn dump_round_trips_every_record() {
     for record in &records {
         match pb::decode_record(record).expect("record should decode") {
             Record::Summary(s) => summaries.push(s),
-            Record::Trace(t) => chunks.push(t),
+            Record::Computed(t) => chunks.push(t),
+            Record::Raw(_) => {}
             Record::Clock(c) => clocks.push(c),
         }
     }
@@ -57,11 +62,11 @@ fn dump_round_trips_every_record() {
         assert_eq!(pb::summary_uuid(summary), Some(fixture_uuid(i as u32)));
         let mine: Vec<&msg::TraceChunk> = chunks
             .iter()
-            .filter(|c| pb::chunk_uuid(c) == pb::summary_uuid(summary))
+            .filter(|c| pb::computed_uuid(c) == pb::summary_uuid(summary))
             .collect();
-        assert_eq!(mine.len(), summary.chunk_count as usize);
+        assert_eq!(mine.len(), summary.computed_chunks as usize);
         let points: usize = mine.iter().map(|c| c.samples.len()).sum();
-        assert_eq!(points as u32, summary.trace_len);
+        assert_eq!(points as u32, summary.computed_len);
         for (index, chunk) in mine.iter().enumerate() {
             assert_eq!(chunk.index, index as u32);
         }
@@ -92,23 +97,22 @@ fn empty_and_single_point_dumps_are_valid() {
     let trace = vec![TracePoint {
         t_ms: 10,
         pos: [0.0, 0.0, -0.01],
-        accel: [0, 0, -100],
         quat: [16_384, 0, 0, 0],
     }];
     let mut summary = msg::RepSummary {
         rep_uuid: pb::uuid_to_field(&fixture_uuid(1)),
-        trace_len: 1,
+        computed_len: 1,
         ..Default::default()
     };
-    push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();
+    push_rep(&mut dump, &mut rec_buf, &mut summary, &trace, None).unwrap();
 
     let (records, truncated) = read_dump(&dump);
     assert!(!truncated);
     assert_eq!(records.len(), 2);
     match pb::decode_record(records[0]).unwrap() {
         Record::Summary(s) => {
-            assert_eq!(s.trace_len, 1);
-            assert_eq!(s.chunk_count, 1);
+            assert_eq!(s.computed_len, 1);
+            assert_eq!(s.computed_chunks, 1);
         }
         other => panic!("expected a summary, got {other:?}"),
     }
@@ -121,12 +125,11 @@ fn decimation_keeps_the_last_point() {
     // Half a second either side, so the filter sees the bar at rest at both ends.
     let window = &samples[lead_in - 50..lead_in + 1_000 + 50];
 
-    let mut storage = vec![TracePoint::ZERO; 512];
+    let mut storage = vec![TracePoint::ZERO; TRACE_POINTS];
     let mut trace = TraceBuf::new(&mut storage);
     let summary = compute_rep(window, &FusionState::LEVEL, &mut trace);
-    assert!(summary.decimated());
-    assert!(summary.trace_len <= 512);
-    assert_eq!(summary.trace_len as usize, trace.len());
+    assert!(summary.computed_len as usize <= TRACE_POINTS);
+    assert_eq!(summary.computed_len as usize, trace.len());
     assert_eq!(
         trace.get(trace.len() - 1).unwrap().t_ms,
         window.last().unwrap().t_ms,

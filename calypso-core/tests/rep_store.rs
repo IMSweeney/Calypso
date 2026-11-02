@@ -39,7 +39,8 @@ fn rep_survives_the_round_trip_through_flash() {
     {
         let mut log = mount(&mut flash);
         for (sum, trace) in &stored {
-            let written = store::append_rep(&mut log, &mut buf, &mut sum.clone(), trace).unwrap();
+            let written =
+                store::append_rep(&mut log, &mut buf, &mut sum.clone(), trace, None).unwrap();
             let expected_chunks = 1 + calypso_core::pb::chunk_count_for(trace.len());
             assert_eq!(written, expected_chunks);
         }
@@ -62,7 +63,7 @@ fn rep_survives_the_round_trip_through_flash() {
         assert_eq!(s.rep_uuid, want.rep_uuid);
         assert_eq!(s.t_start_ms, want.t_start_ms);
         assert_eq!(s.duration_ms, want.duration_ms);
-        assert_eq!(s.trace_len, want.trace_len);
+        assert_eq!(s.computed_len, want.computed_len);
         assert!((s.rom - want.rom).abs() < 1e-6);
         assert!((s.peak_velocity - want.peak_velocity).abs() < 1e-6);
     }
@@ -77,7 +78,6 @@ fn rep_survives_the_round_trip_through_flash() {
             assert_eq!(got.t_ms, want.t_ms - want_trace[0].t_ms);
             assert!((got.pos[0] - want.pos[0]).abs() < 1e-6);
             assert!((got.pos[2] - want.pos[2]).abs() < 1e-6);
-            assert_eq!(got.accel, want.accel);
             assert_eq!(got.quat, want.quat);
         }
     }
@@ -98,7 +98,6 @@ fn oldest_reps_fall_off_when_the_ring_wraps() {
         .map(|i| TracePoint {
             t_ms: i * 10,
             pos: [0.0, 0.0, -0.1 * i as f32],
-            accel: [0, 0, -100],
             quat: [QUAT_SCALE as i16, 0, 0, 0],
         })
         .collect();
@@ -109,7 +108,7 @@ fn oldest_reps_fall_off_when_the_ring_wraps() {
         let mut log = mount(&mut flash);
         for i in 1..=20 {
             summary.rep_uuid = calypso_core::pb::uuid_to_field(&fixture_uuid(i));
-            store::append_rep(&mut log, &mut buf, &mut summary, &trace).unwrap();
+            store::append_rep(&mut log, &mut buf, &mut summary, &trace, None).unwrap();
         }
     }
 
@@ -170,9 +169,9 @@ fn a_trace_read_from_its_summary_walks_the_reps_records_only() {
             let mut summary = summaries[0].clone();
             summary.rep_uuid = calypso_core::pb::uuid_to_field(&fixture_uuid(i));
             let summary_id = log.next_id();
-            store::append_rep(&mut log, &mut buf, &mut summary, trace).unwrap();
+            store::append_rep(&mut log, &mut buf, &mut summary, trace, None).unwrap();
             // The chunks are the records right after the summary, and the summary says how many there are.
-            assert_eq!(summary.chunk_count, chunks);
+            assert_eq!(summary.computed_chunks, chunks);
             places.push(summary_id + 1);
         }
     }
@@ -204,7 +203,6 @@ fn a_trace_read_from_its_summary_walks_the_reps_records_only() {
     assert_eq!(m, n, "and so does the walk from the summary");
     for (a, b) in walked.iter().zip(from.iter()) {
         assert_eq!(a.t_ms, b.t_ms);
-        assert_eq!(a.accel, b.accel);
         assert!((a.pos[2] - b.pos[2]).abs() < 1e-6);
     }
     assert!(
@@ -225,7 +223,7 @@ fn summary_and_chunks_share_the_rep_uuid() {
     let mut log = mount(&mut flash);
     let want = fixture_uuid(5);
     summary.rep_uuid = calypso_core::pb::uuid_to_field(&want);
-    store::append_rep(&mut log, &mut buf, &mut summary, trace).unwrap();
+    store::append_rep(&mut log, &mut buf, &mut summary, trace, None).unwrap();
 
     let mut records = Vec::new();
     log.for_each(&mut buf, |_, payload| {
@@ -238,14 +236,14 @@ fn summary_and_chunks_share_the_rep_uuid() {
     match &records[0] {
         calypso_core::pb::Record::Summary(s) => {
             assert_eq!(calypso_core::pb::summary_uuid(s), Some(want));
-            assert_eq!(s.chunk_count, expected_chunks);
+            assert_eq!(s.computed_chunks, expected_chunks);
         }
         other => panic!("the rep starts with its summary, not {other:?}"),
     }
     for (i, record) in records[1..].iter().enumerate() {
         match record {
-            calypso_core::pb::Record::Trace(t) => {
-                assert_eq!(calypso_core::pb::chunk_uuid(t), Some(want), "chunk {i}");
+            calypso_core::pb::Record::Computed(t) => {
+                assert_eq!(calypso_core::pb::computed_uuid(t), Some(want), "chunk {i}");
                 assert_eq!(t.index, i as u32, "chunks are stored in index order");
             }
             other => panic!("expected a trace chunk, got {other:?}"),
@@ -269,7 +267,7 @@ fn clock_records_sit_among_the_reps_without_disturbing_them() {
         assert_eq!(log.next_id(), 1, "an empty log starts numbering at 1");
         // Every boot opens with its clock, and the client's write replaces it later in the same boot.
         assert_eq!(store::append_clock(&mut log, &mut buf, 0).unwrap(), 1);
-        store::append_rep(&mut log, &mut buf, &mut summary, &traces[0]).unwrap();
+        store::append_rep(&mut log, &mut buf, &mut summary, &traces[0], None).unwrap();
         assert_eq!(
             store::append_clock(&mut log, &mut buf, 1_760_000_000).unwrap(),
             3 + chunks,
@@ -283,7 +281,7 @@ fn clock_records_sit_among_the_reps_without_disturbing_them() {
     let mut back = Vec::new();
     store::for_each_summary(&mut log, &mut buf, &mut rec, |s| back.push(s.clone())).unwrap();
     assert_eq!(back.len(), 1);
-    assert_eq!(back[0].trace_len, traces[0].len() as u32);
+    assert_eq!(back[0].computed_len, traces[0].len() as u32);
 
     let mut storage = vec![calypso_core::rep::TracePoint::ZERO; traces[0].len()];
     let mut trace = TraceBuf::new(&mut storage);

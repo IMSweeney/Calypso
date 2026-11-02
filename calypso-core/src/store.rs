@@ -5,6 +5,7 @@
 use crate::flashlog::{Error as LogError, FlashLog};
 use crate::pb::{self, msg, TRACE_CHUNK_SAMPLES};
 use crate::rep::{TraceBuf, TracePoint};
+use crate::sampler::Sample;
 use crate::uuid::RepUuid;
 use embedded_storage::nor_flash::NorFlash;
 
@@ -30,7 +31,11 @@ impl<E> From<pb::Error> for Error<E> {
     }
 }
 
-/// Append one rep (summary + trace chunks) to the log.
+/// Append one rep (summary, plotted trace, and the raw trace when one was recorded) to the log.
+///
+/// The order is part of the format: a rep's summary, then every computed chunk, then every raw chunk.
+/// That is what lets a trace be found from the summary's record id alone, and what makes
+/// [`crate::sync::RepPlace`] three numbers instead of four.
 ///
 /// `rec_buf` must be at least [`RECORD_BUF_BYTES`]; it is scratch reused for each record.
 /// Returns the number of records written.
@@ -38,17 +43,27 @@ pub fn append_rep<'a, N: NorFlash>(
     log: &mut FlashLog<'a, N>,
     rec_buf: &mut [u8],
     summary: &mut msg::RepSummary,
-    trace: &[TracePoint],
+    computed: &[TracePoint],
+    raw: Option<&[Sample]>,
 ) -> Result<u32, Error<N::Error>> {
     let rep_uuid = pb::summary_uuid(summary).ok_or(Error::Encode(pb::Error::Decode))?;
-    summary.chunk_count = pb::chunk_count_for(trace.len());
+    summary.computed_len = computed.len() as u32;
+    summary.computed_chunks = pb::chunk_count_for(computed.len());
+    summary.raw_len = raw.map_or(0, |r| r.len()) as u32;
+    summary.raw_chunks = pb::chunk_count_for(summary.raw_len as usize);
     let n = pb::encode_summary(summary, rec_buf)?;
     log.append(&rec_buf[..n])?;
 
-    let t0_ms = trace.first().map(|p| p.t_ms).unwrap_or(0);
+    // One origin for both traces: the window's first sample, which is what the summary's `t_start_ms` is.
+    let t0_ms = summary.t_start_ms;
     let mut written = 1;
-    for (index, chunk) in trace.chunks(TRACE_CHUNK_SAMPLES).enumerate() {
-        let n = pb::encode_trace_chunk(rep_uuid, index as u32, t0_ms, 0, chunk, rec_buf)?;
+    for (index, chunk) in computed.chunks(TRACE_CHUNK_SAMPLES).enumerate() {
+        let n = pb::encode_computed_chunk(rep_uuid, index as u32, t0_ms, 0, chunk, rec_buf)?;
+        log.append(&rec_buf[..n])?;
+        written += 1;
+    }
+    for (index, chunk) in raw.unwrap_or(&[]).chunks(TRACE_CHUNK_SAMPLES).enumerate() {
+        let n = pb::encode_raw_chunk(rep_uuid, index as u32, t0_ms, 0, chunk, rec_buf)?;
         log.append(&rec_buf[..n])?;
         written += 1;
     }
@@ -146,14 +161,14 @@ pub fn read_trace_from<'a, N: NorFlash>(
                 return false; // the whole trace, and nothing after it
             }
             decode_or_panic(rec, id, payload);
-            let Some(pb::msg::RepRecord_::Body::Trace(chunk)) = &rec.body else {
-                return true; // a boot's clock record, or a summary: not this rep's
+            let Some(pb::msg::RepRecord_::Body::Computed(chunk)) = &rec.body else {
+                return true; // a clock, a summary, or the raw trace: not this rep's plotted one
             };
-            if pb::chunk_uuid(chunk) != Some(rep_uuid) || chunk.index != expected_index {
+            if pb::computed_uuid(chunk) != Some(rep_uuid) || chunk.index != expected_index {
                 return true;
             }
             for s in chunk.samples.iter() {
-                out.push(pb::trace_point_from_message(s));
+                out.push(pb::computed_point_from_message(s));
             }
             expected_index += 1;
             true
@@ -177,16 +192,86 @@ pub fn read_trace<'a, N: NorFlash>(
     let mut expected_index = 0u32;
     log.for_each(buf, |id, payload| {
         decode_or_panic(rec, id, payload);
-        let Some(pb::msg::RepRecord_::Body::Trace(chunk)) = &rec.body else {
+        let Some(pb::msg::RepRecord_::Body::Computed(chunk)) = &rec.body else {
             return;
         };
-        if pb::chunk_uuid(chunk) != Some(rep_uuid) || chunk.index != expected_index {
+        if pb::computed_uuid(chunk) != Some(rep_uuid) || chunk.index != expected_index {
             return;
         }
         for s in chunk.samples.iter() {
-            out.push(pb::trace_point_from_message(s));
+            out.push(pb::computed_point_from_message(s));
         }
         expected_index += 1;
     })?;
     Ok(out.len())
+}
+
+/// Read one rep's **raw** trace back into `out`, in chunk order, oldest sample first, starting at a known record.
+/// Returns the number of samples recovered.
+pub fn read_raw_from<'a, N: NorFlash>(
+    log: &mut FlashLog<'a, N>,
+    buf: &mut [u8],
+    rec: &mut pb::msg::RepRecord,
+    first_chunk_id: u32,
+    chunk_count: u32,
+    rep_uuid: RepUuid,
+    out: &mut [Sample],
+) -> Result<usize, Error<N::Error>> {
+    let mut expected_index = 0u32;
+    let mut len = 0usize;
+    log.for_each_from(
+        first_chunk_id,
+        chunk_count.saturating_add(TRACE_WALK_SLACK),
+        buf,
+        |id, payload| {
+            if expected_index >= chunk_count {
+                return false;
+            }
+            decode_or_panic(rec, id, payload);
+            let Some(pb::msg::RepRecord_::Body::Raw(chunk)) = &rec.body else {
+                return true;
+            };
+            if pb::raw_uuid(chunk) != Some(rep_uuid) || chunk.index != expected_index {
+                return true;
+            }
+            for s in chunk.samples.iter() {
+                if len < out.len() {
+                    out[len] = pb::raw_point_from_message(s);
+                    len += 1;
+                }
+            }
+            expected_index += 1;
+            true
+        },
+    )?;
+    Ok(len)
+}
+
+/// The same by walking the whole log: the fallback for a rep this connection has not placed.
+pub fn read_raw<'a, N: NorFlash>(
+    log: &mut FlashLog<'a, N>,
+    buf: &mut [u8],
+    rec: &mut pb::msg::RepRecord,
+    rep_uuid: RepUuid,
+    out: &mut [Sample],
+) -> Result<usize, Error<N::Error>> {
+    let mut expected_index = 0u32;
+    let mut len = 0usize;
+    log.for_each(buf, |id, payload| {
+        decode_or_panic(rec, id, payload);
+        let Some(pb::msg::RepRecord_::Body::Raw(chunk)) = &rec.body else {
+            return;
+        };
+        if pb::raw_uuid(chunk) != Some(rep_uuid) || chunk.index != expected_index {
+            return;
+        }
+        for s in chunk.samples.iter() {
+            if len < out.len() {
+                out[len] = pb::raw_point_from_message(s);
+                len += 1;
+            }
+        }
+        expected_index += 1;
+    })?;
+    Ok(len)
 }

@@ -75,8 +75,7 @@ fn compute_rep_recovers_known_displacement() {
     let mut buf = TraceBuf::new(&mut storage);
     let sum = compute_rep(&samples, &FusionState::LEVEL, &mut buf);
 
-    assert!(!sum.decimated());
-    assert_eq!(sum.trace_len, samples.len() as u32);
+    assert_eq!(sum.computed_len, samples.len() as u32);
     assert_eq!(sum.duration_ms, 1500 + 2 * MARGIN_MS);
     let peak_to_peak = peak_to_peak_z(&buf);
     assert!(
@@ -174,9 +173,8 @@ fn trace_is_decimated_when_it_does_not_fit() {
     let mut storage = [TracePoint::ZERO; 64];
     let mut buf = TraceBuf::new(&mut storage);
     let sum = compute_rep(&samples, &FusionState::LEVEL, &mut buf);
-    assert!(sum.decimated());
-    assert!(sum.trace_len <= 64);
-    assert!(sum.trace_len >= 50, "trace_len {}", sum.trace_len);
+    assert!(sum.computed_len <= 64);
+    assert!(sum.computed_len >= 50, "computed_len {}", sum.computed_len);
     // Anchored at the last sample, so a stored rep always ends where the motion did.
     assert_eq!(
         buf.get(buf.len() - 1).unwrap().t_ms,
@@ -220,7 +218,7 @@ fn empty_input_is_handled() {
     let mut storage = [TracePoint::ZERO; 64];
     let mut buf = TraceBuf::new(&mut storage);
     let sum = compute_rep(&[], &FusionState::LEVEL, &mut buf);
-    assert_eq!(sum.trace_len, 0);
+    assert_eq!(sum.computed_len, 0);
     assert!(buf.is_empty());
     assert_eq!(sum.duration_ms, 0);
 }

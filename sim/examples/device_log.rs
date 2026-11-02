@@ -14,10 +14,11 @@ use std::env;
 use std::fs;
 
 use calypso_core::flashlog::FlashLog;
+use calypso_core::fusion::roll_pitch_deg;
 use calypso_core::pb::msg;
 use calypso_core::pb::summary_uuid;
 use calypso_core::rep::{TraceBuf, TracePoint};
-use calypso_core::sampler::ACCEL_SCALE;
+use calypso_core::sampler::QUAT_SCALE;
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::uuid::RepUuid;
 use embedded_storage::nor_flash::{
@@ -199,29 +200,24 @@ fn main() {
                 } else {
                     utc(u64::from(epoch_s) * 1000 + u64::from(s.t_start_ms))
                 };
-                let mut flags = Vec::new();
-                if s.flags & (1 << 0) != 0 {
-                    flags.push("decimated");
-                }
-                if s.flags & (1 << 1) != 0 {
-                    flags.push("accel calibrated");
-                }
                 println!(
-                    "  {id:<6} {:<8} {} {} ms  rom {:.2} m  {}  {stamp}",
+                    "  {id:<6} {:<8} {} {} ms  rom {:.2} m  {} pts{}  {stamp}",
                     "rep",
                     hex(&s.rep_uuid),
                     s.duration_ms,
                     s.rom,
-                    if flags.is_empty() {
-                        "no flags".to_string()
+                    s.computed_len,
+                    if s.raw_len == 0 {
+                        String::new()
                     } else {
-                        flags.join(", ")
+                        format!(", {} raw", s.raw_len)
                     }
                 );
             }
-            Some(msg::RepRecord_::Body::Trace(_)) => {
+            Some(msg::RepRecord_::Body::Computed(_)) => {
                 chunks += 1;
             }
+            Some(msg::RepRecord_::Body::Raw(_)) => {}
             None => {}
         }
     })
@@ -266,17 +262,12 @@ fn main() {
             let mut out_text = format!("# {prefix}\n");
             for i in 0..n {
                 let p = out.get(i).unwrap();
-                // The last three columns are the sensor's own reading: **specific force**, gravity
-                // still in it, so a point at rest sits near 9.8 on the up axis rather than at 0.
+                // Time, position, and the two angles the attitude implies. The plotted trace carries no
+                // raw reading; that is the rep's raw trace, which only a dev build records.
+                let (roll, pitch) = roll_pitch_deg(p.quat.map(|q| q as f32 / QUAT_SCALE as f32));
                 out_text.push_str(&format!(
-                    "{}, {:.4}, {:.4}, {:.4}, {:.4}, {:.4}, {:.4}\n",
-                    p.t_ms,
-                    p.pos[0],
-                    p.pos[1],
-                    p.pos[2],
-                    f32::from(p.accel[0]) / ACCEL_SCALE as f32,
-                    f32::from(p.accel[1]) / ACCEL_SCALE as f32,
-                    f32::from(p.accel[2]) / ACCEL_SCALE as f32
+                    "{}, {:.4}, {:.4}, {:.4}, {:.1}, {:.1}\n",
+                    p.t_ms, p.pos[0], p.pos[1], p.pos[2], roll, pitch
                 ));
             }
             if let Err(e) = std::fs::write(path, out_text) {
@@ -334,8 +325,15 @@ fn dump(log: &mut FlashLog<Image>, buf: &mut [u8], path: &str, prefix: Option<&s
                     chosen.push(uuid);
                 }
             }
-            Ok(calypso_core::pb::Record::Trace(c)) => {
-                let uuid = calypso_core::pb::chunk_uuid(&c).map(|u| u.to_vec());
+            Ok(calypso_core::pb::Record::Computed(c)) => {
+                let uuid = calypso_core::pb::computed_uuid(&c).map(|u| u.to_vec());
+                if uuid.is_some_and(|u| chosen.contains(&u)) {
+                    out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+                    out.extend_from_slice(payload);
+                }
+            }
+            Ok(calypso_core::pb::Record::Raw(r)) => {
+                let uuid = calypso_core::pb::raw_uuid(&r).map(|u| u.to_vec());
                 if uuid.is_some_and(|u| chosen.contains(&u)) {
                     out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
                     out.extend_from_slice(payload);

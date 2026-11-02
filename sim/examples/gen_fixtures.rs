@@ -8,9 +8,7 @@ use std::path::{Path, PathBuf};
 
 use calypso_core::fusion::FusionState;
 use calypso_core::pb::{self, msg};
-use calypso_core::rep::{
-    compute_rep, TraceBuf, TracePoint, REP_FLAG_CALIBRATED, REP_FLAG_DECIMATED,
-};
+use calypso_core::rep::{compute_rep, TraceBuf, TracePoint, TRACE_POINTS};
 use calypso_core::store::RECORD_BUF_BYTES;
 use calypso_core::uuid::fixture_uuid;
 use calypso_sim::fixtures::{self, push_record, push_rep, squat_set};
@@ -46,7 +44,6 @@ fn main() -> std::io::Result<()> {
         let trace = vec![TracePoint {
             t_ms: 1_000,
             pos: [0.0, 0.0, -0.01],
-            accel: [0, 0, -100],
             quat: [16_384, 0, 0, 0],
         }];
         let mut summary = msg::RepSummary {
@@ -54,15 +51,14 @@ fn main() -> std::io::Result<()> {
             t_start_ms: 900,
             t_end_ms: 1_100,
             duration_ms: 200,
-            trace_len: 1,
-            flags: REP_FLAG_CALIBRATED,
+            computed_len: 1,
             ..Default::default()
         };
-        push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();
+        push_rep(&mut dump, &mut rec_buf, &mut summary, &trace, None).unwrap();
         write(&dir, "single-point.pblog", &dump)?;
     }
 
-    // 3. A long rep as the device would store it: more trace points than the device's 512-point buffer, so the trace comes back with the decimated flag set.
+    // 3. A long rep as the device would store it: more samples than the plotted trace keeps, so the path the app draws is a reduced sample of the motion.
     //
     //    Built by running the trace computation directly rather than through the detector: a smooth 5 s squat has a peak acceleration of ~0.5 m/s^2, under the detector's 0.6 m/s^2 start threshold.
     //    Real long reps are jerky (that is why a long rep can overflow the device buffer at all), but a smooth synthetic one cannot trip the detector.
@@ -74,18 +70,26 @@ fn main() -> std::io::Result<()> {
         let margin = 50;
         let window = &samples[lead_in - margin..lead_in + motion + margin];
 
-        let mut storage = vec![TracePoint::ZERO; 512];
+        let mut storage = vec![TracePoint::ZERO; TRACE_POINTS];
         let mut trace = TraceBuf::new(&mut storage);
         let mut summary = compute_rep(window, &FusionState::LEVEL, &mut trace);
         assert!(
-            summary.decimated(),
-            "a 10 s rep should exceed the 512-point buffer"
+            summary.computed_len as usize <= TRACE_POINTS
+                && summary.computed_len as usize > TRACE_POINTS / 2,
+            "a 10 s rep should be reduced to the plot's budget, not to nothing: {} points",
+            summary.computed_len
         );
 
         summary.rep_uuid = pb::uuid_to_field(&fixture_uuid(1));
-        summary.flags |= REP_FLAG_CALIBRATED;
         let mut dump = fixtures::new_dump(&mut rec_buf);
-        push_rep(&mut dump, &mut rec_buf, &mut summary, trace.as_slice()).unwrap();
+        push_rep(
+            &mut dump,
+            &mut rec_buf,
+            &mut summary,
+            trace.as_slice(),
+            None,
+        )
+        .unwrap();
         write(&dir, "long-decimated.pblog", &dump)?;
     }
 
@@ -99,9 +103,8 @@ fn main() -> std::io::Result<()> {
             duration_ms: 1_400,
             rom: 0.41,
             peak_velocity: 0.7,
-            trace_len: 140,
-            chunk_count: 3,
-            flags: REP_FLAG_CALIBRATED,
+            computed_len: 140,
+            computed_chunks: 3,
             ..Default::default()
         };
         let n = pb::encode_summary(&summary, &mut rec_buf).unwrap();
@@ -116,7 +119,6 @@ fn main() -> std::io::Result<()> {
             .map(|i| TracePoint {
                 t_ms: u32::MAX - 40 + i * 10,
                 pos: [f32::MAX, f32::MIN, -1.5e30],
-                accel: [i16::MIN, i16::MAX, -32_767],
                 quat: [i16::MIN, i16::MAX, -16_384, 16_383],
             })
             .collect();
@@ -133,11 +135,10 @@ fn main() -> std::io::Result<()> {
             roll_max_deg: f32::MAX,
             pitch_min_deg: f32::MIN,
             pitch_max_deg: f32::MAX,
-            trace_len: trace.len() as u32,
-            flags: REP_FLAG_DECIMATED,
+            computed_len: trace.len() as u32,
             ..Default::default()
         };
-        push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();
+        push_rep(&mut dump, &mut rec_buf, &mut summary, &trace, None).unwrap();
         write(&dir, "extreme-values.pblog", &dump)?;
     }
 
@@ -163,7 +164,7 @@ fn main() -> std::io::Result<()> {
                 "the dipped path should bow sideways: {range} m"
             );
             summary.rep_uuid = pb::uuid_to_field(&fixture_uuid((i + 1) as u32));
-            push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();
+            push_rep(&mut dump, &mut rec_buf, &mut summary, &trace, None).unwrap();
         }
         write(&dir, "dip-left.pblog", &dump)?;
     }

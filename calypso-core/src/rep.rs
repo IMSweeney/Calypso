@@ -23,6 +23,12 @@ pub const MARGIN_MS: u32 = 500;
 /// at after the fact: at most `MARGIN_MS` behind a turn, or `T_ON_MS` behind a motion onset, plus
 /// headroom.
 const HIST: usize = 64;
+/// How many points a rep's **plotted** trace keeps, however long the rep is.
+///
+/// The plot is the only consumer and a bar path is smooth, so this is every trace a screen can tell
+/// apart while costing a fraction of the log that the full rate would. Anything that has to be
+/// replayed from every sample is the raw trace, which is not decimated at all.
+pub const TRACE_POINTS: usize = 128;
 /// Smallest dominant-axis travel (metres) that counts as a rep. A hand on a rack, a bar being unracked, a bump: each crosses the motion thresholds, none of them moves the sensor far enough to be a rep.
 pub const MIN_ROM_M: f32 = 0.07;
 
@@ -399,15 +405,15 @@ impl Default for Detector {
     }
 }
 
-/// One point of a stored rep trace.
-/// The raw `accel` and the attitude are kept alongside the computed `pos` so the app can re-derive traces with better algorithms later without a firmware update.
+/// One point of a rep's **plotted** trace: where the bar was, and which way the sensor faced.
+///
+/// Derived, and only ever used to draw. The inputs it was derived from are the rep's raw trace, which
+/// a device records on request (`REP_RAW`) and which is what a summary is re-derived from.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct TracePoint {
     pub t_ms: u32,
     /// ZUPT-anchored displacement from the rep start (m).
     pub pos: [f32; 3],
-    /// Raw specific force (fixed point, `sampler::ACCEL_SCALE` LSB/m/s²), gravity included.
-    pub accel: [i16; 3],
     /// The attitude the filter computed at this point `[w, x, y, z]` (`sampler::QUAT_SCALE` LSB).
     pub quat: [i16; 4],
 }
@@ -416,7 +422,6 @@ impl TracePoint {
     pub const ZERO: TracePoint = TracePoint {
         t_ms: 0,
         pos: [0.0; 3],
-        accel: [0; 3],
         quat: [0; 4],
     };
 }
@@ -474,12 +479,12 @@ impl<'a> TraceBuf<'a> {
     }
 }
 
-/// [`msg::RepSummary::flags`] bit 0: the trace was decimated to fit device memory.
-pub const REP_FLAG_DECIMATED: u32 = 1 << 0;
-/// [`msg::RepSummary::flags`] bit 1: the accelerometer was calibrated as well as the gyroscope when the rep was recorded.
+/// Which detection logic closed a rep, as it travels in that rep's `RepConfig`.
 ///
-/// The recording gate asks only for the gyroscope, so this is the bit that says the rest of the calibration was there.
-pub const REP_FLAG_CALIBRATED: u32 = 1 << 1;
+/// Bumped when a change makes a stored summary mean something else — a threshold that moves is a
+/// different measurement wearing the same name, and two numbers from two versions are then not
+/// comparable as if they were one.
+pub const DETECTOR_VERSION: u32 = 1;
 
 impl msg::RepSummary {
     /// Whether this is a rep at all: the bar has to have gone up or down [`MIN_ROM_M`].
@@ -487,14 +492,6 @@ impl msg::RepSummary {
     /// The detector already refuses to pair a leg shorter than [`MIN_ROM_M`], so this is the same question asked of a different measurement: the travel the stored trace computes, decimated, rather than the travel integrated on the way in. The two can disagree — a rep that spans a hole in the samples reads long — so the log holds only summaries where the number itself says the bar moved, and that is measured on the vertical, the only axis with a right answer.
     pub fn is_a_rep(&self) -> bool {
         self.rom >= MIN_ROM_M
-    }
-
-    pub const fn decimated(&self) -> bool {
-        self.flags & REP_FLAG_DECIMATED != 0
-    }
-
-    pub const fn calibrated(&self) -> bool {
-        self.flags & REP_FLAG_CALIBRATED != 0
     }
 }
 
@@ -508,7 +505,8 @@ impl msg::RepSummary {
 /// The trace's position is the filter's velocity integrated; the filter sets that velocity to zero
 /// whenever the bar is still, and a lift guarantees stillness at both ends of every stroke, so the
 /// window is anchored at both of them and the drift is bounded to within the rep. Any number of
-/// samples is accepted; if more than `N` are supplied the trace is decimated uniformly to fit.
+/// samples is accepted; if more than `N` are supplied the plotted trace is decimated uniformly to fit
+/// (`TRACE_POINTS`, the plot's budget — the raw trace is never decimated and does not come from here).
 pub fn compute_rep(
     samples: &[Sample],
     from: &FusionState,
@@ -537,9 +535,6 @@ pub fn compute_rep(
     } else {
         n.div_ceil(capacity).max(1)
     };
-    if capacity > 0 && stride > 1 {
-        summary.flags |= REP_FLAG_DECIMATED;
-    }
     // Anchor the decimation grid at the *last* sample, so the rep's end is always stored (it is the most interesting point when plotting) and the count stays within capacity.
     let first = if capacity == 0 { 0 } else { (n - 1) % stride };
 
@@ -615,7 +610,6 @@ pub fn compute_rep(
             out.push(TracePoint {
                 t_ms: samples[i].t_ms,
                 pos: p,
-                accel: samples[i].accel,
                 quat: filtered.state.attitude.map(|q| quantize(q, QUAT_SCALE)),
             });
         }
@@ -631,13 +625,25 @@ pub fn compute_rep(
     summary.peak_accel = a_max;
     summary.peak_velocity = v_max;
     summary.mean_velocity = v_sum / n as f32;
-    summary.trace_len = out.len() as u32;
-    // The summary started here, so it carries the velocity the replay was seeded from: the app can tell a rep
-    // that started mid-set from one that started at rest, and can re-derive the trace from the same origin.
-    summary.set_v0(msg::TraceOrigin {
+    summary.computed_len = out.len() as u32;
+    // The summary started here, so it carries the whole filter state the replay was seeded from: a
+    // filter started from it and fed the window lands exactly where this one did, which is what makes
+    // a stored summary re-derivable rather than merely reproducible.
+    summary.set_state(msg::RepState {
         vx: from.velocity[0],
         vy: from.velocity[1],
         vz: from.velocity[2],
+        qw: from.attitude[0],
+        qx: from.attitude[1],
+        qy: from.attitude[2],
+        qz: from.attitude[3],
+        accel_bias_x: from.accel_bias[0],
+        accel_bias_y: from.accel_bias[1],
+        accel_bias_z: from.accel_bias[2],
+        gyro_bias_x: from.gyro_bias[0],
+        gyro_bias_y: from.gyro_bias[1],
+        gyro_bias_z: from.gyro_bias[2],
+        settled: from.settled,
     });
     summary
 }

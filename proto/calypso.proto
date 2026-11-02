@@ -7,13 +7,16 @@
 // The device's types are built from this file on every build, so they cannot go stale; the app's Dart classes are committed, so re-run `calypso-app/tool/gen_proto.sh` and commit them after changing this file.
 //
 // Fixed-point scales (see `calypso_core::sampler`):
-//   - accel: 0.01 m/s^2 per LSB (BNO055 native)
-//   - quat:  1/2^14 per LSB, order [w, x, y, z] (BNO055 native)
+//   - accel: 0.01 m/s^2 per LSB, and it is **specific force**: gravity is included, so a
+//     still sensor reads 1 g up its own up axis (BNO055 native register scale)
+//   - gyro:  1/16 dps per LSB (BNO055 native register scale)
+//   - quat:  1/2^14 per LSB, order [w, x, y, z], where a fixed-point attitude is carried
 // Positions/velocities are metres and metres per second (float).
 //
-// Storage layout: each rep is one `RepSummary` record followed by
-// `summary.chunk_count` `TraceChunk` records carrying the same `rep_uuid`, and a
-// boot's clock is a `BootClock` record between them.
+// Storage layout: each rep is one `RepSummary` record followed by its
+// `TraceChunk` records (the plotted trace) and, on a build that records them, its
+// `RawChunk` records (the replayable one) — all carrying the same `rep_uuid` — and
+// a boot's clock is a `BootClock` record between them.
 //
 // Rep identity is a **v4 UUID, minted on the device when the rep closes**. It is
 // random rather than a counter or a timestamp because a rep can be recorded
@@ -26,22 +29,47 @@ syntax = "proto3";
 
 package calypso;
 
-// One point of a stored rep trace.
+// --- The two traces -------------------------------------------------------
 //
-// Both the derived displacement and the raw inputs are kept, so the app can
-// re-derive traces with better algorithms later without a firmware update.
-message TraceSample {
-  uint32 t_offset_ms = 1;  // ms from the rep's first trace point
+// A rep carries **two** traces, because it has two consumers that want opposite
+// things and one message could only serve one of them badly.
+//
+// `TraceComputed` is for the plot: where the bar went and which way the sensor
+// faced, decimated to a fixed budget. It is derived data, and the device derives it
+// once, at the moment the rep closes, from the same window the summary came from.
+//
+// `TraceRaw` is for replay: what the sensor actually read, at full rate and never
+// decimated, so the filter and the detector can run over it again and the summary be
+// re-derived from it. A device records it only while a client has asked it to
+// (`DevMode`), because a full-rate trace is the largest thing in the log.
+//
+// Both cover the same window and share one time origin: `t_offset_ms` is
+// milliseconds from the rep's first sample, so `RepSummary.t_start_ms + t_offset_ms`
+// is a sample's uptime in either of them, and the two can be drawn against each
+// other. The raw trace starts at that origin — it keeps every sample — while the
+// plotted one starts wherever its decimation grid first lands.
+
+// One point of a rep's plotted path.
+message TraceComputedPoint {
+  uint32 t_offset_ms = 1;
   float px = 2;
   float py = 3;
   float pz = 4;  // ZUPT-anchored displacement from the rep start (m)
-  sint32 ax = 5;
-  sint32 ay = 6;
-  sint32 az = 7;  // raw linear acceleration
-  sint32 qw = 8;
-  sint32 qx = 9;
-  sint32 qy = 10;
-  sint32 qz = 11;  // raw orientation quaternion
+  float qw = 5;
+  float qx = 6;
+  float qy = 7;
+  float qz = 8;  // the attitude the filter computed
+}
+
+// One sample of a rep's raw stream: the sensor's own reading, as the filter took it.
+message TraceRawPoint {
+  uint32 t_offset_ms = 1;
+  sint32 ax = 2;
+  sint32 ay = 3;
+  sint32 az = 4;  // specific force, gravity included: 0.01 m/s^2 per LSB
+  sint32 gx = 5;
+  sint32 gy = 6;
+  sint32 gz = 7;  // angular rate, body frame: 1/16 dps per LSB
 }
 
 // Summary statistics for one rep. Angles are degrees, distances metres.
@@ -62,29 +90,15 @@ message RepSummary {
   float roll_max_deg = 10;
   float pitch_min_deg = 11;
   float pitch_max_deg = 12;
-  uint32 trace_len = 13;    // trace points stored across all chunks
-  uint32 chunk_count = 14;  // TraceChunk records following this summary
-  // One bit per fact about this rep, so a summary can grow one without paying
-  // a tag and a byte for each bool (`REP_FLAG_*` in `calypso_core::rep`):
-  //
-  //   bit 0  DECIMATED   the trace was decimated to fit device memory
-  //   bit 1  CALIBRATED  the IMU's accelerometer was calibrated as well as its
-  //                      gyroscope when the rep was recorded
-  //
-  // Field 15 was `bool decimated` before this. A bool is a varint too, so a
-  // record written then still reads back here: bit 0 is the bit that bool was.
-  //
-  // CALIBRATED is the fact the recording gate does not require. A rep is
-  // recorded whenever the gyroscope is calibrated, because its drift is what
-  // fabricates motion; the accelerometer's status wanders on its own, so a rep
-  // taken while it was low is still a real rep, recorded with this bit clear.
-  uint32 flags = 15;
-  // The bar's velocity (m/s) at the rep's left edge, `MARGIN_MS` before motion
-  // was declared. A rep mid-set starts already moving, and an integration that
-  // assumes zero there reads its travel high. Unset on a record written before
-  // this field existed, which is how a rep with no origin is told from one that
-  // started at rest.
-  TraceOrigin v0 = 17;
+  uint32 computed_len = 13;     // plotted points across all `TraceChunk` records
+  uint32 computed_chunks = 14;  // `TraceChunk` records following this summary
+  // Field 15 was `flags`, a bitfield. It is not needed: its one live bit was
+  // "the trace was decimated", which at a fixed budget is true of every rep long
+  // enough to be worth plotting and is derivable from `computed_len`,
+  // `duration_ms` and `config.sample_rate_hz` anyway. The calibrated bit went
+  // with fusion mode — there is no level to report any more.
+  reserved 15;      // was `flags`
+  reserved "flags";
   // The rep's wall-clock time, unix milliseconds, or 0 when the device had no
   // clock for the boot that recorded it.
   //
@@ -93,16 +107,60 @@ message RepSummary {
   // been written: a stored summary therefore carries its uptime (`t_start_ms`)
   // and the boot's clock travels as its own record (`BootClock`).
   uint64 t_unix_ms = 16;
+  // Where the filter stood where the stored window begins: the whole of its
+  // memory, so replaying the window from here reproduces the summary instead of
+  // approximating it. This is what a `RawChunk` trace is re-run from.
+  RepState state = 17;
+  // What the sensor was set to, and which detection logic closed the rep: what
+  // the numbers in either trace mean.
+  RepConfig config = 18;
+  // The raw trace's size, or both 0 when this device does not record one. The
+  // counts are the answer to "can I replay this rep"; there is no flag for it,
+  // because two places to ask is one place to disagree.
+  uint32 raw_len = 19;
+  uint32 raw_chunks = 20;
 }
 
-// The bar's velocity at one instant, metres per second: a rep's left edge.
-message TraceOrigin {
-  float vx = 1;
+// Everything needed to read either trace's numbers.
+message RepConfig {
+  uint32 accel_range_g = 1;       // the accelerometer's configured clip point
+  uint32 gyro_range_dps = 2;      // the gyroscope's
+  uint32 accel_bandwidth_hz = 3;  // the accelerometer's configured bandwidth
+  uint32 gyro_bandwidth_hz = 4;
+  uint32 sample_rate_hz = 5;
+  // Which detection logic closed this rep (`DETECTOR_VERSION` in `calypso_core::rep`).
+  // A summary recomputed by newer logic is a different summary, and this is what
+  // says so rather than leaving two numbers to be compared as if they were one.
+  uint32 detector_version = 6;
+}
+
+// Where the filter stood when a stored window began.
+//
+// The state is the filter's whole memory: a filter started from it and fed the
+// window lands exactly where the one that recorded the rep did.
+message RepState {
+  float vx = 1;  // world-frame velocity, m/s
   float vy = 2;
   float vz = 3;
+  float qw = 4;  // attitude, body to world
+  float qx = 5;
+  float qy = 6;
+  float qz = 7;
+  float accel_bias_x = 8;  // m/s^2, in the sensor's own frame
+  float accel_bias_y = 9;
+  float accel_bias_z = 10;
+  float gyro_bias_x = 11;  // rad/s, in the sensor's own frame
+  float gyro_bias_y = 12;
+  float gyro_bias_z = 13;
+  // Whether the bar was already at rest when this was taken. Not a convenience:
+  // "at rest" is a fact about the last 400 ms, so a replay without it has to earn
+  // it back and spends its first samples integrating a drift the original had
+  // already taken out.
+  bool settled = 14;
 }
 
-// The IMU as the sampler last read it: the sample the rep detector is fed.
+// The IMU as the sampler last read it: the raw sample the filter is fed, and the attitude
+// the filter makes of it.
 //
 // Read, never notified, and a snapshot rather than a stream: the device republishes it
 // ten times a second, so a client that wants to watch the sensor polls it.
@@ -113,30 +171,46 @@ message ImuState {
   // read was issued: a value that stops moving while the rep log keeps growing is a
   // stalled sampler.
   uint32 t_uptime_ms = 1;
-  // Linear acceleration (gravity removed), body frame: 0.01 m/s^2 per LSB.
+  // Specific force, body frame: 0.01 m/s^2 per LSB, gravity included — a still sensor
+  // reads 1 g up its own up axis. This is the raw accelerometer, not an acceleration.
   sint32 ax = 2;
   sint32 ay = 3;
   sint32 az = 4;
-  // Orientation: 1/2^14 per LSB, order [w, x, y, z], as `TraceSample` carries it.
+  // Orientation: 1/2^14 per LSB, order [w, x, y, z]. The filter's attitude, since the
+  // sensor no longer reports one; kept in the fields it has always occupied because it is
+  // the same quantity it always was.
   sint32 qw = 5;
   sint32 qx = 6;
   sint32 qy = 7;
   sint32 qz = 8;
+  // Angular rate, body frame: 1/16 dps per LSB.
+  sint32 gx = 9;
+  sint32 gy = 10;
+  sint32 gz = 11;
 }
 
-// A slice of a rep's trace: as stored in the log, and as sent over BLE.
+// A slice of a rep's plotted trace: as stored in the log, and as sent over BLE.
 message TraceChunk {
   bytes rep_uuid = 1;
   uint32 index = 2;              // 0-based chunk index
   uint32 first_t_offset_ms = 3;  // t_offset_ms of the first sample
-  repeated TraceSample samples = 4;
+  repeated TraceComputedPoint samples = 4;
   // Chunks in the stream this record belongs to. Set only when a trace is being
   // streamed over BLE; a record stored in the log leaves it 0, because there the
-  // summary's chunk_count already describes the trace and the device re-chunks
-  // to fit the MTU when streaming. Without this the client cannot tell "more
-  // chunks are coming" from "the device has forgotten this rep and will stay
-  // silent".
+  // summary's `computed_chunks` already describes the trace and the device
+  // re-chunks to fit the MTU when streaming. Without this the client cannot tell
+  // "more chunks are coming" from "the device has forgotten this rep and will
+  // stay silent".
   uint32 total_chunks = 5;
+}
+
+// A slice of a rep's raw trace: the same framing, at full rate.
+message RawChunk {
+  bytes rep_uuid = 1;
+  uint32 index = 2;
+  uint32 first_t_offset_ms = 3;
+  repeated TraceRawPoint samples = 4;
+  uint32 total_chunks = 5;  // as `TraceChunk`
 }
 
 // The device's clock, as of one point in the log: what its uptime zero was worth
@@ -162,14 +236,15 @@ message BootClock {
   uint32 epoch_s = 1; // unix seconds at that boot's uptime zero; 0 = not known
 }
 
-// One log record: a rep summary, one of its trace chunks, or a clock reading.
+// One log record: a rep summary, one of either trace's chunks, or a clock reading.
 // Keeping them under one wire type makes the log a single self-describing
 // stream.
 message RepRecord {
   oneof body {
     RepSummary summary = 1;
-    TraceChunk trace = 2;
+    TraceChunk computed = 2;  // the plotted trace (was `trace`)
     BootClock clock = 3;
+    RawChunk raw = 4;  // the replayable trace, on a device that recorded it
   }
 }
 
@@ -184,6 +259,17 @@ message RepRecord {
 // the app writes once per boot, like the calibration a client reads, and on the
 // pipe it would queue behind the summaries it is meant to be there for — the
 // device holds them until it has a clock (see `BootClock`).
+//
+// Recording a rep's raw trace **is** an arm, and the difference is what it holds
+// up: dev mode decides what *future* reps store, so a message that queues behind a
+// few summaries costs nothing, where the clock's would have delayed the very
+// summaries it was needed for.
+
+// Which of a rep's two traces a request is about.
+enum TraceKind {
+  TRACE_KIND_COMPUTED = 0;  // the default: the plotted trace
+  TRACE_KIND_RAW = 1;       // the replayable one, if this device recorded it
+}
 
 // Sent by the app to request a rep's trace. `chunk_index` is ignored unless
 // `all_chunks` is false.
@@ -191,70 +277,54 @@ message TraceRequest {
   bytes rep_uuid = 1;
   bool all_chunks = 2;
   uint32 chunk_index = 3;
+  TraceKind kind = 4;
+}
+
+// Turn recording of raw traces on or off, until the device restarts.
+//
+// A dev switch, not a setting. A raw trace is the largest thing in the log — a
+// full-rate nine-second rep is ~19 KB against the plotted trace's ~5 — and it
+// exists so a session can be replayed offline, not so a release session gets
+// bigger. It lives here rather than on a characteristic of its own because it is
+// an operation rather than a value the app reads back: the client that sets it
+// knows which way it set it, and the device forgets at every boot.
+//
+// **Off at every boot and not persisted.** A switch left on by accident fills the
+// log at three times the rate for as long as nobody notices; the cost of
+// remembering it would be a reflash to turn it off.
+message DevMode {
+  bool enabled = 1;
 }
 
 // Everything sent app -> device on the sync service.
 message SyncRequest {
   oneof body {
-    TraceRequest trace = 1;  // answered by `SyncMessage.trace`, in chunks
+    TraceRequest trace = 1;  // answered by `SyncMessage.computed` or `.raw`, in chunks
+    DevMode dev_mode = 2;    // record raw traces from here on, or stop
   }
 }
 
 // Everything sent device -> app on the sync service, on the pipe.
 //
 // A response and a push look alike here, and the client tells them apart by the
-// body: a `trace` belongs to the `TraceRequest` that asked for it (its chunks
-// carry the rep's UUID), while `summary` arrives because the client subscribed,
-// not because it asked.
-//
-// Calibration is **not** here: it is a state, and the app reads it off its own
-// characteristic (`proto/calypso_gatt.proto`) when its UI wants it, rather than
-// being sent it at the device's choice of moment.
+// body: `computed` or `raw` belongs to the `TraceRequest` that asked for it (its
+// chunks carry the rep's UUID and the kind that was asked for), while `summary`
+// arrives because the client subscribed, not because it asked.
 message SyncMessage {
   oneof body {
     RepSummary summary = 1;  // auto-streamed as reps are recorded
-    TraceChunk trace = 2;    // on demand, in response to TraceRequest
+    TraceChunk computed = 2; // the plotted trace, in response to TraceRequest
     SyncStatus status = 3;
+    RawChunk raw = 4;        // the raw trace, in response to TraceRequest
   }
-}
-
-// The IMU's calibration state, as the BNO055 reports it in CALIB_STAT (0x35):
-// one 0..3 level per sensor, 3 meaning fully calibrated.
-//
-// The device has no display, so this is what the app turns into a hint. **Rep
-// tracking needs `accel` and `gyro` at 3**, and the device will not record a rep
-// until they are — an uncalibrated IMU reports drift as motion, so a stored trace
-// would be fiction. In the meantime BLE stays up: the app can connect, watch the
-// levels climb and tell the user what to do.
-//
-// `sys` is reported for a console, and is **not** part of readiness: it is the
-// chip's aggregate, it counts the magnetometer, and in IMU mode it sits at 0 for
-// ever however well the other two are calibrated. Gating on it is a device that
-// never records a rep (see `calypso_core::calibration`).
-//
-// `mag` is reported for completeness only. The BNO055 runs in IMU mode (no
-// magnetometer, which is unreliable next to a barbell), where the magnetometer
-// never calibrates, so it is never the thing being waited for and the app must
-// not send the user chasing it.
-//
-// Travels as the value of the `Calibration` characteristic
-// (`proto/calypso_gatt.proto`), which the client reads: how often the levels are
-// looked at is the app's UI's business, not the device's.
-message CalibrationStatus {
-  uint32 sys = 1;    // 0..3, the aggregate the fusion uses (0 for ever in IMU mode)
-  uint32 accel = 2;  // 0..3
-  uint32 gyro = 3;   // 0..3
-  uint32 mag = 4;    // 0..3, unused in IMU mode
-  // True when the device will record reps. Sent rather than derived so the app
-  // cannot disagree with the device about whether a rep is being recorded.
-  bool ready = 5;
 }
 
 message SyncStatus {
   uint32 rep_count = 1;         // reps currently in the log ring
   bytes oldest_rep_uuid = 2;    // reps fall off the ring when it wraps
   bytes newest_rep_uuid = 3;
-  bool trace_unavailable = 4;  // requested trace has been overwritten
+  // A requested trace has been overwritten by the ring, whichever kind was asked for.
+  bool trace_unavailable = 4;
 }
 
 // --- Diagnostics ----------------------------------------------------------

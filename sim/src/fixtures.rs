@@ -127,8 +127,12 @@ pub fn detect_and_trace(
             }
             let mut trace = TraceBuf::new(&mut storage);
             let mut summary = compute_rep(&window[..n], &state, &mut trace);
-            // Synthetic motion is fully calibrated by construction, and a fixture that read as "recorded while the accelerometer wandered" would put that caveat on every row of a demo.
-            summary.flags |= calypso_core::rep::REP_FLAG_CALIBRATED;
+            summary.set_config(calypso_core::pb::config_message(
+                &calypso_core::sampler::RepConfig::of(
+                    calypso_core::sampler::SAMPLE_RATE_HZ,
+                    calypso_core::rep::DETECTOR_VERSION,
+                ),
+            ));
             out.push((summary, trace.as_slice().to_vec()));
         }
     }
@@ -141,24 +145,38 @@ pub fn push_record(dump: &mut Vec<u8>, record: &[u8]) {
     dump.extend_from_slice(record);
 }
 
-/// Append a rep (summary record + trace chunk records) to a dump. Returns the number of records written.
+/// Append a rep (summary record, plotted chunks, and the raw trace when one is given) to a dump.
+/// Returns the number of records written. The order is the log's, so a reader finds either trace from the summary.
 pub fn push_rep(
     dump: &mut Vec<u8>,
     rec_buf: &mut [u8],
     summary: &mut msg::RepSummary,
-    trace: &[TracePoint],
+    computed: &[TracePoint],
+    raw: Option<&[Sample]>,
 ) -> Result<u32, pb::Error> {
     // The chunks carry the same identity as the summary, and that identity is the summary's — deriving it here is what keeps them together.
     let rep_uuid = pb::summary_uuid(summary).ok_or(pb::Error::Decode)?;
-    summary.chunk_count = pb::chunk_count_for(trace.len());
+    summary.computed_len = computed.len() as u32;
+    summary.computed_chunks = pb::chunk_count_for(computed.len());
+    summary.raw_len = raw.map_or(0, |r| r.len()) as u32;
+    summary.raw_chunks = pb::chunk_count_for(summary.raw_len as usize);
     let n = pb::encode_summary(summary, rec_buf)?;
     push_record(dump, &rec_buf[..n]);
 
-    let t0_ms = trace.first().map(|p| p.t_ms).unwrap_or(0);
+    let t0_ms = summary.t_start_ms;
     let mut written = 1;
-    for (index, chunk) in trace.chunks(pb::TRACE_CHUNK_SAMPLES).enumerate() {
+    for (index, chunk) in computed.chunks(pb::TRACE_CHUNK_SAMPLES).enumerate() {
         // Fixtures are stored records, not a stream: total_chunks stays 0.
-        let n = pb::encode_trace_chunk(rep_uuid, index as u32, t0_ms, 0, chunk, rec_buf)?;
+        let n = pb::encode_computed_chunk(rep_uuid, index as u32, t0_ms, 0, chunk, rec_buf)?;
+        push_record(dump, &rec_buf[..n]);
+        written += 1;
+    }
+    for (index, chunk) in raw
+        .unwrap_or(&[])
+        .chunks(pb::TRACE_CHUNK_SAMPLES)
+        .enumerate()
+    {
+        let n = pb::encode_raw_chunk(rep_uuid, index as u32, t0_ms, 0, chunk, rec_buf)?;
         push_record(dump, &rec_buf[..n]);
         written += 1;
     }
@@ -174,7 +192,7 @@ pub fn squat_dump(reps: usize, a: f32) -> Vec<u8> {
     for (i, (mut summary, trace)) in reps.into_iter().enumerate() {
         // Deterministic identities: fixtures are regenerated and compared.
         summary.rep_uuid = pb::uuid_to_field(&uuid::fixture_uuid(i as u32));
-        push_rep(&mut dump, &mut rec_buf, &mut summary, &trace).unwrap();
+        push_rep(&mut dump, &mut rec_buf, &mut summary, &trace, None).unwrap();
     }
     dump
 }

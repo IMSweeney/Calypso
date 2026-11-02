@@ -32,13 +32,15 @@ import "google/protobuf/empty.proto";
 // generator's (`tool/gen_gatt.sh`), not this file's: a pipe has no `max_len`,
 // because it sizes transfers rather than values.
 //
-// The other four characteristics carry **values**, not transfers: the IMU's
-// calibration state and its own last sample, both of which the app reads when it wants
-// them (`max_len` is what a single read carries); the clock it writes the same way; and
-// the device's own faults, which are pushed. A state has no event to be pushed on, and a push would have to be sent
-// whenever it might have changed — which on a pipe that carries one message at a time
-// means it competes with the summaries (`docs/GOTCHAS.md`, "An acknowledgement is also
-// a request for the next message").
+// The other three characteristics carry **values**, not transfers: the IMU's own last
+// sample, which the app reads when it wants it (`max_len` is what a single read carries);
+// the clock it writes the same way; and the device's own faults, which are pushed. A state
+// has no event to be pushed on, and a push would have to be sent whenever it might have
+// changed — which on a pipe that carries one message at a time means it competes with the
+// summaries (`docs/GOTCHAS.md`, "An acknowledgement is also a request for the next message").
+//
+// Anything the app *does* rather than reads goes on the pipe as an arm of `SyncRequest`
+// (`DevMode`), so the table does not grow a characteristic per operation.
 //
 // The faults are the exception that proves it: they *are* events, so they are pushed,
 // and they carry one small value because an event the sender has to be paced through
@@ -50,36 +52,20 @@ service Sync {
     primary: true
   };
 
-  // The IMU's calibration state, read by whoever wants it.
-  //
-  // `max_len` 20 is the payload every stack guarantees, which is also room enough
-  // for anything this device can put here: the levels are `u8`s out of CALIB_STAT
-  // (0..3), so the widest encoding it can build is four two-byte varints with their
-  // tags and a bool — 14 bytes. A `CalibrationStatus` with larger levels would
-  // encode to more, and `SyncCalibrationValue::encode` returns `None` rather than put
-  // a value in the characteristic that a client might not be able to read whole.
-  rpc Calibration(google.protobuf.Empty) returns (CalibrationStatus) {
-    option (gatt.characteristic) = {
-      uuid: "0000ca24-b0cd-11ec-871f-d45ddf138840"
-      props: [READ]
-      max_len: 20
-    };
-  }
-
   // The IMU as the sampler last read it, for a client that wants to see the sensor rather
   // than derive a rep from it: the detector's own input.
   //
-  // `max_len` 36 is above the 20 bytes a default MTU guarantees, deliberately. Eight
-  // fixed-point fields cannot encode to less, and 0.01 m/s^2 with 1/2^14 is the scale a
-  // trace point uses, so the sample survives the trip unchanged instead of being rescaled
-  // into a readout that could not be compared against a stored trace. Our own app
-  // negotiates a 247 byte MTU before it reads anything; a client that does not gets a
-  // failed read rather than a truncated value.
+  // `max_len` 64 is above the 20 bytes a default MTU guarantees, deliberately. Eleven
+  // fixed-point fields cannot encode to less — a clamped i16 is three bytes at its widest,
+  // so the quaternion alone can take twelve — and the scales are the ones a trace point uses,
+  // so the sample survives the trip unchanged instead of being rescaled into a readout that
+  // could not be compared against one. Our own app negotiates a 247 byte MTU before it reads
+  // anything; a client that does not gets a failed read rather than a truncated value.
   rpc Imu(google.protobuf.Empty) returns (ImuState) {
     option (gatt.characteristic) = {
       uuid: "0000ca26-b0cd-11ec-871f-d45ddf138840"
       props: [READ]
-      max_len: 36
+      max_len: 64
     };
   }
 

@@ -19,8 +19,8 @@ use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, GYRO_SCALE};
 
 use crate::fixtures::{at, detect_and_trace, LEAD_IN_MS, SAMPLE_DT_MS};
 
-/// The trace capacity a scenario replays through, matching a device's stored trace.
-pub const TRACE_POINTS: usize = 512;
+/// The trace capacity a scenario replays through, which is the plotted budget a device stores.
+pub use calypso_core::rep::TRACE_POINTS;
 
 const PI: f32 = core::f32::consts::PI;
 
