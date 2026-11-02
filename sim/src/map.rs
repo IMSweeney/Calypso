@@ -19,43 +19,91 @@
 
 use crate::motion::{stored, Motion, Rep};
 
+/// One knob's sweep: the values it is drawn at, `steps` of them from `lo` to `hi` inclusive.
+///
+/// A class carries these rather than the renderer imposing them, because how far from the nominal
+/// a rep still reads as a rep is a property of the lift: a bench's travel range is not a deadlift's,
+/// and a squat's speeds are not a press's. A class that wants a different grid for one knob writes
+/// its own (see [`profiles`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Sweep {
+    pub lo: f32,
+    pub hi: f32,
+    pub steps: usize,
+}
+
+impl Sweep {
+    pub const fn new(lo: f32, hi: f32, steps: usize) -> Self {
+        Sweep { lo, hi, steps }
+    }
+
+    /// The values, low to high, both ends included.
+    pub fn values(&self) -> Vec<f32> {
+        (0..self.steps)
+            .map(|i| self.lo + (self.hi - self.lo) * i as f32 / (self.steps - 1) as f32)
+            .collect()
+    }
+
+    /// `lo..hi (n pts)`, for the header that says what a map was drawn over, printed to the same
+    /// precision as the axis so the header cannot name a range the columns do not show.
+    fn label(&self) -> String {
+        let d = decimals_for(&self.values());
+        format!(
+            "{}..{} ({} pts)",
+            fmt(self.lo, d),
+            fmt(self.hi, d),
+            self.steps
+        )
+    }
+}
+
+/// Half to one and a half times the nominal, so the map reaches well past where a class's own reps
+/// live in both directions: the boundary is what is being looked for, and its position is only
+/// meaningful if the map goes on past it.
+fn travel_sweep(nominal: f32) -> Sweep {
+    Sweep::new(nominal * 0.5, nominal * 1.5, 21)
+}
+
+/// Both strokes, 0.1 to 2.0 m/s: from barely moving to the fastest a bar is pulled through a rep.
+/// Shared by every class — what a lift can be driven at is a property of the lift, but what the
+/// detector can resolve is a property of the detector, and that is what the sweep is asking.
+const SPEEDS: Sweep = Sweep::new(0.1, 2.0, 21);
+
+/// Stillness at a turnaround, 0 to 1 s: no pause at all, to longer than any lifter holds at a turn.
+const PAUSES: Sweep = Sweep::new(0.0, 1000.0, 21);
+
 pub struct Profile {
     pub name: &'static str,
     pub rep: Rep,
-    /// The half-width the travel knob is swept over (from the plan's class table).
-    pub travel_range: f32,
+    pub travel: Sweep,
+    pub speed_in: Sweep,
+    pub speed_out: Sweep,
+    pub pause_top: Sweep,
+    pub pause_bottom: Sweep,
+}
+
+/// A class with the sweeps every class starts from: travel ±50% of its own nominal, the speeds and
+/// pauses over [`SPEEDS`] and [`PAUSES`]. Override a field to give a class its own grid for that
+/// knob.
+fn profile_of(name: &'static str, rep: Rep) -> Profile {
+    Profile {
+        name,
+        rep,
+        travel: travel_sweep(rep.travel),
+        speed_in: SPEEDS,
+        speed_out: SPEEDS,
+        pause_top: PAUSES,
+        pause_bottom: PAUSES,
+    }
 }
 
 pub fn profiles() -> [Profile; 3] {
     [
-        Profile {
-            name: "bench",
-            rep: Rep::bench(),
-            travel_range: 0.03,
-        },
-        Profile {
-            name: "deadlift",
-            rep: Rep::deadlift(),
-            travel_range: 0.07,
-        },
+        profile_of("bench", Rep::bench()),
+        profile_of("deadlift", Rep::deadlift()),
         // Provisional: no squat rep has ever been captured.
-        Profile {
-            name: "squat",
-            rep: Rep::squat(),
-            travel_range: 0.10,
-        },
+        profile_of("squat", Rep::squat()),
     ]
-}
-
-fn linspace(lo: f32, hi: f32, n: usize) -> Vec<f32> {
-    (0..n)
-        .map(|i| lo + (hi - lo) * i as f32 / (n - 1) as f32)
-        .collect()
-}
-
-/// Pause knob from 0 to 500 ms, in 25 ms steps (the plan's sweep range).
-fn pause_sweep() -> Vec<f32> {
-    (0..=500).step_by(25).map(|v| v as f32).collect()
 }
 
 /// Decimals needed to tell one axis value from its neighbour, so travel columns do not all print
@@ -156,15 +204,22 @@ pub fn render_profile(name: &str) {
     let p = profile(name);
     let r = p.rep;
     println!(
-        "detectability map: {}  travel {:.2} ± {:.2} m, speed in {:.2} m/s, speed out {:.2} m/s, pauses {:?} / {:?} ms",
-        p.name, r.travel, p.travel_range, r.speed_in, r.speed_out, r.pause_top_ms, r.pause_bottom_ms
+        "detectability map: {}  travel {:.2} m, speed in {:.2} m/s, speed out {:.2} m/s, pauses {:?} / {:?} ms",
+        p.name, r.travel, r.speed_in, r.speed_out, r.pause_top_ms, r.pause_bottom_ms
+    );
+    println!(
+        "  swept: travel {} m, speed in {} m/s, speed out {} m/s, pause top {} ms, pause bottom {} ms",
+        p.travel.label(),
+        p.speed_in.label(),
+        p.speed_out.label(),
+        p.pause_top.label(),
+        p.pause_bottom.label()
     );
 
     // Travel on the x axis for every slice; only the y knob changes.
-    let travel = linspace(r.travel - p.travel_range, r.travel + p.travel_range, 21);
-    let speed_in = linspace(r.speed_in * 0.4, r.speed_in * 1.1, 21);
-    let speed_out = linspace(r.speed_out * 0.4, r.speed_out * 1.1, 21);
-    let pauses = pause_sweep();
+    let travel = p.travel.values();
+    let speed_in = p.speed_in.values();
+    let speed_out = p.speed_out.values();
 
     render(
         "travel",
@@ -198,7 +253,7 @@ pub fn render_profile(name: &str) {
         "travel",
         &travel,
         "pause_top",
-        &pauses,
+        &p.pause_top.values(),
         r.travel,
         r.pause_top_ms as f32,
         &|tr, ptop| Rep {
@@ -212,7 +267,7 @@ pub fn render_profile(name: &str) {
         "travel",
         &travel,
         "pause_bottom",
-        &pauses,
+        &p.pause_bottom.values(),
         r.travel,
         r.pause_bottom_ms as f32,
         &|tr, pbot| Rep {
@@ -226,4 +281,56 @@ pub fn render_profile(name: &str) {
 /// One cell's worth of rep count, for a caller that wants a number rather than a drawing.
 pub fn count(rep: Rep) -> usize {
     stored(&Motion::Rep(rep)).len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The sweeps are the class's, so a class that needs its own grid gets one without the
+    /// renderer knowing: this is the property the fields exist for.
+    #[test]
+    fn each_class_sweeps_its_own_grid() {
+        let all = profiles();
+        let bench = &all[0];
+        let deadlift = &all[1];
+
+        // Where the classes must differ: their nominal travels are 36 cm apart, and the grid
+        // follows the nominal, so a shared travel sweep would have one of them off its own map.
+        assert_ne!(bench.travel.lo, deadlift.travel.lo);
+        assert_ne!(bench.travel.hi, deadlift.travel.hi);
+
+        for p in &all {
+            for (knob, nominal, sweep) in [
+                ("travel", p.rep.travel, p.travel),
+                ("speed in", p.rep.speed_in, p.speed_in),
+                ("speed out", p.rep.speed_out, p.speed_out),
+            ] {
+                let values = sweep.values();
+                assert_eq!(values.len(), sweep.steps, "{}: {knob} steps", p.name);
+                assert!(
+                    values[0] <= nominal && nominal <= *values.last().unwrap(),
+                    "{}: {knob} sweep {:?} does not reach its nominal {nominal}",
+                    p.name,
+                    (sweep.lo, sweep.hi)
+                );
+                assert!(
+                    values.windows(2).all(|w| w[1] > w[0]),
+                    "{}: {knob} sweep must ascend",
+                    p.name
+                );
+            }
+        }
+    }
+
+    /// A pause sweep starts at no pause at all: the no-rest edge is the one the detector is
+    /// measured against, so no class may quietly stop drawing it.
+    #[test]
+    fn every_pause_sweep_reaches_no_pause() {
+        for p in &profiles() {
+            for sweep in [p.pause_top, p.pause_bottom] {
+                assert_eq!(sweep.values()[0], 0.0, "{}: pauses start at 0", p.name);
+            }
+        }
+    }
 }

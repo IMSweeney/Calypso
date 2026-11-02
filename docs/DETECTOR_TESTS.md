@@ -36,17 +36,22 @@ calibration gate, the pipe and the app are out too.
 
 | knob | what it is | swept over |
 |---|---|---|
-| travel | the bar's vertical excursion, m | the class's nominal ± its range |
-| speed in | peak speed of the drive, m/s | the nominal, and slower |
-| speed out | peak speed of the return, m/s | the nominal, and slower |
-| pause top | stillness at the turnaround, ms | 0 – 500 |
-| pause bottom | stillness at the bottom, ms | 0 – 500 |
+| travel | the bar's vertical excursion, m | 50% either side of the class's nominal |
+| speed in | peak speed of the drive, m/s | 0.1 – 2.0 |
+| speed out | peak speed of the return, m/s | 0.1 – 2.0 |
+| pause top | stillness at the turnaround, ms | 0 – 1000 |
+| pause bottom | stillness at the bottom, ms | 0 – 1000 |
 
 | class | travel | speed in | speed out |
 |---|---|---|---|
-| bench | 0.19 ± 0.03 m | 0.55 m/s | 0.35 m/s |
-| deadlift | 0.55 ± 0.07 m | 1.00 m/s | 0.70 m/s |
-| squat (provisional) | 0.70 ± 0.10 m | 1.10 m/s | 0.80 m/s |
+| bench | 0.19 m | 0.55 m/s | 0.35 m/s |
+| deadlift | 0.55 m | 1.00 m/s | 0.70 m/s |
+| squat (provisional) | 0.70 m | 1.10 m/s | 0.80 m/s |
+
+The ranges are wider than any class's own reps on purpose: the map exists to find where a class
+stops being stored, and a boundary is only placed if the grid runs past it. Each class carries
+its own sweep of all five knobs (`sim/src/map.rs`), so a class that needs a different grid for one
+knob writes it; the ranges above are what every class is built with.
 
 A stroke is half a cosine at its peak speed, so its peak acceleration is `2v²/A` and its
 duration `πA/(2v)`. That relation is the whole map: at the bench nominals the drive

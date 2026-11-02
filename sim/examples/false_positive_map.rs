@@ -13,15 +13,22 @@
 //! The calibration transient (a roll) and the unrack/re-rack assembled *around* a rep both belong
 //! to phase two, so they are not here.
 //!
+//! The knobs are swept with the same [`Sweep`] the detectability map uses, so the two maps are read
+//! at the same resolution. The ranges are not the classes': this map's job is the motion that is
+//! *not* a rep, and it has to reach past the point where one would be stored, so travel runs from a
+//! nudge to three times `MIN_ROM_M` and speed from a slow drag to faster than any pull.
+//!
 //! Usage: `cargo run -p calypso-sim --example false_positive_map`
 
+use calypso_sim::map::Sweep;
 use calypso_sim::motion::{stored, Motion, Push};
 
-fn linspace(lo: f32, hi: f32, n: usize) -> Vec<f32> {
-    (0..n)
-        .map(|i| lo + (hi - lo) * i as f32 / (n - 1) as f32)
-        .collect()
-}
+/// The bar's excursion: below `MIN_ROM_M`, then well past it.
+const TRAVEL: Sweep = Sweep::new(0.02, 0.30, 21);
+/// How fast the non-rep moves: a slow drag to faster than a rep is ever driven.
+const SPEED: Sweep = Sweep::new(0.30, 2.50, 21);
+/// How fast a wobble oscillates: a hand on the rack, to a rattle.
+const HZ: Sweep = Sweep::new(0.5, 5.0, 21);
 
 fn fmt_val(x: f32) -> String {
     if (x - x.round()).abs() < 1e-6 {
@@ -70,11 +77,9 @@ fn main() {
     let hold_ms = 500u32;
     let wobble_ms = 3000u32;
 
-    // Travel sweeps well past `MIN_ROM_M`: the interesting cell is where travel alone no longer
-    // rejects the motion.
-    let travel = linspace(0.02, 0.30, 21);
-    let speed = linspace(0.30, 2.5, 21);
-    let hz = linspace(0.5, 5.0, 21);
+    let travel = TRAVEL.values();
+    let speed = SPEED.values();
+    let hz = HZ.values();
 
     println!("false-positive map: how exaggerated must a non-rep be before it is stored?");
 
