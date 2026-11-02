@@ -79,6 +79,7 @@ name = "calypso-sim"
 version = "0.1.0"
 dependencies = [
  "calypso-core",
+ "embedded-storage",
  "libm",
 ]
 

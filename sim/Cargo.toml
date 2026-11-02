@@ -11,3 +11,5 @@ description  = "Synthetic motion and fixture generation for Calypso: tooling onl
 calypso-core = { path = "../calypso-core" }
 # The synthetic motion is a cosine, so fixtures stay byte-identical on every machine.
 libm = "0.2"
+# `examples/device_log.rs` mounts a dump of the device's flash partition as the flash it is.
+embedded-storage = "0.3.1"
