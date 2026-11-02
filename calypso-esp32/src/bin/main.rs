@@ -726,6 +726,13 @@ async fn main(spawner: Spawner) -> ! {
                         MARGIN_MS,
                         rep_window,
                     );
+                    // Logged at the moment the detector closes one, before anything can reject it: without this line a session that stores nothing cannot tell "the detector never fired" from "every rep was thrown away", and the two have different fixes.
+                    info!(
+                        "span closed: {}..{} ({} ms)",
+                        span.start_ms,
+                        span.end_ms,
+                        span.duration_ms()
+                    );
                     if copied == 0 {
                         warn!("rep window unavailable (ring too short)");
                         report(msg::ReportKind::RepWindowUnavailable);
@@ -821,6 +828,26 @@ async fn main(spawner: Spawner) -> ! {
                                 report(msg::ReportKind::ImuReadFailed);
                             }
                         }
+                    }
+
+                    // Every 5 s while recording: what the detector is subtracting, and how much motion it sees.
+                    //
+                    // A session that stores nothing has two causes that look identical from outside — the sensor's offset never came out of the signal, or the bar really was still — and the once-a-minute sampler line says neither.
+                    if calibration.can_record() && n.is_multiple_of(SAMPLE_RATE_HZ * 5) {
+                        let b = detector.bias();
+                        // Centimetres per second squared, because defmt has no precision hint and whole numbers read better than raw floats.
+                        let a = calypso_core::rep::accel_magnitude(&sample);
+                        let speed = detector.speed();
+                        info!(
+                            "detector: bias ({}, {}, {}) cm/s², |a| {} cm/s², |v| {} cm/s, legs {}, open {}",
+                            (b[0] * 100.0) as i32,
+                            (b[1] * 100.0) as i32,
+                            (b[2] * 100.0) as i32,
+                            (a * 100.0) as i32,
+                            (speed * 100.0) as i32,
+                            detector.legs(),
+                            detector.leg_open()
+                        );
                     }
 
                     if n.is_multiple_of(SAMPLE_RATE_HZ * 60)

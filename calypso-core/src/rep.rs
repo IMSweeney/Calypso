@@ -4,13 +4,13 @@ use crate::pb::msg;
 use crate::sampler::Sample;
 
 /// Linear-acceleration magnitude (m/s²) that counts as "moving".
-pub const ACCEL_ON_THRESHOLD: f32 = 0.60;
+pub const ACCEL_ON_THRESHOLD: f32 = 0.20;
 /// Magnitude below which the sensor counts as at rest (hysteresis below [`ACCEL_ON_THRESHOLD`] so a rep doesn't chatter on/off near the threshold).
-pub const ACCEL_REST_THRESHOLD: f32 = 0.25;
+pub const ACCEL_REST_THRESHOLD: f32 = 0.12;
 /// How long motion must persist before a rep starts.
-pub const T_ON_MS: u32 = 100;
+pub const T_ON_MS: u32 = 50;
 /// How long rest must persist before a rep closes.
-pub const T_REST_MS: u32 = 250;
+pub const T_REST_MS: u32 = 400;
 /// Shortest motion span still counted as a rep (noise/movement blips).
 pub const MIN_REP_MS: u32 = 400;
 /// Longest motion span that can be a rep; beyond this it's a set-up adjustment or an unrack, and the span is discarded.
@@ -22,14 +22,24 @@ pub const MARGIN_MS: u32 = 200;
 /// headroom.
 const HIST: usize = 48;
 /// Smallest dominant-axis travel (metres) that counts as a rep. A hand on a rack, a bar being unracked, a bump: each crosses the motion thresholds, none of them moves the sensor far enough to be a rep.
-pub const MIN_ROM_M: f32 = 0.10;
+pub const MIN_ROM_M: f32 = 0.07;
 
 /// Speed (m/s) the bar must reach between reversals for a return to zero to be a reversal rather than noise.
-pub const VEL_MIN: f32 = 0.15;
+pub const VEL_MIN: f32 = 0.07;
 /// How long the bar's velocity must stay near zero for it to count as a reversal.
-pub const T_TURN_MS: u32 = 40;
-/// Time constant of the accelerometer's bias estimate. Longer than the slowest rep, so the rep is not taken out with the bias.
-const BIAS_TAU_S: f32 = 3.0;
+pub const T_TURN_MS: u32 = 20;
+/// Time constant of the accelerometer's bias estimate, which is learned only while the bar is still and then takes about a second to settle.
+const BIAS_TAU_STILL_S: f32 = 0.5;
+/// Largest accelerometer offset the bias will adopt, m/s².
+///
+/// A real offset is a fraction of a metre per second squared. Anything near ten is gravity the fusion has not removed yet — the BNO055 reports that for the first seconds after a boot, before its own calibration settles — and adopting it as "the zero" subtracts gravity from every reading afterwards for the life of the boot. Observed: a bias of 13.9 m/s² learned in the first seconds, frozen there, and every rep since invisible.
+const BIAS_MAX_M_S2: f32 = 2.0;
+/// Samples the stillness test looks at (400 ms at 100 Hz).
+const STILL_WINDOW: usize = 40;
+/// Per-axis spread (m/s²) under which the bar has stopped.
+///
+/// A **spread**, not a magnitude: a resting sensor still reads its offset, so asking "is the reading small" is the circular question that stopped the bias bootstrapping. Asking "is the reading constant" is not — a still bar varies by 0.01 m/s², a moving one by whole m/s².
+const STILL_SPREAD: f32 = 0.15;
 /// Longest integration step honoured, so a stalled sampler cannot turn a gap in the samples into a jump in velocity.
 const MAX_DT_S: f32 = 0.1;
 /// Time constant over which a velocity is pulled back to zero while the detector is idle and the bar is still — the velocity form of "it is not moving, so it is not going anywhere".
@@ -81,17 +91,27 @@ struct Leg {
 /// could still catch it. Motion must also clear [`ACCEL_ON_THRESHOLD`] for [`T_ON_MS`] to open a
 /// leg at all.
 ///
-/// **Two frames, for two different reasons.** The velocity is integrated in the *body* frame,
-/// where the accelerometer's bias is a constant; only the travel is accumulated in the *world*
-/// frame, because only the vertical one decides a rep. Integrating in the world frame collapses a
-/// constant bias into a vector that turns with the sensor and never cancels, so the speed never
-/// returns to zero and no turn is found after the first — invisible on a fixture with an identity
-/// quaternion, and fatal on a real capture, where the sensor is tilted and the bar swings.
+/// **The bias lives in the world frame; the velocity lives in the body frame.** Two frames, and the
+/// split is the point.
+///
+/// The offset is a world-frame vector. At rest this sensor reads `(0.01, 0.03, -0.34) m/s²` sideways
+/// and `(0.12, -0.10, -0.14) m/s²` upright — different in the body frame at every orientation, and
+/// pointing at the floor in the world frame at both, which is gravity the fusion never finished
+/// taking out. So it is learned in the world frame, where it is one vector, and rotated into the
+/// body frame to be subtracted.
+///
+/// The velocity is integrated in the body frame, where it does not depend on the orientation at all.
+/// That matters because the fusion's tilt is least trustworthy exactly when it matters most: in IMU
+/// mode roll and pitch come partly from the accelerometer, so a stroke's own acceleration pulls the
+/// estimate off by however many degrees `a/g` is worth. Rotating the *whole* signal into the world
+/// would make every velocity — and so every turn — depend on that estimate. Rotating only the bias
+/// leaves the error in a term that is a fraction of a metre per second squared, not in the motion.
+///
 /// [`Detector::rep_v0`] is reported in the world frame, which is what [`compute_rep`] integrates in.
 pub struct Detector {
-    /// Body-frame velocity: the acceleration integrated where the bias lives.
+    /// Body-frame velocity: the acceleration integrated where it does not depend on the orientation estimate.
     v: [f32; 3],
-    /// Slow estimate of the acceleration's bias, which would otherwise integrate into a velocity that never comes back to zero.
+    /// World-frame estimate of the acceleration's offset — one vector, because that is the frame the offset is constant in.
     bias: [f32; 3],
     /// Timestamp of the previous sample, for the integration step.
     prev_t_ms: u32,
@@ -123,6 +143,14 @@ pub struct Detector {
     hist_head: usize,
     /// The bar's velocity at the left edge of the rep that just closed, captured as it began.
     v0: [f32; 3],
+    /// Whether [`Detector::bias`] has been seeded from the first sample.
+    seeded: bool,
+    /// Legs completed since the detector started. A leg is one stroke between two turns, and a rep is two of them, so this is the count that says whether detection got past its first stage.
+    legs: u32,
+    /// Recent raw accelerations, for the stillness test: a bar that reads the same for [`STILL_WINDOW`] samples is stopped, whatever the value is.
+    still_buf: [[f32; 3]; STILL_WINDOW],
+    still_head: usize,
+    still_len: usize,
 }
 
 impl Detector {
@@ -148,6 +176,11 @@ impl Detector {
             hist_z: [0.0; HIST],
             hist_head: 0,
             v0: [0.0; 3],
+            seeded: false,
+            legs: 0,
+            still_buf: [[0.0; 3]; STILL_WINDOW],
+            still_head: 0,
+            still_len: 0,
         }
     }
 
@@ -156,30 +189,98 @@ impl Detector {
         self.v0
     }
 
+    /// Legs completed since the detector started.
+    pub fn legs(&self) -> u32 {
+        self.legs
+    }
+
+    /// Speed the bar is taken to be moving at (m/s) — the number the turn test compares against [`VEL_MIN`].
+    ///
+    /// A magnitude, so the frame it is taken in does not change it: rotating a vector cannot change its length.
+    pub fn speed(&self) -> f32 {
+        sqrtf(self.v[0] * self.v[0] + self.v[1] * self.v[1] + self.v[2] * self.v[2])
+    }
+
+    /// Whether a leg is open right now.
+    pub fn leg_open(&self) -> bool {
+        self.leg_start.is_some()
+    }
+
+    /// The accelerometer offset the detector is currently subtracting.
+    ///
+    /// Exposed so a boot log can say whether the stillness filter has taken the sensor's offset out: a detector that reads the mount instead of the bar looks identical from outside either way.
+    pub fn bias(&self) -> [f32; 3] {
+        self.bias
+    }
+
     /// Feed one sample; returns the span when a rep closes.
     pub fn update(&mut self, s: &Sample) -> Option<RepSpan> {
-        let mag = accel_magnitude(s);
         let dt = self.step_ms(s);
         let q = s.quat_f32();
-        let a = s.accel_f32();
+        let a_body = s.accel_f32();
+        // The world frame, for the two things that are one vector there: the offset, and the stillness test that learns it.
+        let a = rotate_by_quat(q, a_body);
+        // The first sample is the sensor's zero.
+        //
+        // A BNO055's linear acceleration carries a constant offset — a degree or two of gravity the fusion never took out — and at rest that offset is the whole reading (0.35 m/s² on one axis here). While it is there `quiet` is never true, so the bias below can never bootstrap and the offset integrates into a velocity that outruns `VEL_MIN` for good. Seeding from the first sample means the detector measures the bar rather than the mount.
+        if !self.seeded {
+            // Guarded like every other adoption of a zero: a boot's first sample can still carry gravity, and seeding from that would subtract it for the life of the boot.
+            let amag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+            self.bias = if amag <= BIAS_MAX_M_S2 { a } else { [0.0; 3] };
+            self.seeded = true;
+        }
+        // Is the bar still? A spread over the last 400 ms, not a magnitude: the offset a resting sensor reports is large, and asking whether the reading is *small* is the question that could not be answered until the offset was known.
+        self.still_buf[self.still_head] = a;
+        self.still_head = (self.still_head + 1) % STILL_WINDOW;
+        self.still_len = (self.still_len + 1).min(STILL_WINDOW);
+        let mut still = self.still_len == STILL_WINDOW;
+        if still {
+            for k in 0..3 {
+                let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+                for v in &self.still_buf {
+                    if v[k] < lo {
+                        lo = v[k];
+                    }
+                    if v[k] > hi {
+                        hi = v[k];
+                    }
+                }
+                if hi - lo > STILL_SPREAD {
+                    still = false;
+                    break;
+                }
+            }
+        }
+        // Brought back into the body frame to be subtracted, so the integration below never touches the orientation estimate.
+        let off = rotate_by_quat([q[0], -q[1], -q[2], -q[3]], self.bias);
+        let (cx, cy, cz) = (a_body[0] - off[0], a_body[1] - off[1], a_body[2] - off[2]);
+        let mag = sqrtf(cx * cx + cy * cy + cz * cz);
         let quiet = mag < ACCEL_REST_THRESHOLD;
 
         if dt > 0.0 {
             for k in 0..3 {
-                self.v[k] += (a[k] - self.bias[k]) * dt;
+                self.v[k] += (a_body[k] - off[k]) * dt;
             }
-            if quiet {
+            // The bias is learned while the bar is still, and stillness is the *spread* rather than the magnitude.
+            //
+            // Gating on `quiet` was circular: the offset is what made `quiet` false, so a sensor reporting itself calibrated while carrying half a metre per second squared could never bootstrap its own bias. A still bar is still however large that offset is.
+            //
+            // Frozen while the bar moves, deliberately — a bias learned from a stroke is a motion-remover.
+            let amag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+            if still && amag <= BIAS_MAX_M_S2 {
                 for k in 0..3 {
-                    self.bias[k] += (a[k] - self.bias[k]) * (dt / BIAS_TAU_S);
+                    self.bias[k] += (a[k] - self.bias[k]) * (dt / BIAS_TAU_STILL_S);
+                }
+            }
+            if quiet && !self.moved {
+                for k in 0..3 {
                     // Only anchor the velocity while the bar is still: at the midpoint of a stroke the acceleration crosses zero while the velocity is at its peak.
-                    if !self.moved {
-                        self.v[k] += (0.0 - self.v[k]) * (dt / V_TAU_S);
-                    }
+                    self.v[k] += (0.0 - self.v[k]) * (dt / V_TAU_S);
                 }
             }
         }
 
-        // Only the travel is taken in the world frame, because only the vertical one decides a rep.
+        // Rotated out for the travel, which is the one thing that has to be taken on the vertical.
         let world_v = rotate_by_quat(q, self.v);
         if dt > 0.0 {
             self.pos_z += 0.5 * (self.prev_world_vz + world_v[2]) * dt;
@@ -209,6 +310,7 @@ impl Detector {
                             had_rest: self.leg_had_rest,
                             v0: self.leg_v0,
                         };
+                        self.legs += 1;
                         return self.pair(leg);
                     }
                 }
@@ -262,6 +364,7 @@ impl Detector {
                 // The bar turns, it does not restart: the next leg begins where this one ended, so a turnaround with no pause either side is still two legs.
                 self.open_leg(since);
                 self.leg_had_rest = false;
+                self.legs += 1;
                 return self.pair(leg);
             }
         }

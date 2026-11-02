@@ -245,6 +245,32 @@ Where Calypso is and what is left. Feature documentation lives in
       `REPORT_KIND_SAMPLER_HOLE`, so the boot log says when it happened and the app says a
       rep from then may read long. What to do about a rep that spans a hole is the item
       above.
+- [ ] **A stored trace cannot reproduce its own summary.** The summary is a function of
+      the rate its window was read at, not of the window: `real-deadlift` stores 0.937 m,
+      its own stored `pos` agrees to 0.1 mm, and re-integrating its `accel`/`quat` — every
+      second sample, ~20 ms — reads 1.10 m. Seeding that re-integration with the stored
+      `v0` rather than zero moves it by 0.9 mm, so the missing input is the samples and not
+      the detector's state: `v0` and the span are already in the summary, and nothing else
+      in `Detector` reaches `compute_rep` (the bias it learns is what the velocity detrend
+      takes out). Nor can the edges recover it — a set is fluid, so a window rarely begins
+      or ends at rest, the detrend is always removing a real ramp, and the result is always
+      grid-sensitive. That retires "a rep's window must begin and end at rest" as a
+      reproducibility fix; if it is wanted at all it is an accuracy question, on its own.
+      Storing the window at full rate fixes it, and costs, measured on that same rep:
+      11,729 → 23,366 bytes, 6 → 12 chunks, 4 → 7 sectors, **156 → 89 reps in the log**,
+      49 → 96 BLE frames (1.6 → 3.2 s of transfer at the ~30 notifications/s a 30 ms
+      interval carries, before the handshake's ~40 %). The wall is RAM rather than flash:
+      two `TracePoint` buffers of 32 B each grow by 12.4 KB apiece, so +24.8 KB against the
+      ~22 KB free once the sync buffers are up — it does not fit as it stands. Cheapest way
+      through is to stop storing `pos`, which is 15 of the 40.8 bytes on the wire and 12 of
+      the 32 in RAM, and is the one field the other two derive: `TracePoint` drops to 20 B,
+      full rate costs +1.6 KB a buffer and the log stays at 156 reps, at the price of the
+      app integrating its own plot. Or stream the sync path a chunk at a time so only the
+      sampler's buffer grows (+12.4 KB, ~10 KB left, above the ~8 KB cliff). Worst case is
+      an 8 s rep at 840 points, ~34 KB, 10 sectors, 62 reps. Until one is chosen, the
+      honest stopgap is a device-side self-check: re-integrate the trace it just wrote and
+      flag a mismatch over ~10 %, so a rep that cannot be reproduced is known rather than
+      plotted as truth.
 - [ ] **OTA code updates** — the app partition is 1.5 MB with headroom; dual
       slots would mean shrinking the log partition.
 - [ ] On-device tests with [`embedded-test`](https://crates.io/crates/embedded-test):
