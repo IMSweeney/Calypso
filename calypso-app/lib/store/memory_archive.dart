@@ -50,7 +50,7 @@ class MemoryArchive implements RepArchive {
   }
 
   @override
-  Future<List<pb.TraceSample>> trace(String uuid) async {
+  Future<List<pb.TraceComputedPoint>> trace(String uuid) async {
     for (final stored in _reps) {
       if (stored.uuid != uuid) continue;
       final block = Uint8List.fromList(

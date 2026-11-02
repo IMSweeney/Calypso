@@ -73,13 +73,6 @@ class FakeDevice {
   /// The clock the app has set, in unix seconds: the device's own copy of it, and what it dates its reps by.
   final List<int> clocks = [];
 
-  /// Put `status` in the table's calibration characteristic.
-  ///
-  /// That is the whole of the device's side of it: the app reads the value whenever its own clock says to, and the device's 1 Hz poll of the chip is what changes it.
-  void servesCalibration(pb.CalibrationStatus status) {
-    link.readValues[SyncClient.calibrationUuid] = status.writeToBuffer();
-  }
-
   /// Put `state` in the table's IMU characteristic: the sample the device's sampler last read.
   ///
   /// The device republishes it ten times a second whether or not anybody is reading, so a test

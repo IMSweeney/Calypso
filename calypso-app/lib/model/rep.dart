@@ -8,27 +8,24 @@ import 'package:fixnum/fixnum.dart';
 import '../protocol/calypso.pb.dart' as pb;
 import 'uuid.dart';
 
-const int accelLsbPerMs2 = 100;
-const int quatLsbPerUnit = 16384;
+/// How many points a rep's plotted trace keeps, whatever its length (`calypso_core::rep::TRACE_POINTS`).
+///
+/// Not enforced here, just documented: a summary says how many it actually has, and a rep long enough
+/// to be reduced carries fewer samples of its motion than it has milliseconds to draw.
+const int tracePointsBudget = 128;
 
-/// `RepSummary.flags`, one bit per fact (`REP_FLAG_*` in the device's `calypso_core::rep`).
-const int repFlagDecimated = 1 << 0;
-const int repFlagCalibrated = 1 << 1;
+/// Angular-rate fixed point: LSB per degree per second (`sampler::GYRO_SCALE`).
+const int gyroLsbPerDps = 16;
 
 extension RepSummaryX on pb.RepSummary {
   String? get uuid => uuidFromBytes(repUuid);
 
-  /// The trace was decimated to fit the device's buffer.
-  bool get decimated => flags & repFlagDecimated != 0;
+  /// Whether this rep can be replayed from its own samples: a device records the raw trace, at full rate,
+  /// only while a client has asked it to, and `rawChunks` is the answer.
+  bool get hasRawTrace => rawChunks > 0;
 
-  /// The IMU's accelerometer was calibrated as well as its gyroscope when the rep was recorded.
-  ///
-  /// The device records on the gyroscope alone, so a rep without this was taken while the accelerometer's status
-  /// was wandering — still a real rep, but one whose accel-derived numbers are worth less.
-  bool get calibrated => flags & repFlagCalibrated != 0;
-
-  /// The bar's velocity at the rep's left edge, or null when the record predates the origin field.
-  pb.TraceOrigin? get origin => hasV0() ? v0 : null;
+  /// The filter state the rep's window begins from, or null on a record that carries none.
+  pb.RepState? get origin => hasState() ? state : null;
 
   double get rollRangeDeg => rollMaxDeg - rollMinDeg;
   double get pitchRangeDeg => pitchMaxDeg - pitchMinDeg;
@@ -56,19 +53,30 @@ extension RepSummaryX on pb.RepSummary {
   }
 }
 
-extension TraceSampleX on pb.TraceSample {
-  double get accelX => ax / accelLsbPerMs2;
-  double get accelY => ay / accelLsbPerMs2;
-  double get accelZ => az / accelLsbPerMs2;
+/// A point of a rep's plotted path, in the units the UI speaks: metres and a unit quaternion.
+extension TraceComputedPointX on pb.TraceComputedPoint {
+  List<double> get position => [px, py, pz];
 
-  /// m/s².
-  double get accelMagnitude =>
-      math.sqrt((ax * ax + ay * ay + az * az).toDouble()) / accelLsbPerMs2;
+  /// The attitude the device's filter computed, `[w, x, y, z]`. Carried as floats on the wire, because a point
+  /// of the plotted trace is drawn and not integrated.
+  List<double> get quaternion => [qw, qx, qy, qz];
+}
 
-  List<double> get quaternion => [
-    qw / quatLsbPerUnit,
-    qx / quatLsbPerUnit,
-    qy / quatLsbPerUnit,
-    qz / quatLsbPerUnit,
+/// One sample of a rep's raw trace: what the sensor read, at the fixed point the device stored it in.
+///
+/// Nothing in the app replays these yet — the raw trace is for taking a session away and running the
+/// device's own filter over it — so this is only the units a reader of one needs.
+extension TraceRawPointX on pb.TraceRawPoint {
+  /// m/s² of **specific force**: gravity included, so a still sensor reads about 9.8 up its up axis.
+  List<double> get specificForce => [ax / 100.0, ay / 100.0, az / 100.0];
+
+  /// Degrees per second, in the sensor's own frame.
+  List<double> get angularRate => [
+    gx / gyroLsbPerDps,
+    gy / gyroLsbPerDps,
+    gz / gyroLsbPerDps,
   ];
+
+  double get specificForceMagnitude =>
+      math.sqrt(specificForce.fold<double>(0, (acc, a) => acc + a * a));
 }

@@ -152,20 +152,26 @@ geometry that puts X along the bar rather than across it.
 
 ## What gets stored
 
-One rep is one `RepSummary` record followed by `chunk_count` `TraceChunk` records
-carrying the same `rep_uuid`:
+One rep is one `RepSummary` record followed by its `computed_chunks` `TraceChunk` records and,
+on a device that was asked to record them, its `raw_chunks` `RawChunk` records — all carrying the
+same `rep_uuid`:
 
 ```
-[RepSummary][TraceChunk 0][TraceChunk 1]…
+[RepSummary][TraceChunk 0]…[TraceChunk n][RawChunk 0]…[RawChunk m]
 ```
+
+The plotted chunks come first and the raw ones directly after, which is what lets either trace be
+found from the summary's record id alone ([`RAW_IMU.md`](RAW_IMU.md)).
 
 A `BootClock` record sits between the reps: it is what a boot's reps are dated by,
 written when the boot mounts and replaced by the client's write when it connects
 ([`APP_SYNC.md`](APP_SYNC.md)). A record's clock is the newest one at or before it.
 
-- A chunk holds up to 48 trace points (`pb::TRACE_CHUNK_SAMPLES`), so an encoded
-  record always fits inside one 4 KB erase sector (the log's record limit is 4076
-  bytes; a worst-case chunk encodes to ~2 KB). A full 512-point trace is 11 chunks.
+- A chunk holds up to 48 points of either trace (`pb::TRACE_CHUNK_SAMPLES`), so an
+  encoded record always fits inside one 4 KB erase sector (the log's record limit is
+  4076 bytes; a worst-case plotted chunk encodes to ~2 KB, a raw one to ~1.4 KB). A
+  plotted trace is at most 128 points — three chunks — and a raw one is one chunk per
+  48 samples, so a nine-second rep is nineteen of them.
 - Records live in the `log` data partition (0x190000, 2.4 MB), a ring of 4 KB sectors
   that erases the oldest sectors on wrap. At a few KB per rep that is a few hundred
   reps before the oldest fall off.

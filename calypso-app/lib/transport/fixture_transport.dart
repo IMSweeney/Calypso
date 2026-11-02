@@ -39,7 +39,7 @@ class FixtureTransport implements RepTransport {
   }
 
   @override
-  Future<List<pb.TraceSample>> trace(String uuid) async {
+  Future<List<pb.TraceComputedPoint>> trace(String uuid) async {
     final chunks = traceChunksFor(_result.records, uuid);
     if (chunks.isEmpty) {
       throw TraceUnavailableException(

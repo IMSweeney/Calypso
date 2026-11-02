@@ -18,7 +18,6 @@ import '../transport/ble_link.dart';
 import '../transport/ble_transport.dart';
 import '../transport/fixture_transport.dart';
 import '../transport/transport.dart';
-import '../widgets/calibration_hint.dart';
 import '../widgets/connection_status.dart';
 import '../widgets/device_report_banner.dart';
 import 'plot_screen.dart';
@@ -457,7 +456,6 @@ class _RepListScreenState extends State<RepListScreen> {
       ),
       body: Column(
         children: [
-          CalibrationHint(calibration: _ble.calibration, status: _ble.status),
           DeviceReportBanner(reports: _ble.reports, status: _ble.status),
           _dayBar(),
           Expanded(
@@ -480,8 +478,7 @@ class _RepListScreenState extends State<RepListScreen> {
                           'peak ${s.peakVelocity.toStringAsFixed(2)} m/s · '
                           'tilt ${s.rollRangeDeg.toStringAsFixed(1)}° / '
                           '${s.pitchRangeDeg.toStringAsFixed(1)}°'
-                          '${s.decimated ? ' · decimated' : ''}'
-                          '${s.calibrated ? '' : ' · not calibrated'}',
+                          '${s.hasRawTrace ? ' · replayable' : ''}',
                         ),
                         trailing: _traceState(row.state),
                         // A rep still being fetched has nothing to plot yet, and the screen it opens would say so in more words.

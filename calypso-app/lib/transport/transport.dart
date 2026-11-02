@@ -15,6 +15,6 @@ class TraceUnavailableException implements Exception {
 abstract class RepTransport {
   Future<List<pb.RepSummary>> summaries();
   Stream<pb.RepSummary> watchSummaries();
-  Future<List<pb.TraceSample>> trace(String uuid);
+  Future<List<pb.TraceComputedPoint>> trace(String uuid);
   Future<void> close();
 }

@@ -226,7 +226,7 @@ class RepPlotView extends StatefulWidget {
     this.background = const Color(0xFF14161C),
   });
 
-  final List<pb.TraceSample> points;
+  final List<pb.TraceComputedPoint> points;
   final int? scrubIndex;
   final ValueChanged<int>? onScrub;
 

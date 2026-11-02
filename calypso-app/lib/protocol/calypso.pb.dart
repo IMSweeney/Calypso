@@ -21,32 +21,23 @@ export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
 
 export 'calypso.pbenum.dart';
 
-/// One point of a stored rep trace.
-///
-/// Both the derived displacement and the raw inputs are kept, so the app can
-/// re-derive traces with better algorithms later without a firmware update.
-class TraceSample extends $pb.GeneratedMessage {
-  factory TraceSample({
+/// One point of a rep's plotted path.
+class TraceComputedPoint extends $pb.GeneratedMessage {
+  factory TraceComputedPoint({
     $core.int? tOffsetMs,
     $core.double? px,
     $core.double? py,
     $core.double? pz,
-    $core.int? ax,
-    $core.int? ay,
-    $core.int? az,
-    $core.int? qw,
-    $core.int? qx,
-    $core.int? qy,
-    $core.int? qz,
+    $core.double? qw,
+    $core.double? qx,
+    $core.double? qy,
+    $core.double? qz,
   }) {
-    final result = TraceSample._();
+    final result = TraceComputedPoint._();
     if (tOffsetMs != null) result.tOffsetMs = tOffsetMs;
     if (px != null) result.px = px;
     if (py != null) result.py = py;
     if (pz != null) result.pz = pz;
-    if (ax != null) result.ax = ax;
-    if (ay != null) result.ay = ay;
-    if (az != null) result.az = az;
     if (qw != null) result.qw = qw;
     if (qx != null) result.qx = qx;
     if (qy != null) result.qy = qy;
@@ -54,53 +45,50 @@ class TraceSample extends $pb.GeneratedMessage {
     return result;
   }
 
-  TraceSample._();
+  TraceComputedPoint._();
 
-  factory TraceSample.fromBuffer($core.List<$core.int> data,
+  factory TraceComputedPoint.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      TraceSample()..mergeFromBuffer(data, registry);
-  factory TraceSample.fromJson($core.String json,
+      TraceComputedPoint()..mergeFromBuffer(data, registry);
+  factory TraceComputedPoint.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      TraceSample()..mergeFromJson(json, registry);
+      TraceComputedPoint()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'TraceSample',
+      _omitMessageNames ? '' : 'TraceComputedPoint',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
-      createEmptyInstance: TraceSample.$_createMessage)
+      createEmptyInstance: TraceComputedPoint.$_createMessage)
     ..aI(1, _omitFieldNames ? '' : 'tOffsetMs', fieldType: $pb.PbFieldType.OU3)
     ..aD(2, _omitFieldNames ? '' : 'px', fieldType: $pb.PbFieldType.OF)
     ..aD(3, _omitFieldNames ? '' : 'py', fieldType: $pb.PbFieldType.OF)
     ..aD(4, _omitFieldNames ? '' : 'pz', fieldType: $pb.PbFieldType.OF)
-    ..aI(5, _omitFieldNames ? '' : 'ax', fieldType: $pb.PbFieldType.OS3)
-    ..aI(6, _omitFieldNames ? '' : 'ay', fieldType: $pb.PbFieldType.OS3)
-    ..aI(7, _omitFieldNames ? '' : 'az', fieldType: $pb.PbFieldType.OS3)
-    ..aI(8, _omitFieldNames ? '' : 'qw', fieldType: $pb.PbFieldType.OS3)
-    ..aI(9, _omitFieldNames ? '' : 'qx', fieldType: $pb.PbFieldType.OS3)
-    ..aI(10, _omitFieldNames ? '' : 'qy', fieldType: $pb.PbFieldType.OS3)
-    ..aI(11, _omitFieldNames ? '' : 'qz', fieldType: $pb.PbFieldType.OS3)
+    ..aD(5, _omitFieldNames ? '' : 'qw', fieldType: $pb.PbFieldType.OF)
+    ..aD(6, _omitFieldNames ? '' : 'qx', fieldType: $pb.PbFieldType.OF)
+    ..aD(7, _omitFieldNames ? '' : 'qy', fieldType: $pb.PbFieldType.OF)
+    ..aD(8, _omitFieldNames ? '' : 'qz', fieldType: $pb.PbFieldType.OF)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  TraceSample clone() => deepCopy();
+  TraceComputedPoint clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  TraceSample copyWith(void Function(TraceSample) updates) =>
-      super.copyWith((message) => updates(message as TraceSample))
-          as TraceSample;
+  TraceComputedPoint copyWith(void Function(TraceComputedPoint) updates) =>
+      super.copyWith((message) => updates(message as TraceComputedPoint))
+          as TraceComputedPoint;
 
   @$core.override
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  @$core.Deprecated('Use TraceSample() / TraceSample.new instead')
-  static TraceSample create() => TraceSample._();
-  static $pb.GeneratedMessage $_createMessage() => TraceSample._();
+  @$core.Deprecated('Use TraceComputedPoint() / TraceComputedPoint.new instead')
+  static TraceComputedPoint create() => TraceComputedPoint._();
+  static $pb.GeneratedMessage $_createMessage() => TraceComputedPoint._();
   @$core.override
-  TraceSample createEmptyInstance() => TraceSample._();
+  TraceComputedPoint createEmptyInstance() => TraceComputedPoint._();
   @$core.pragma('dart2js:noInline')
-  static TraceSample getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<TraceSample>(
-          TraceSample.$_createMessage);
-  static TraceSample? _defaultInstance;
+  static TraceComputedPoint getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<TraceComputedPoint>(
+          TraceComputedPoint.$_createMessage);
+  static TraceComputedPoint? _defaultInstance;
 
   @$pb.TagNumber(1)
   $core.int get tOffsetMs => $_getIZ(0);
@@ -139,67 +127,170 @@ class TraceSample extends $pb.GeneratedMessage {
   void clearPz() => $_clearField(4);
 
   @$pb.TagNumber(5)
-  $core.int get ax => $_getIZ(4);
+  $core.double get qw => $_getN(4);
   @$pb.TagNumber(5)
-  set ax($core.int value) => $_setSignedInt32(4, value);
+  set qw($core.double value) => $_setFloat(4, value);
   @$pb.TagNumber(5)
-  $core.bool hasAx() => $_has(4);
+  $core.bool hasQw() => $_has(4);
   @$pb.TagNumber(5)
-  void clearAx() => $_clearField(5);
+  void clearQw() => $_clearField(5);
 
   @$pb.TagNumber(6)
-  $core.int get ay => $_getIZ(5);
+  $core.double get qx => $_getN(5);
   @$pb.TagNumber(6)
-  set ay($core.int value) => $_setSignedInt32(5, value);
+  set qx($core.double value) => $_setFloat(5, value);
   @$pb.TagNumber(6)
-  $core.bool hasAy() => $_has(5);
+  $core.bool hasQx() => $_has(5);
   @$pb.TagNumber(6)
-  void clearAy() => $_clearField(6);
+  void clearQx() => $_clearField(6);
 
   @$pb.TagNumber(7)
-  $core.int get az => $_getIZ(6);
+  $core.double get qy => $_getN(6);
   @$pb.TagNumber(7)
-  set az($core.int value) => $_setSignedInt32(6, value);
+  set qy($core.double value) => $_setFloat(6, value);
   @$pb.TagNumber(7)
-  $core.bool hasAz() => $_has(6);
+  $core.bool hasQy() => $_has(6);
   @$pb.TagNumber(7)
-  void clearAz() => $_clearField(7);
+  void clearQy() => $_clearField(7);
 
   @$pb.TagNumber(8)
-  $core.int get qw => $_getIZ(7);
+  $core.double get qz => $_getN(7);
   @$pb.TagNumber(8)
-  set qw($core.int value) => $_setSignedInt32(7, value);
+  set qz($core.double value) => $_setFloat(7, value);
   @$pb.TagNumber(8)
-  $core.bool hasQw() => $_has(7);
+  $core.bool hasQz() => $_has(7);
   @$pb.TagNumber(8)
-  void clearQw() => $_clearField(8);
+  void clearQz() => $_clearField(8);
+}
 
-  @$pb.TagNumber(9)
-  $core.int get qx => $_getIZ(8);
-  @$pb.TagNumber(9)
-  set qx($core.int value) => $_setSignedInt32(8, value);
-  @$pb.TagNumber(9)
-  $core.bool hasQx() => $_has(8);
-  @$pb.TagNumber(9)
-  void clearQx() => $_clearField(9);
+/// One sample of a rep's raw stream: the sensor's own reading, as the filter took it.
+class TraceRawPoint extends $pb.GeneratedMessage {
+  factory TraceRawPoint({
+    $core.int? tOffsetMs,
+    $core.int? ax,
+    $core.int? ay,
+    $core.int? az,
+    $core.int? gx,
+    $core.int? gy,
+    $core.int? gz,
+  }) {
+    final result = TraceRawPoint._();
+    if (tOffsetMs != null) result.tOffsetMs = tOffsetMs;
+    if (ax != null) result.ax = ax;
+    if (ay != null) result.ay = ay;
+    if (az != null) result.az = az;
+    if (gx != null) result.gx = gx;
+    if (gy != null) result.gy = gy;
+    if (gz != null) result.gz = gz;
+    return result;
+  }
 
-  @$pb.TagNumber(10)
-  $core.int get qy => $_getIZ(9);
-  @$pb.TagNumber(10)
-  set qy($core.int value) => $_setSignedInt32(9, value);
-  @$pb.TagNumber(10)
-  $core.bool hasQy() => $_has(9);
-  @$pb.TagNumber(10)
-  void clearQy() => $_clearField(10);
+  TraceRawPoint._();
 
-  @$pb.TagNumber(11)
-  $core.int get qz => $_getIZ(10);
-  @$pb.TagNumber(11)
-  set qz($core.int value) => $_setSignedInt32(10, value);
-  @$pb.TagNumber(11)
-  $core.bool hasQz() => $_has(10);
-  @$pb.TagNumber(11)
-  void clearQz() => $_clearField(11);
+  factory TraceRawPoint.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      TraceRawPoint()..mergeFromBuffer(data, registry);
+  factory TraceRawPoint.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      TraceRawPoint()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'TraceRawPoint',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
+      createEmptyInstance: TraceRawPoint.$_createMessage)
+    ..aI(1, _omitFieldNames ? '' : 'tOffsetMs', fieldType: $pb.PbFieldType.OU3)
+    ..aI(2, _omitFieldNames ? '' : 'ax', fieldType: $pb.PbFieldType.OS3)
+    ..aI(3, _omitFieldNames ? '' : 'ay', fieldType: $pb.PbFieldType.OS3)
+    ..aI(4, _omitFieldNames ? '' : 'az', fieldType: $pb.PbFieldType.OS3)
+    ..aI(5, _omitFieldNames ? '' : 'gx', fieldType: $pb.PbFieldType.OS3)
+    ..aI(6, _omitFieldNames ? '' : 'gy', fieldType: $pb.PbFieldType.OS3)
+    ..aI(7, _omitFieldNames ? '' : 'gz', fieldType: $pb.PbFieldType.OS3)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  TraceRawPoint clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  TraceRawPoint copyWith(void Function(TraceRawPoint) updates) =>
+      super.copyWith((message) => updates(message as TraceRawPoint))
+          as TraceRawPoint;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use TraceRawPoint() / TraceRawPoint.new instead')
+  static TraceRawPoint create() => TraceRawPoint._();
+  static $pb.GeneratedMessage $_createMessage() => TraceRawPoint._();
+  @$core.override
+  TraceRawPoint createEmptyInstance() => TraceRawPoint._();
+  @$core.pragma('dart2js:noInline')
+  static TraceRawPoint getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<TraceRawPoint>(
+          TraceRawPoint.$_createMessage);
+  static TraceRawPoint? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.int get tOffsetMs => $_getIZ(0);
+  @$pb.TagNumber(1)
+  set tOffsetMs($core.int value) => $_setUnsignedInt32(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasTOffsetMs() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearTOffsetMs() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.int get ax => $_getIZ(1);
+  @$pb.TagNumber(2)
+  set ax($core.int value) => $_setSignedInt32(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasAx() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearAx() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.int get ay => $_getIZ(2);
+  @$pb.TagNumber(3)
+  set ay($core.int value) => $_setSignedInt32(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasAy() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearAy() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.int get az => $_getIZ(3);
+  @$pb.TagNumber(4)
+  set az($core.int value) => $_setSignedInt32(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasAz() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearAz() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.int get gx => $_getIZ(4);
+  @$pb.TagNumber(5)
+  set gx($core.int value) => $_setSignedInt32(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasGx() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearGx() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.int get gy => $_getIZ(5);
+  @$pb.TagNumber(6)
+  set gy($core.int value) => $_setSignedInt32(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasGy() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearGy() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.int get gz => $_getIZ(6);
+  @$pb.TagNumber(7)
+  set gz($core.int value) => $_setSignedInt32(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasGz() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearGz() => $_clearField(7);
 }
 
 /// Summary statistics for one rep. Angles are degrees, distances metres.
@@ -217,11 +308,13 @@ class RepSummary extends $pb.GeneratedMessage {
     $core.double? rollMaxDeg,
     $core.double? pitchMinDeg,
     $core.double? pitchMaxDeg,
-    $core.int? traceLen,
-    $core.int? chunkCount,
-    $core.int? flags,
+    $core.int? computedLen,
+    $core.int? computedChunks,
     $fixnum.Int64? tUnixMs,
-    TraceOrigin? v0,
+    RepState? state,
+    RepConfig? config,
+    $core.int? rawLen,
+    $core.int? rawChunks,
   }) {
     final result = RepSummary._();
     if (repUuid != null) result.repUuid = repUuid;
@@ -236,11 +329,13 @@ class RepSummary extends $pb.GeneratedMessage {
     if (rollMaxDeg != null) result.rollMaxDeg = rollMaxDeg;
     if (pitchMinDeg != null) result.pitchMinDeg = pitchMinDeg;
     if (pitchMaxDeg != null) result.pitchMaxDeg = pitchMaxDeg;
-    if (traceLen != null) result.traceLen = traceLen;
-    if (chunkCount != null) result.chunkCount = chunkCount;
-    if (flags != null) result.flags = flags;
+    if (computedLen != null) result.computedLen = computedLen;
+    if (computedChunks != null) result.computedChunks = computedChunks;
     if (tUnixMs != null) result.tUnixMs = tUnixMs;
-    if (v0 != null) result.v0 = v0;
+    if (state != null) result.state = state;
+    if (config != null) result.config = config;
+    if (rawLen != null) result.rawLen = rawLen;
+    if (rawChunks != null) result.rawChunks = rawChunks;
     return result;
   }
 
@@ -274,15 +369,19 @@ class RepSummary extends $pb.GeneratedMessage {
         fieldType: $pb.PbFieldType.OF)
     ..aD(12, _omitFieldNames ? '' : 'pitchMaxDeg',
         fieldType: $pb.PbFieldType.OF)
-    ..aI(13, _omitFieldNames ? '' : 'traceLen', fieldType: $pb.PbFieldType.OU3)
-    ..aI(14, _omitFieldNames ? '' : 'chunkCount',
+    ..aI(13, _omitFieldNames ? '' : 'computedLen',
         fieldType: $pb.PbFieldType.OU3)
-    ..aI(15, _omitFieldNames ? '' : 'flags', fieldType: $pb.PbFieldType.OU3)
+    ..aI(14, _omitFieldNames ? '' : 'computedChunks',
+        fieldType: $pb.PbFieldType.OU3)
     ..a<$fixnum.Int64>(
         16, _omitFieldNames ? '' : 'tUnixMs', $pb.PbFieldType.OU6,
         defaultOrMaker: $fixnum.Int64.ZERO)
-    ..aOM<TraceOrigin>(17, _omitFieldNames ? '' : 'v0',
-        subBuilder: TraceOrigin.$_createMessage)
+    ..aOM<RepState>(17, _omitFieldNames ? '' : 'state',
+        subBuilder: RepState.$_createMessage)
+    ..aOM<RepConfig>(18, _omitFieldNames ? '' : 'config',
+        subBuilder: RepConfig.$_createMessage)
+    ..aI(19, _omitFieldNames ? '' : 'rawLen', fieldType: $pb.PbFieldType.OU3)
+    ..aI(20, _omitFieldNames ? '' : 'rawChunks', fieldType: $pb.PbFieldType.OU3)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -418,45 +517,22 @@ class RepSummary extends $pb.GeneratedMessage {
   void clearPitchMaxDeg() => $_clearField(12);
 
   @$pb.TagNumber(13)
-  $core.int get traceLen => $_getIZ(12);
+  $core.int get computedLen => $_getIZ(12);
   @$pb.TagNumber(13)
-  set traceLen($core.int value) => $_setUnsignedInt32(12, value);
+  set computedLen($core.int value) => $_setUnsignedInt32(12, value);
   @$pb.TagNumber(13)
-  $core.bool hasTraceLen() => $_has(12);
+  $core.bool hasComputedLen() => $_has(12);
   @$pb.TagNumber(13)
-  void clearTraceLen() => $_clearField(13);
+  void clearComputedLen() => $_clearField(13);
 
   @$pb.TagNumber(14)
-  $core.int get chunkCount => $_getIZ(13);
+  $core.int get computedChunks => $_getIZ(13);
   @$pb.TagNumber(14)
-  set chunkCount($core.int value) => $_setUnsignedInt32(13, value);
+  set computedChunks($core.int value) => $_setUnsignedInt32(13, value);
   @$pb.TagNumber(14)
-  $core.bool hasChunkCount() => $_has(13);
+  $core.bool hasComputedChunks() => $_has(13);
   @$pb.TagNumber(14)
-  void clearChunkCount() => $_clearField(14);
-
-  /// One bit per fact about this rep, so a summary can grow one without paying
-  /// a tag and a byte for each bool (`REP_FLAG_*` in `calypso_core::rep`):
-  ///
-  ///   bit 0  DECIMATED   the trace was decimated to fit device memory
-  ///   bit 1  CALIBRATED  the IMU's accelerometer was calibrated as well as its
-  ///                      gyroscope when the rep was recorded
-  ///
-  /// Field 15 was `bool decimated` before this. A bool is a varint too, so a
-  /// record written then still reads back here: bit 0 is the bit that bool was.
-  ///
-  /// CALIBRATED is the fact the recording gate does not require. A rep is
-  /// recorded whenever the gyroscope is calibrated, because its drift is what
-  /// fabricates motion; the accelerometer's status wanders on its own, so a rep
-  /// taken while it was low is still a real rep, recorded with this bit clear.
-  @$pb.TagNumber(15)
-  $core.int get flags => $_getIZ(14);
-  @$pb.TagNumber(15)
-  set flags($core.int value) => $_setUnsignedInt32(14, value);
-  @$pb.TagNumber(15)
-  $core.bool hasFlags() => $_has(14);
-  @$pb.TagNumber(15)
-  void clearFlags() => $_clearField(15);
+  void clearComputedChunks() => $_clearField(14);
 
   /// The rep's wall-clock time, unix milliseconds, or 0 when the device had no
   /// clock for the boot that recorded it.
@@ -466,84 +542,275 @@ class RepSummary extends $pb.GeneratedMessage {
   /// been written: a stored summary therefore carries its uptime (`t_start_ms`)
   /// and the boot's clock travels as its own record (`BootClock`).
   @$pb.TagNumber(16)
-  $fixnum.Int64 get tUnixMs => $_getI64(15);
+  $fixnum.Int64 get tUnixMs => $_getI64(14);
   @$pb.TagNumber(16)
-  set tUnixMs($fixnum.Int64 value) => $_setInt64(15, value);
+  set tUnixMs($fixnum.Int64 value) => $_setInt64(14, value);
   @$pb.TagNumber(16)
-  $core.bool hasTUnixMs() => $_has(15);
+  $core.bool hasTUnixMs() => $_has(14);
   @$pb.TagNumber(16)
   void clearTUnixMs() => $_clearField(16);
 
-  /// The bar's velocity (m/s) at the rep's left edge, `MARGIN_MS` before motion
-  /// was declared. A rep mid-set starts already moving, and an integration that
-  /// assumes zero there reads its travel high. Unset on a record written before
-  /// this field existed, which is how a rep with no origin is told from one that
-  /// started at rest.
+  /// Where the filter stood where the stored window begins: the whole of its
+  /// memory, so replaying the window from here reproduces the summary instead of
+  /// approximating it. This is what a `RawChunk` trace is re-run from.
   @$pb.TagNumber(17)
-  TraceOrigin get v0 => $_getN(16);
+  RepState get state => $_getN(15);
   @$pb.TagNumber(17)
-  set v0(TraceOrigin value) => $_setField(17, value);
+  set state(RepState value) => $_setField(17, value);
   @$pb.TagNumber(17)
-  $core.bool hasV0() => $_has(16);
+  $core.bool hasState() => $_has(15);
   @$pb.TagNumber(17)
-  void clearV0() => $_clearField(17);
+  void clearState() => $_clearField(17);
   @$pb.TagNumber(17)
-  TraceOrigin ensureV0() => $_ensure(16);
+  RepState ensureState() => $_ensure(15);
+
+  /// What the sensor was set to, and which detection logic closed the rep: what
+  /// the numbers in either trace mean.
+  @$pb.TagNumber(18)
+  RepConfig get config => $_getN(16);
+  @$pb.TagNumber(18)
+  set config(RepConfig value) => $_setField(18, value);
+  @$pb.TagNumber(18)
+  $core.bool hasConfig() => $_has(16);
+  @$pb.TagNumber(18)
+  void clearConfig() => $_clearField(18);
+  @$pb.TagNumber(18)
+  RepConfig ensureConfig() => $_ensure(16);
+
+  /// The raw trace's size, or both 0 when this device does not record one. The
+  /// counts are the answer to "can I replay this rep"; there is no flag for it,
+  /// because two places to ask is one place to disagree.
+  @$pb.TagNumber(19)
+  $core.int get rawLen => $_getIZ(17);
+  @$pb.TagNumber(19)
+  set rawLen($core.int value) => $_setUnsignedInt32(17, value);
+  @$pb.TagNumber(19)
+  $core.bool hasRawLen() => $_has(17);
+  @$pb.TagNumber(19)
+  void clearRawLen() => $_clearField(19);
+
+  @$pb.TagNumber(20)
+  $core.int get rawChunks => $_getIZ(18);
+  @$pb.TagNumber(20)
+  set rawChunks($core.int value) => $_setUnsignedInt32(18, value);
+  @$pb.TagNumber(20)
+  $core.bool hasRawChunks() => $_has(18);
+  @$pb.TagNumber(20)
+  void clearRawChunks() => $_clearField(20);
 }
 
-/// The bar's velocity at one instant, metres per second: a rep's left edge.
-class TraceOrigin extends $pb.GeneratedMessage {
-  factory TraceOrigin({
-    $core.double? vx,
-    $core.double? vy,
-    $core.double? vz,
+/// Everything needed to read either trace's numbers.
+class RepConfig extends $pb.GeneratedMessage {
+  factory RepConfig({
+    $core.int? accelRangeG,
+    $core.int? gyroRangeDps,
+    $core.int? accelBandwidthHz,
+    $core.int? gyroBandwidthHz,
+    $core.int? sampleRateHz,
+    $core.int? detectorVersion,
   }) {
-    final result = TraceOrigin._();
-    if (vx != null) result.vx = vx;
-    if (vy != null) result.vy = vy;
-    if (vz != null) result.vz = vz;
+    final result = RepConfig._();
+    if (accelRangeG != null) result.accelRangeG = accelRangeG;
+    if (gyroRangeDps != null) result.gyroRangeDps = gyroRangeDps;
+    if (accelBandwidthHz != null) result.accelBandwidthHz = accelBandwidthHz;
+    if (gyroBandwidthHz != null) result.gyroBandwidthHz = gyroBandwidthHz;
+    if (sampleRateHz != null) result.sampleRateHz = sampleRateHz;
+    if (detectorVersion != null) result.detectorVersion = detectorVersion;
     return result;
   }
 
-  TraceOrigin._();
+  RepConfig._();
 
-  factory TraceOrigin.fromBuffer($core.List<$core.int> data,
+  factory RepConfig.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      TraceOrigin()..mergeFromBuffer(data, registry);
-  factory TraceOrigin.fromJson($core.String json,
+      RepConfig()..mergeFromBuffer(data, registry);
+  factory RepConfig.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      TraceOrigin()..mergeFromJson(json, registry);
+      RepConfig()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'TraceOrigin',
+      _omitMessageNames ? '' : 'RepConfig',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
-      createEmptyInstance: TraceOrigin.$_createMessage)
-    ..aD(1, _omitFieldNames ? '' : 'vx', fieldType: $pb.PbFieldType.OF)
-    ..aD(2, _omitFieldNames ? '' : 'vy', fieldType: $pb.PbFieldType.OF)
-    ..aD(3, _omitFieldNames ? '' : 'vz', fieldType: $pb.PbFieldType.OF)
+      createEmptyInstance: RepConfig.$_createMessage)
+    ..aI(1, _omitFieldNames ? '' : 'accelRangeG',
+        fieldType: $pb.PbFieldType.OU3)
+    ..aI(2, _omitFieldNames ? '' : 'gyroRangeDps',
+        fieldType: $pb.PbFieldType.OU3)
+    ..aI(3, _omitFieldNames ? '' : 'accelBandwidthHz',
+        fieldType: $pb.PbFieldType.OU3)
+    ..aI(4, _omitFieldNames ? '' : 'gyroBandwidthHz',
+        fieldType: $pb.PbFieldType.OU3)
+    ..aI(5, _omitFieldNames ? '' : 'sampleRateHz',
+        fieldType: $pb.PbFieldType.OU3)
+    ..aI(6, _omitFieldNames ? '' : 'detectorVersion',
+        fieldType: $pb.PbFieldType.OU3)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  TraceOrigin clone() => deepCopy();
+  RepConfig clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  TraceOrigin copyWith(void Function(TraceOrigin) updates) =>
-      super.copyWith((message) => updates(message as TraceOrigin))
-          as TraceOrigin;
+  RepConfig copyWith(void Function(RepConfig) updates) =>
+      super.copyWith((message) => updates(message as RepConfig)) as RepConfig;
 
   @$core.override
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  @$core.Deprecated('Use TraceOrigin() / TraceOrigin.new instead')
-  static TraceOrigin create() => TraceOrigin._();
-  static $pb.GeneratedMessage $_createMessage() => TraceOrigin._();
+  @$core.Deprecated('Use RepConfig() / RepConfig.new instead')
+  static RepConfig create() => RepConfig._();
+  static $pb.GeneratedMessage $_createMessage() => RepConfig._();
   @$core.override
-  TraceOrigin createEmptyInstance() => TraceOrigin._();
+  RepConfig createEmptyInstance() => RepConfig._();
   @$core.pragma('dart2js:noInline')
-  static TraceOrigin getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<TraceOrigin>(
-          TraceOrigin.$_createMessage);
-  static TraceOrigin? _defaultInstance;
+  static RepConfig getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RepConfig>(RepConfig.$_createMessage);
+  static RepConfig? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.int get accelRangeG => $_getIZ(0);
+  @$pb.TagNumber(1)
+  set accelRangeG($core.int value) => $_setUnsignedInt32(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasAccelRangeG() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearAccelRangeG() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.int get gyroRangeDps => $_getIZ(1);
+  @$pb.TagNumber(2)
+  set gyroRangeDps($core.int value) => $_setUnsignedInt32(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasGyroRangeDps() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearGyroRangeDps() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.int get accelBandwidthHz => $_getIZ(2);
+  @$pb.TagNumber(3)
+  set accelBandwidthHz($core.int value) => $_setUnsignedInt32(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasAccelBandwidthHz() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearAccelBandwidthHz() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.int get gyroBandwidthHz => $_getIZ(3);
+  @$pb.TagNumber(4)
+  set gyroBandwidthHz($core.int value) => $_setUnsignedInt32(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasGyroBandwidthHz() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearGyroBandwidthHz() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.int get sampleRateHz => $_getIZ(4);
+  @$pb.TagNumber(5)
+  set sampleRateHz($core.int value) => $_setUnsignedInt32(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasSampleRateHz() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearSampleRateHz() => $_clearField(5);
+
+  /// Which detection logic closed this rep (`DETECTOR_VERSION` in `calypso_core::rep`).
+  /// A summary recomputed by newer logic is a different summary, and this is what
+  /// says so rather than leaving two numbers to be compared as if they were one.
+  @$pb.TagNumber(6)
+  $core.int get detectorVersion => $_getIZ(5);
+  @$pb.TagNumber(6)
+  set detectorVersion($core.int value) => $_setUnsignedInt32(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasDetectorVersion() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearDetectorVersion() => $_clearField(6);
+}
+
+/// Where the filter stood when a stored window began.
+///
+/// The state is the filter's whole memory: a filter started from it and fed the
+/// window lands exactly where the one that recorded the rep did.
+class RepState extends $pb.GeneratedMessage {
+  factory RepState({
+    $core.double? vx,
+    $core.double? vy,
+    $core.double? vz,
+    $core.double? qw,
+    $core.double? qx,
+    $core.double? qy,
+    $core.double? qz,
+    $core.double? accelBiasX,
+    $core.double? accelBiasY,
+    $core.double? accelBiasZ,
+    $core.double? gyroBiasX,
+    $core.double? gyroBiasY,
+    $core.double? gyroBiasZ,
+    $core.bool? settled,
+  }) {
+    final result = RepState._();
+    if (vx != null) result.vx = vx;
+    if (vy != null) result.vy = vy;
+    if (vz != null) result.vz = vz;
+    if (qw != null) result.qw = qw;
+    if (qx != null) result.qx = qx;
+    if (qy != null) result.qy = qy;
+    if (qz != null) result.qz = qz;
+    if (accelBiasX != null) result.accelBiasX = accelBiasX;
+    if (accelBiasY != null) result.accelBiasY = accelBiasY;
+    if (accelBiasZ != null) result.accelBiasZ = accelBiasZ;
+    if (gyroBiasX != null) result.gyroBiasX = gyroBiasX;
+    if (gyroBiasY != null) result.gyroBiasY = gyroBiasY;
+    if (gyroBiasZ != null) result.gyroBiasZ = gyroBiasZ;
+    if (settled != null) result.settled = settled;
+    return result;
+  }
+
+  RepState._();
+
+  factory RepState.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      RepState()..mergeFromBuffer(data, registry);
+  factory RepState.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      RepState()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RepState',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
+      createEmptyInstance: RepState.$_createMessage)
+    ..aD(1, _omitFieldNames ? '' : 'vx', fieldType: $pb.PbFieldType.OF)
+    ..aD(2, _omitFieldNames ? '' : 'vy', fieldType: $pb.PbFieldType.OF)
+    ..aD(3, _omitFieldNames ? '' : 'vz', fieldType: $pb.PbFieldType.OF)
+    ..aD(4, _omitFieldNames ? '' : 'qw', fieldType: $pb.PbFieldType.OF)
+    ..aD(5, _omitFieldNames ? '' : 'qx', fieldType: $pb.PbFieldType.OF)
+    ..aD(6, _omitFieldNames ? '' : 'qy', fieldType: $pb.PbFieldType.OF)
+    ..aD(7, _omitFieldNames ? '' : 'qz', fieldType: $pb.PbFieldType.OF)
+    ..aD(8, _omitFieldNames ? '' : 'accelBiasX', fieldType: $pb.PbFieldType.OF)
+    ..aD(9, _omitFieldNames ? '' : 'accelBiasY', fieldType: $pb.PbFieldType.OF)
+    ..aD(10, _omitFieldNames ? '' : 'accelBiasZ', fieldType: $pb.PbFieldType.OF)
+    ..aD(11, _omitFieldNames ? '' : 'gyroBiasX', fieldType: $pb.PbFieldType.OF)
+    ..aD(12, _omitFieldNames ? '' : 'gyroBiasY', fieldType: $pb.PbFieldType.OF)
+    ..aD(13, _omitFieldNames ? '' : 'gyroBiasZ', fieldType: $pb.PbFieldType.OF)
+    ..aOB(14, _omitFieldNames ? '' : 'settled')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RepState clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RepState copyWith(void Function(RepState) updates) =>
+      super.copyWith((message) => updates(message as RepState)) as RepState;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RepState() / RepState.new instead')
+  static RepState create() => RepState._();
+  static $pb.GeneratedMessage $_createMessage() => RepState._();
+  @$core.override
+  RepState createEmptyInstance() => RepState._();
+  @$core.pragma('dart2js:noInline')
+  static RepState getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RepState>(RepState.$_createMessage);
+  static RepState? _defaultInstance;
 
   @$pb.TagNumber(1)
   $core.double get vx => $_getN(0);
@@ -571,9 +838,113 @@ class TraceOrigin extends $pb.GeneratedMessage {
   $core.bool hasVz() => $_has(2);
   @$pb.TagNumber(3)
   void clearVz() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.double get qw => $_getN(3);
+  @$pb.TagNumber(4)
+  set qw($core.double value) => $_setFloat(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasQw() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearQw() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.double get qx => $_getN(4);
+  @$pb.TagNumber(5)
+  set qx($core.double value) => $_setFloat(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasQx() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearQx() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.double get qy => $_getN(5);
+  @$pb.TagNumber(6)
+  set qy($core.double value) => $_setFloat(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasQy() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearQy() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.double get qz => $_getN(6);
+  @$pb.TagNumber(7)
+  set qz($core.double value) => $_setFloat(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasQz() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearQz() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.double get accelBiasX => $_getN(7);
+  @$pb.TagNumber(8)
+  set accelBiasX($core.double value) => $_setFloat(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasAccelBiasX() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearAccelBiasX() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.double get accelBiasY => $_getN(8);
+  @$pb.TagNumber(9)
+  set accelBiasY($core.double value) => $_setFloat(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasAccelBiasY() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearAccelBiasY() => $_clearField(9);
+
+  @$pb.TagNumber(10)
+  $core.double get accelBiasZ => $_getN(9);
+  @$pb.TagNumber(10)
+  set accelBiasZ($core.double value) => $_setFloat(9, value);
+  @$pb.TagNumber(10)
+  $core.bool hasAccelBiasZ() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearAccelBiasZ() => $_clearField(10);
+
+  @$pb.TagNumber(11)
+  $core.double get gyroBiasX => $_getN(10);
+  @$pb.TagNumber(11)
+  set gyroBiasX($core.double value) => $_setFloat(10, value);
+  @$pb.TagNumber(11)
+  $core.bool hasGyroBiasX() => $_has(10);
+  @$pb.TagNumber(11)
+  void clearGyroBiasX() => $_clearField(11);
+
+  @$pb.TagNumber(12)
+  $core.double get gyroBiasY => $_getN(11);
+  @$pb.TagNumber(12)
+  set gyroBiasY($core.double value) => $_setFloat(11, value);
+  @$pb.TagNumber(12)
+  $core.bool hasGyroBiasY() => $_has(11);
+  @$pb.TagNumber(12)
+  void clearGyroBiasY() => $_clearField(12);
+
+  @$pb.TagNumber(13)
+  $core.double get gyroBiasZ => $_getN(12);
+  @$pb.TagNumber(13)
+  set gyroBiasZ($core.double value) => $_setFloat(12, value);
+  @$pb.TagNumber(13)
+  $core.bool hasGyroBiasZ() => $_has(12);
+  @$pb.TagNumber(13)
+  void clearGyroBiasZ() => $_clearField(13);
+
+  /// Whether the bar was already at rest when this was taken. Not a convenience:
+  /// "at rest" is a fact about the last 400 ms, so a replay without it has to earn
+  /// it back and spends its first samples integrating a drift the original had
+  /// already taken out.
+  @$pb.TagNumber(14)
+  $core.bool get settled => $_getBF(13);
+  @$pb.TagNumber(14)
+  set settled($core.bool value) => $_setBool(13, value);
+  @$pb.TagNumber(14)
+  $core.bool hasSettled() => $_has(13);
+  @$pb.TagNumber(14)
+  void clearSettled() => $_clearField(14);
 }
 
-/// The IMU as the sampler last read it: the sample the rep detector is fed.
+/// The IMU as the sampler last read it: the raw sample the filter is fed, and the attitude
+/// the filter makes of it.
 ///
 /// Read, never notified, and a snapshot rather than a stream: the device republishes it
 /// ten times a second, so a client that wants to watch the sensor polls it.
@@ -589,6 +960,9 @@ class ImuState extends $pb.GeneratedMessage {
     $core.int? qx,
     $core.int? qy,
     $core.int? qz,
+    $core.int? gx,
+    $core.int? gy,
+    $core.int? gz,
   }) {
     final result = ImuState._();
     if (tUptimeMs != null) result.tUptimeMs = tUptimeMs;
@@ -599,6 +973,9 @@ class ImuState extends $pb.GeneratedMessage {
     if (qx != null) result.qx = qx;
     if (qy != null) result.qy = qy;
     if (qz != null) result.qz = qz;
+    if (gx != null) result.gx = gx;
+    if (gy != null) result.gy = gy;
+    if (gz != null) result.gz = gz;
     return result;
   }
 
@@ -623,6 +1000,9 @@ class ImuState extends $pb.GeneratedMessage {
     ..aI(6, _omitFieldNames ? '' : 'qx', fieldType: $pb.PbFieldType.OS3)
     ..aI(7, _omitFieldNames ? '' : 'qy', fieldType: $pb.PbFieldType.OS3)
     ..aI(8, _omitFieldNames ? '' : 'qz', fieldType: $pb.PbFieldType.OS3)
+    ..aI(9, _omitFieldNames ? '' : 'gx', fieldType: $pb.PbFieldType.OS3)
+    ..aI(10, _omitFieldNames ? '' : 'gy', fieldType: $pb.PbFieldType.OS3)
+    ..aI(11, _omitFieldNames ? '' : 'gz', fieldType: $pb.PbFieldType.OS3)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -657,7 +1037,8 @@ class ImuState extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearTUptimeMs() => $_clearField(1);
 
-  /// Linear acceleration (gravity removed), body frame: 0.01 m/s^2 per LSB.
+  /// Specific force, body frame: 0.01 m/s^2 per LSB, gravity included — a still sensor
+  /// reads 1 g up its own up axis. This is the raw accelerometer, not an acceleration.
   @$pb.TagNumber(2)
   $core.int get ax => $_getIZ(1);
   @$pb.TagNumber(2)
@@ -685,7 +1066,9 @@ class ImuState extends $pb.GeneratedMessage {
   @$pb.TagNumber(4)
   void clearAz() => $_clearField(4);
 
-  /// Orientation: 1/2^14 per LSB, order [w, x, y, z], as `TraceSample` carries it.
+  /// Orientation: 1/2^14 per LSB, order [w, x, y, z]. The filter's attitude, since the
+  /// sensor no longer reports one; kept in the fields it has always occupied because it is
+  /// the same quantity it always was.
   @$pb.TagNumber(5)
   $core.int get qw => $_getIZ(4);
   @$pb.TagNumber(5)
@@ -721,15 +1104,43 @@ class ImuState extends $pb.GeneratedMessage {
   $core.bool hasQz() => $_has(7);
   @$pb.TagNumber(8)
   void clearQz() => $_clearField(8);
+
+  /// Angular rate, body frame: 1/16 dps per LSB.
+  @$pb.TagNumber(9)
+  $core.int get gx => $_getIZ(8);
+  @$pb.TagNumber(9)
+  set gx($core.int value) => $_setSignedInt32(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasGx() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearGx() => $_clearField(9);
+
+  @$pb.TagNumber(10)
+  $core.int get gy => $_getIZ(9);
+  @$pb.TagNumber(10)
+  set gy($core.int value) => $_setSignedInt32(9, value);
+  @$pb.TagNumber(10)
+  $core.bool hasGy() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearGy() => $_clearField(10);
+
+  @$pb.TagNumber(11)
+  $core.int get gz => $_getIZ(10);
+  @$pb.TagNumber(11)
+  set gz($core.int value) => $_setSignedInt32(10, value);
+  @$pb.TagNumber(11)
+  $core.bool hasGz() => $_has(10);
+  @$pb.TagNumber(11)
+  void clearGz() => $_clearField(11);
 }
 
-/// A slice of a rep's trace: as stored in the log, and as sent over BLE.
+/// A slice of a rep's plotted trace: as stored in the log, and as sent over BLE.
 class TraceChunk extends $pb.GeneratedMessage {
   factory TraceChunk({
     $core.List<$core.int>? repUuid,
     $core.int? index,
     $core.int? firstTOffsetMs,
-    $core.Iterable<TraceSample>? samples,
+    $core.Iterable<TraceComputedPoint>? samples,
     $core.int? totalChunks,
   }) {
     final result = TraceChunk._();
@@ -759,8 +1170,8 @@ class TraceChunk extends $pb.GeneratedMessage {
     ..aI(2, _omitFieldNames ? '' : 'index', fieldType: $pb.PbFieldType.OU3)
     ..aI(3, _omitFieldNames ? '' : 'firstTOffsetMs',
         fieldType: $pb.PbFieldType.OU3)
-    ..pPM<TraceSample>(4, _omitFieldNames ? '' : 'samples',
-        subBuilder: TraceSample.$_createMessage)
+    ..pPM<TraceComputedPoint>(4, _omitFieldNames ? '' : 'samples',
+        subBuilder: TraceComputedPoint.$_createMessage)
     ..aI(5, _omitFieldNames ? '' : 'totalChunks',
         fieldType: $pb.PbFieldType.OU3)
     ..hasRequiredFields = false;
@@ -813,14 +1224,116 @@ class TraceChunk extends $pb.GeneratedMessage {
   void clearFirstTOffsetMs() => $_clearField(3);
 
   @$pb.TagNumber(4)
-  $pb.PbList<TraceSample> get samples => $_getList(3);
+  $pb.PbList<TraceComputedPoint> get samples => $_getList(3);
 
   /// Chunks in the stream this record belongs to. Set only when a trace is being
   /// streamed over BLE; a record stored in the log leaves it 0, because there the
-  /// summary's chunk_count already describes the trace and the device re-chunks
-  /// to fit the MTU when streaming. Without this the client cannot tell "more
-  /// chunks are coming" from "the device has forgotten this rep and will stay
-  /// silent".
+  /// summary's `computed_chunks` already describes the trace and the device
+  /// re-chunks to fit the MTU when streaming. Without this the client cannot tell
+  /// "more chunks are coming" from "the device has forgotten this rep and will
+  /// stay silent".
+  @$pb.TagNumber(5)
+  $core.int get totalChunks => $_getIZ(4);
+  @$pb.TagNumber(5)
+  set totalChunks($core.int value) => $_setUnsignedInt32(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasTotalChunks() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearTotalChunks() => $_clearField(5);
+}
+
+/// A slice of a rep's raw trace: the same framing, at full rate.
+class RawChunk extends $pb.GeneratedMessage {
+  factory RawChunk({
+    $core.List<$core.int>? repUuid,
+    $core.int? index,
+    $core.int? firstTOffsetMs,
+    $core.Iterable<TraceRawPoint>? samples,
+    $core.int? totalChunks,
+  }) {
+    final result = RawChunk._();
+    if (repUuid != null) result.repUuid = repUuid;
+    if (index != null) result.index = index;
+    if (firstTOffsetMs != null) result.firstTOffsetMs = firstTOffsetMs;
+    if (samples != null) result.samples.addAll(samples);
+    if (totalChunks != null) result.totalChunks = totalChunks;
+    return result;
+  }
+
+  RawChunk._();
+
+  factory RawChunk.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      RawChunk()..mergeFromBuffer(data, registry);
+  factory RawChunk.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      RawChunk()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RawChunk',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
+      createEmptyInstance: RawChunk.$_createMessage)
+    ..a<$core.List<$core.int>>(
+        1, _omitFieldNames ? '' : 'repUuid', $pb.PbFieldType.OY)
+    ..aI(2, _omitFieldNames ? '' : 'index', fieldType: $pb.PbFieldType.OU3)
+    ..aI(3, _omitFieldNames ? '' : 'firstTOffsetMs',
+        fieldType: $pb.PbFieldType.OU3)
+    ..pPM<TraceRawPoint>(4, _omitFieldNames ? '' : 'samples',
+        subBuilder: TraceRawPoint.$_createMessage)
+    ..aI(5, _omitFieldNames ? '' : 'totalChunks',
+        fieldType: $pb.PbFieldType.OU3)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RawChunk clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RawChunk copyWith(void Function(RawChunk) updates) =>
+      super.copyWith((message) => updates(message as RawChunk)) as RawChunk;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RawChunk() / RawChunk.new instead')
+  static RawChunk create() => RawChunk._();
+  static $pb.GeneratedMessage $_createMessage() => RawChunk._();
+  @$core.override
+  RawChunk createEmptyInstance() => RawChunk._();
+  @$core.pragma('dart2js:noInline')
+  static RawChunk getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RawChunk>(RawChunk.$_createMessage);
+  static RawChunk? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.List<$core.int> get repUuid => $_getN(0);
+  @$pb.TagNumber(1)
+  set repUuid($core.List<$core.int> value) => $_setBytes(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasRepUuid() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearRepUuid() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.int get index => $_getIZ(1);
+  @$pb.TagNumber(2)
+  set index($core.int value) => $_setUnsignedInt32(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasIndex() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearIndex() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.int get firstTOffsetMs => $_getIZ(2);
+  @$pb.TagNumber(3)
+  set firstTOffsetMs($core.int value) => $_setUnsignedInt32(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasFirstTOffsetMs() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearFirstTOffsetMs() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $pb.PbList<TraceRawPoint> get samples => $_getList(3);
+
   @$pb.TagNumber(5)
   $core.int get totalChunks => $_getIZ(4);
   @$pb.TagNumber(5)
@@ -905,21 +1418,23 @@ class BootClock extends $pb.GeneratedMessage {
   void clearEpochS() => $_clearField(1);
 }
 
-enum RepRecord_Body { summary, trace, clock, notSet }
+enum RepRecord_Body { summary, computed, clock, raw, notSet }
 
-/// One log record: a rep summary, one of its trace chunks, or a clock reading.
+/// One log record: a rep summary, one of either trace's chunks, or a clock reading.
 /// Keeping them under one wire type makes the log a single self-describing
 /// stream.
 class RepRecord extends $pb.GeneratedMessage {
   factory RepRecord({
     RepSummary? summary,
-    TraceChunk? trace,
+    TraceChunk? computed,
     BootClock? clock,
+    RawChunk? raw,
   }) {
     final result = RepRecord._();
     if (summary != null) result.summary = summary;
-    if (trace != null) result.trace = trace;
+    if (computed != null) result.computed = computed;
     if (clock != null) result.clock = clock;
+    if (raw != null) result.raw = raw;
     return result;
   }
 
@@ -934,21 +1449,24 @@ class RepRecord extends $pb.GeneratedMessage {
 
   static const $core.Map<$core.int, RepRecord_Body> _RepRecord_BodyByTag = {
     1: RepRecord_Body.summary,
-    2: RepRecord_Body.trace,
+    2: RepRecord_Body.computed,
     3: RepRecord_Body.clock,
+    4: RepRecord_Body.raw,
     0: RepRecord_Body.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RepRecord',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
       createEmptyInstance: RepRecord.$_createMessage)
-    ..oo(0, [1, 2, 3])
+    ..oo(0, [1, 2, 3, 4])
     ..aOM<RepSummary>(1, _omitFieldNames ? '' : 'summary',
         subBuilder: RepSummary.$_createMessage)
-    ..aOM<TraceChunk>(2, _omitFieldNames ? '' : 'trace',
+    ..aOM<TraceChunk>(2, _omitFieldNames ? '' : 'computed',
         subBuilder: TraceChunk.$_createMessage)
     ..aOM<BootClock>(3, _omitFieldNames ? '' : 'clock',
         subBuilder: BootClock.$_createMessage)
+    ..aOM<RawChunk>(4, _omitFieldNames ? '' : 'raw',
+        subBuilder: RawChunk.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -974,10 +1492,12 @@ class RepRecord extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
   @$pb.TagNumber(3)
+  @$pb.TagNumber(4)
   RepRecord_Body whichBody() => _RepRecord_BodyByTag[$_whichOneof(0)]!;
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
   @$pb.TagNumber(3)
+  @$pb.TagNumber(4)
   void clearBody() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
@@ -992,15 +1512,15 @@ class RepRecord extends $pb.GeneratedMessage {
   RepSummary ensureSummary() => $_ensure(0);
 
   @$pb.TagNumber(2)
-  TraceChunk get trace => $_getN(1);
+  TraceChunk get computed => $_getN(1);
   @$pb.TagNumber(2)
-  set trace(TraceChunk value) => $_setField(2, value);
+  set computed(TraceChunk value) => $_setField(2, value);
   @$pb.TagNumber(2)
-  $core.bool hasTrace() => $_has(1);
+  $core.bool hasComputed() => $_has(1);
   @$pb.TagNumber(2)
-  void clearTrace() => $_clearField(2);
+  void clearComputed() => $_clearField(2);
   @$pb.TagNumber(2)
-  TraceChunk ensureTrace() => $_ensure(1);
+  TraceChunk ensureComputed() => $_ensure(1);
 
   @$pb.TagNumber(3)
   BootClock get clock => $_getN(2);
@@ -1012,6 +1532,17 @@ class RepRecord extends $pb.GeneratedMessage {
   void clearClock() => $_clearField(3);
   @$pb.TagNumber(3)
   BootClock ensureClock() => $_ensure(2);
+
+  @$pb.TagNumber(4)
+  RawChunk get raw => $_getN(3);
+  @$pb.TagNumber(4)
+  set raw(RawChunk value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasRaw() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearRaw() => $_clearField(4);
+  @$pb.TagNumber(4)
+  RawChunk ensureRaw() => $_ensure(3);
 }
 
 /// Sent by the app to request a rep's trace. `chunk_index` is ignored unless
@@ -1021,11 +1552,13 @@ class TraceRequest extends $pb.GeneratedMessage {
     $core.List<$core.int>? repUuid,
     $core.bool? allChunks,
     $core.int? chunkIndex,
+    TraceKind? kind,
   }) {
     final result = TraceRequest._();
     if (repUuid != null) result.repUuid = repUuid;
     if (allChunks != null) result.allChunks = allChunks;
     if (chunkIndex != null) result.chunkIndex = chunkIndex;
+    if (kind != null) result.kind = kind;
     return result;
   }
 
@@ -1046,6 +1579,8 @@ class TraceRequest extends $pb.GeneratedMessage {
         1, _omitFieldNames ? '' : 'repUuid', $pb.PbFieldType.OY)
     ..aOB(2, _omitFieldNames ? '' : 'allChunks')
     ..aI(3, _omitFieldNames ? '' : 'chunkIndex', fieldType: $pb.PbFieldType.OU3)
+    ..aE<TraceKind>(4, _omitFieldNames ? '' : 'kind',
+        enumValues: TraceKind.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1096,17 +1631,95 @@ class TraceRequest extends $pb.GeneratedMessage {
   $core.bool hasChunkIndex() => $_has(2);
   @$pb.TagNumber(3)
   void clearChunkIndex() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  TraceKind get kind => $_getN(3);
+  @$pb.TagNumber(4)
+  set kind(TraceKind value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasKind() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearKind() => $_clearField(4);
 }
 
-enum SyncRequest_Body { trace, notSet }
+/// Turn recording of raw traces on or off, until the device restarts.
+///
+/// A dev switch, not a setting. A raw trace is the largest thing in the log — a
+/// full-rate nine-second rep is ~19 KB against the plotted trace's ~5 — and it
+/// exists so a session can be replayed offline, not so a release session gets
+/// bigger. It lives here rather than on a characteristic of its own because it is
+/// an operation rather than a value the app reads back: the client that sets it
+/// knows which way it set it, and the device forgets at every boot.
+///
+/// **Off at every boot and not persisted.** A switch left on by accident fills the
+/// log at three times the rate for as long as nobody notices; the cost of
+/// remembering it would be a reflash to turn it off.
+class DevMode extends $pb.GeneratedMessage {
+  factory DevMode({
+    $core.bool? enabled,
+  }) {
+    final result = DevMode._();
+    if (enabled != null) result.enabled = enabled;
+    return result;
+  }
+
+  DevMode._();
+
+  factory DevMode.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      DevMode()..mergeFromBuffer(data, registry);
+  factory DevMode.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      DevMode()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'DevMode',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
+      createEmptyInstance: DevMode.$_createMessage)
+    ..aOB(1, _omitFieldNames ? '' : 'enabled')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  DevMode clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  DevMode copyWith(void Function(DevMode) updates) =>
+      super.copyWith((message) => updates(message as DevMode)) as DevMode;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use DevMode() / DevMode.new instead')
+  static DevMode create() => DevMode._();
+  static $pb.GeneratedMessage $_createMessage() => DevMode._();
+  @$core.override
+  DevMode createEmptyInstance() => DevMode._();
+  @$core.pragma('dart2js:noInline')
+  static DevMode getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<DevMode>(DevMode.$_createMessage);
+  static DevMode? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.bool get enabled => $_getBF(0);
+  @$pb.TagNumber(1)
+  set enabled($core.bool value) => $_setBool(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasEnabled() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearEnabled() => $_clearField(1);
+}
+
+enum SyncRequest_Body { trace, devMode, notSet }
 
 /// Everything sent app -> device on the sync service.
 class SyncRequest extends $pb.GeneratedMessage {
   factory SyncRequest({
     TraceRequest? trace,
+    DevMode? devMode,
   }) {
     final result = SyncRequest._();
     if (trace != null) result.trace = trace;
+    if (devMode != null) result.devMode = devMode;
     return result;
   }
 
@@ -1121,15 +1734,18 @@ class SyncRequest extends $pb.GeneratedMessage {
 
   static const $core.Map<$core.int, SyncRequest_Body> _SyncRequest_BodyByTag = {
     1: SyncRequest_Body.trace,
+    2: SyncRequest_Body.devMode,
     0: SyncRequest_Body.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SyncRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
       createEmptyInstance: SyncRequest.$_createMessage)
-    ..oo(0, [1])
+    ..oo(0, [1, 2])
     ..aOM<TraceRequest>(1, _omitFieldNames ? '' : 'trace',
         subBuilder: TraceRequest.$_createMessage)
+    ..aOM<DevMode>(2, _omitFieldNames ? '' : 'devMode',
+        subBuilder: DevMode.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1155,8 +1771,10 @@ class SyncRequest extends $pb.GeneratedMessage {
   static SyncRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
+  @$pb.TagNumber(2)
   SyncRequest_Body whichBody() => _SyncRequest_BodyByTag[$_whichOneof(0)]!;
   @$pb.TagNumber(1)
+  @$pb.TagNumber(2)
   void clearBody() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
@@ -1169,30 +1787,39 @@ class SyncRequest extends $pb.GeneratedMessage {
   void clearTrace() => $_clearField(1);
   @$pb.TagNumber(1)
   TraceRequest ensureTrace() => $_ensure(0);
+
+  @$pb.TagNumber(2)
+  DevMode get devMode => $_getN(1);
+  @$pb.TagNumber(2)
+  set devMode(DevMode value) => $_setField(2, value);
+  @$pb.TagNumber(2)
+  $core.bool hasDevMode() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearDevMode() => $_clearField(2);
+  @$pb.TagNumber(2)
+  DevMode ensureDevMode() => $_ensure(1);
 }
 
-enum SyncMessage_Body { summary, trace, status, notSet }
+enum SyncMessage_Body { summary, computed, status, raw, notSet }
 
 /// Everything sent device -> app on the sync service, on the pipe.
 ///
 /// A response and a push look alike here, and the client tells them apart by the
-/// body: a `trace` belongs to the `TraceRequest` that asked for it (its chunks
-/// carry the rep's UUID), while `summary` arrives because the client subscribed,
-/// not because it asked.
-///
-/// Calibration is **not** here: it is a state, and the app reads it off its own
-/// characteristic (`proto/calypso_gatt.proto`) when its UI wants it, rather than
-/// being sent it at the device's choice of moment.
+/// body: `computed` or `raw` belongs to the `TraceRequest` that asked for it (its
+/// chunks carry the rep's UUID and the kind that was asked for), while `summary`
+/// arrives because the client subscribed, not because it asked.
 class SyncMessage extends $pb.GeneratedMessage {
   factory SyncMessage({
     RepSummary? summary,
-    TraceChunk? trace,
+    TraceChunk? computed,
     SyncStatus? status,
+    RawChunk? raw,
   }) {
     final result = SyncMessage._();
     if (summary != null) result.summary = summary;
-    if (trace != null) result.trace = trace;
+    if (computed != null) result.computed = computed;
     if (status != null) result.status = status;
+    if (raw != null) result.raw = raw;
     return result;
   }
 
@@ -1207,21 +1834,24 @@ class SyncMessage extends $pb.GeneratedMessage {
 
   static const $core.Map<$core.int, SyncMessage_Body> _SyncMessage_BodyByTag = {
     1: SyncMessage_Body.summary,
-    2: SyncMessage_Body.trace,
+    2: SyncMessage_Body.computed,
     3: SyncMessage_Body.status,
+    4: SyncMessage_Body.raw,
     0: SyncMessage_Body.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SyncMessage',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
       createEmptyInstance: SyncMessage.$_createMessage)
-    ..oo(0, [1, 2, 3])
+    ..oo(0, [1, 2, 3, 4])
     ..aOM<RepSummary>(1, _omitFieldNames ? '' : 'summary',
         subBuilder: RepSummary.$_createMessage)
-    ..aOM<TraceChunk>(2, _omitFieldNames ? '' : 'trace',
+    ..aOM<TraceChunk>(2, _omitFieldNames ? '' : 'computed',
         subBuilder: TraceChunk.$_createMessage)
     ..aOM<SyncStatus>(3, _omitFieldNames ? '' : 'status',
         subBuilder: SyncStatus.$_createMessage)
+    ..aOM<RawChunk>(4, _omitFieldNames ? '' : 'raw',
+        subBuilder: RawChunk.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1249,10 +1879,12 @@ class SyncMessage extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
   @$pb.TagNumber(3)
+  @$pb.TagNumber(4)
   SyncMessage_Body whichBody() => _SyncMessage_BodyByTag[$_whichOneof(0)]!;
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
   @$pb.TagNumber(3)
+  @$pb.TagNumber(4)
   void clearBody() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
@@ -1267,15 +1899,15 @@ class SyncMessage extends $pb.GeneratedMessage {
   RepSummary ensureSummary() => $_ensure(0);
 
   @$pb.TagNumber(2)
-  TraceChunk get trace => $_getN(1);
+  TraceChunk get computed => $_getN(1);
   @$pb.TagNumber(2)
-  set trace(TraceChunk value) => $_setField(2, value);
+  set computed(TraceChunk value) => $_setField(2, value);
   @$pb.TagNumber(2)
-  $core.bool hasTrace() => $_has(1);
+  $core.bool hasComputed() => $_has(1);
   @$pb.TagNumber(2)
-  void clearTrace() => $_clearField(2);
+  void clearComputed() => $_clearField(2);
   @$pb.TagNumber(2)
-  TraceChunk ensureTrace() => $_ensure(1);
+  TraceChunk ensureComputed() => $_ensure(1);
 
   @$pb.TagNumber(3)
   SyncStatus get status => $_getN(2);
@@ -1287,135 +1919,17 @@ class SyncMessage extends $pb.GeneratedMessage {
   void clearStatus() => $_clearField(3);
   @$pb.TagNumber(3)
   SyncStatus ensureStatus() => $_ensure(2);
-}
-
-/// The IMU's calibration state, as the BNO055 reports it in CALIB_STAT (0x35):
-/// one 0..3 level per sensor, 3 meaning fully calibrated.
-///
-/// The device has no display, so this is what the app turns into a hint. **Rep
-/// tracking needs `accel` and `gyro` at 3**, and the device will not record a rep
-/// until they are — an uncalibrated IMU reports drift as motion, so a stored trace
-/// would be fiction. In the meantime BLE stays up: the app can connect, watch the
-/// levels climb and tell the user what to do.
-///
-/// `sys` is reported for a console, and is **not** part of readiness: it is the
-/// chip's aggregate, it counts the magnetometer, and in IMU mode it sits at 0 for
-/// ever however well the other two are calibrated. Gating on it is a device that
-/// never records a rep (see `calypso_core::calibration`).
-///
-/// `mag` is reported for completeness only. The BNO055 runs in IMU mode (no
-/// magnetometer, which is unreliable next to a barbell), where the magnetometer
-/// never calibrates, so it is never the thing being waited for and the app must
-/// not send the user chasing it.
-///
-/// Travels as the value of the `Calibration` characteristic
-/// (`proto/calypso_gatt.proto`), which the client reads: how often the levels are
-/// looked at is the app's UI's business, not the device's.
-class CalibrationStatus extends $pb.GeneratedMessage {
-  factory CalibrationStatus({
-    $core.int? sys,
-    $core.int? accel,
-    $core.int? gyro,
-    $core.int? mag,
-    $core.bool? ready,
-  }) {
-    final result = CalibrationStatus._();
-    if (sys != null) result.sys = sys;
-    if (accel != null) result.accel = accel;
-    if (gyro != null) result.gyro = gyro;
-    if (mag != null) result.mag = mag;
-    if (ready != null) result.ready = ready;
-    return result;
-  }
-
-  CalibrationStatus._();
-
-  factory CalibrationStatus.fromBuffer($core.List<$core.int> data,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      CalibrationStatus()..mergeFromBuffer(data, registry);
-  factory CalibrationStatus.fromJson($core.String json,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      CalibrationStatus()..mergeFromJson(json, registry);
-
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'CalibrationStatus',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
-      createEmptyInstance: CalibrationStatus.$_createMessage)
-    ..aI(1, _omitFieldNames ? '' : 'sys', fieldType: $pb.PbFieldType.OU3)
-    ..aI(2, _omitFieldNames ? '' : 'accel', fieldType: $pb.PbFieldType.OU3)
-    ..aI(3, _omitFieldNames ? '' : 'gyro', fieldType: $pb.PbFieldType.OU3)
-    ..aI(4, _omitFieldNames ? '' : 'mag', fieldType: $pb.PbFieldType.OU3)
-    ..aOB(5, _omitFieldNames ? '' : 'ready')
-    ..hasRequiredFields = false;
-
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CalibrationStatus clone() => deepCopy();
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CalibrationStatus copyWith(void Function(CalibrationStatus) updates) =>
-      super.copyWith((message) => updates(message as CalibrationStatus))
-          as CalibrationStatus;
-
-  @$core.override
-  $pb.BuilderInfo get info_ => _i;
-
-  @$core.pragma('dart2js:noInline')
-  @$core.Deprecated('Use CalibrationStatus() / CalibrationStatus.new instead')
-  static CalibrationStatus create() => CalibrationStatus._();
-  static $pb.GeneratedMessage $_createMessage() => CalibrationStatus._();
-  @$core.override
-  CalibrationStatus createEmptyInstance() => CalibrationStatus._();
-  @$core.pragma('dart2js:noInline')
-  static CalibrationStatus getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<CalibrationStatus>(
-          CalibrationStatus.$_createMessage);
-  static CalibrationStatus? _defaultInstance;
-
-  @$pb.TagNumber(1)
-  $core.int get sys => $_getIZ(0);
-  @$pb.TagNumber(1)
-  set sys($core.int value) => $_setUnsignedInt32(0, value);
-  @$pb.TagNumber(1)
-  $core.bool hasSys() => $_has(0);
-  @$pb.TagNumber(1)
-  void clearSys() => $_clearField(1);
-
-  @$pb.TagNumber(2)
-  $core.int get accel => $_getIZ(1);
-  @$pb.TagNumber(2)
-  set accel($core.int value) => $_setUnsignedInt32(1, value);
-  @$pb.TagNumber(2)
-  $core.bool hasAccel() => $_has(1);
-  @$pb.TagNumber(2)
-  void clearAccel() => $_clearField(2);
-
-  @$pb.TagNumber(3)
-  $core.int get gyro => $_getIZ(2);
-  @$pb.TagNumber(3)
-  set gyro($core.int value) => $_setUnsignedInt32(2, value);
-  @$pb.TagNumber(3)
-  $core.bool hasGyro() => $_has(2);
-  @$pb.TagNumber(3)
-  void clearGyro() => $_clearField(3);
 
   @$pb.TagNumber(4)
-  $core.int get mag => $_getIZ(3);
+  RawChunk get raw => $_getN(3);
   @$pb.TagNumber(4)
-  set mag($core.int value) => $_setUnsignedInt32(3, value);
+  set raw(RawChunk value) => $_setField(4, value);
   @$pb.TagNumber(4)
-  $core.bool hasMag() => $_has(3);
+  $core.bool hasRaw() => $_has(3);
   @$pb.TagNumber(4)
-  void clearMag() => $_clearField(4);
-
-  /// True when the device will record reps. Sent rather than derived so the app
-  /// cannot disagree with the device about whether a rep is being recorded.
-  @$pb.TagNumber(5)
-  $core.bool get ready => $_getBF(4);
-  @$pb.TagNumber(5)
-  set ready($core.bool value) => $_setBool(4, value);
-  @$pb.TagNumber(5)
-  $core.bool hasReady() => $_has(4);
-  @$pb.TagNumber(5)
-  void clearReady() => $_clearField(5);
+  void clearRaw() => $_clearField(4);
+  @$pb.TagNumber(4)
+  RawChunk ensureRaw() => $_ensure(3);
 }
 
 class SyncStatus extends $pb.GeneratedMessage {
@@ -1501,6 +2015,7 @@ class SyncStatus extends $pb.GeneratedMessage {
   @$pb.TagNumber(3)
   void clearNewestRepUuid() => $_clearField(3);
 
+  /// A requested trace has been overwritten by the ring, whichever kind was asked for.
   @$pb.TagNumber(4)
   $core.bool get traceUnavailable => $_getBF(3);
   @$pb.TagNumber(4)

@@ -27,7 +27,6 @@ class FakeBleLink implements BleLink {
     DiscoveredService(SyncClient.serviceUuid, [
       SyncClient.messagesUuid,
       SyncClient.requestsUuid,
-      SyncClient.calibrationUuid,
       SyncClient.reportsUuid,
       SyncClient.timeUuid,
       SyncClient.imuUuid,

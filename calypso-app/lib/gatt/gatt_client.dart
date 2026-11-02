@@ -54,9 +54,6 @@ class SyncClient {
   /// `calypso.Sync`.
   static const String serviceUuid = '0000ca20-b0cd-11ec-871f-d45ddf138840';
 
-  /// `calypso.Sync.Calibration` -- read, calypso.CalibrationStatus.
-  static const String calibrationUuid = '0000ca24-b0cd-11ec-871f-d45ddf138840';
-
   /// `calypso.Sync.Imu` -- read, calypso.ImuState.
   static const String imuUuid = '0000ca26-b0cd-11ec-871f-d45ddf138840';
 
@@ -71,12 +68,6 @@ class SyncClient {
 
   /// `calypso.Sync.Messages` -- notify, calypso.SyncMessage.
   static const String messagesUuid = '0000ca21-b0cd-11ec-871f-d45ddf138840';
-
-  /// Read `Calibration` once.
-  Future<pb.CalibrationStatus> readCalibration() async {
-    final bytes = await _link.read(serviceUuid, calibrationUuid);
-    return pb.CalibrationStatus.fromBuffer(bytes);
-  }
 
   /// Read `Imu` once.
   Future<pb.ImuState> readImu() async {

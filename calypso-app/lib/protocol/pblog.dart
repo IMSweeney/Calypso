@@ -43,10 +43,14 @@ String describeSyncMessage(SyncMessage message) {
   switch (message.whichBody()) {
     case SyncMessage_Body.summary:
       return 'summary rep=${uuidFromBytes(message.summary.repUuid) ?? '?'}';
-    case SyncMessage_Body.trace:
-      final chunk = message.trace;
+    case SyncMessage_Body.computed:
+      final chunk = message.computed;
       final rep = uuidFromBytes(chunk.repUuid) ?? '?';
       return 'trace rep=$rep chunk=${chunk.index + 1}/${chunk.totalChunks}';
+    case SyncMessage_Body.raw:
+      final chunk = message.raw;
+      final rep = uuidFromBytes(chunk.repUuid) ?? '?';
+      return 'raw rep=$rep chunk=${chunk.index + 1}/${chunk.totalChunks}';
     case SyncMessage_Body.status:
       return 'status reps=${message.status.repCount}';
     case SyncMessage_Body.notSet:
@@ -54,21 +58,20 @@ String describeSyncMessage(SyncMessage message) {
   }
 }
 
-/// What a calibration status says, for a log line.
-/// The same words [`describeSyncMessage`] used when the levels rode a message body: they are a read now, and a log should not care which characteristic carried them.
-String describeCalibrationStatus(CalibrationStatus status) =>
-    'calibration sys=${status.sys} accel=${status.accel} '
-    'gyro=${status.gyro} mag=${status.mag} ready=${status.ready}';
-
-/// What the IMU's own values say, for a log line: the sample the detector is fed, in the units a
-/// trace carries it. Acceleration is m/s² (0.01 per LSB), the quaternion is unit (1/2^14 per LSB).
+/// What the IMU's own values say, for a log line: the raw sample the filter is fed, and the attitude it makes
+/// of it. Acceleration is specific force in m/s² (0.01 per LSB, gravity included), the rate is degrees per second
+/// (1/16 per LSB), and the quaternion is unit (1/2^14 per LSB).
 String describeImuState(ImuState state) {
   const a = 100.0;
+  const g = 16.0;
   const q = 16384.0;
   return 'imu t=${state.tUptimeMs} ms '
-      'a=(${(state.ax / a).toStringAsFixed(2)}, '
+      'f=(${(state.ax / a).toStringAsFixed(2)}, '
       '${(state.ay / a).toStringAsFixed(2)}, '
       '${(state.az / a).toStringAsFixed(2)}) m/s^2 '
+      'w=(${(state.gx / g).toStringAsFixed(1)}, '
+      '${(state.gy / g).toStringAsFixed(1)}, '
+      '${(state.gz / g).toStringAsFixed(1)}) dps '
       'q=(${(state.qw / q).toStringAsFixed(3)}, '
       '${(state.qx / q).toStringAsFixed(3)}, '
       '${(state.qy / q).toStringAsFixed(3)}, '
@@ -106,11 +109,12 @@ List<RepSummary> summariesOf(List<RepRecord> records) {
 
 String? chunkUuid(TraceChunk chunk) => uuidFromBytes(chunk.repUuid);
 
+/// The plotted chunks a dump holds for one rep, in order.
 List<TraceChunk> traceChunksFor(List<RepRecord> records, String uuid) {
   final chunks =
       records
-          .where((r) => r.hasTrace() && chunkUuid(r.trace) == uuid)
-          .map((r) => r.trace)
+          .where((r) => r.hasComputed() && chunkUuid(r.computed) == uuid)
+          .map((r) => r.computed)
           .toList()
         ..sort((a, b) => a.index.compareTo(b.index));
   return chunks;

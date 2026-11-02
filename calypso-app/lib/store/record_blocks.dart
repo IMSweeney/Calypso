@@ -16,7 +16,10 @@ Uint8List frameRecord(List<int> bytes) {
   return out.toBytes();
 }
 
-Uint8List buildRepBlock(pb.RepSummary summary, List<pb.TraceSample> trace) {
+Uint8List buildRepBlock(
+  pb.RepSummary summary,
+  List<pb.TraceComputedPoint> trace,
+) {
   final records = BytesBuilder();
   records.add(frameRecord(pb.RepRecord(summary: summary).writeToBuffer()));
 
@@ -28,7 +31,7 @@ Uint8List buildRepBlock(pb.RepSummary summary, List<pb.TraceSample> trace) {
     records.add(
       frameRecord(
         pb.RepRecord(
-          trace: pb.TraceChunk(
+          computed: pb.TraceChunk(
             repUuid: summary.repUuid,
             index: start ~/ pbTraceChunkSamples,
             firstTOffsetMs: slice.first.tOffsetMs,
@@ -46,7 +49,7 @@ Future<Map<String, Uint8List>> recordBlocksFrom(RepTransport transport) async {
   final blocks = <String, Uint8List>{};
   for (final summary in await transport.summaries()) {
     final uuid = summary.uuid!;
-    List<pb.TraceSample> trace;
+    List<pb.TraceComputedPoint> trace;
     try {
       trace = await transport.trace(uuid);
     } on TraceUnavailableException {

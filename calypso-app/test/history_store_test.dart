@@ -31,8 +31,8 @@ pb.RepRecord summaryRecord(
 }) => pb.RepRecord(
   summary: pb.RepSummary(
     repUuid: uuidToBytes(uuid)!,
-    traceLen: pointCount,
-    chunkCount: (pointCount / 4).ceil(),
+    computedLen: pointCount,
+    computedChunks: (pointCount / 4).ceil(),
     tUnixMs: Int64(unixMs),
   ),
 );
@@ -42,7 +42,7 @@ Uint8List block(String uuid, {int pointCount = 10, int unixMs = 0}) {
   return Uint8List.fromList([
     ..._frameFor(summaryRecord(uuid, pointCount: pointCount, unixMs: unixMs)),
     for (final chunk in chunksFor(uuid, points))
-      ..._frameFor(pb.RepRecord(trace: chunk)),
+      ..._frameFor(pb.RepRecord(computed: chunk)),
   ]);
 }
 
@@ -176,14 +176,14 @@ void main() {
       final records = <int>[
         ..._frameFor(pb.RepRecord(summary: summary)),
         for (final chunk in chunksFor(summary.uuid!, points))
-          ..._frameFor(pb.RepRecord(trace: chunk)),
+          ..._frameFor(pb.RepRecord(computed: chunk)),
       ];
       await store.appendNew({summary.uuid!: Uint8List.fromList(records)});
     }
 
     expect(store.reps.length, 3);
     final trace = await store.trace(summaries[1].uuid!);
-    expect(trace.length, summaries[1].traceLen);
+    expect(trace.length, summaries[1].computedLen);
     expect(
       store.reps.first.recordedAt,
       isNotNull,

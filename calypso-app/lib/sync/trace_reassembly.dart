@@ -8,7 +8,7 @@ class TraceAssembler {
 
   final String uuid;
 
-  final Map<int, List<pb.TraceSample>> _chunks = {};
+  final Map<int, List<pb.TraceComputedPoint>> _chunks = {};
 
   bool add(pb.TraceChunk chunk) {
     if (uuidFromBytes(chunk.repUuid) != uuid) return false;
@@ -31,7 +31,7 @@ class TraceAssembler {
     ];
   }
 
-  List<pb.TraceSample> assemble() => [
+  List<pb.TraceComputedPoint> assemble() => [
     for (final index in indices) ...?_chunks[index],
   ];
 

@@ -14,6 +14,26 @@ import 'dart:core' as $core;
 
 import 'package:protobuf/protobuf.dart' as $pb;
 
+/// Which of a rep's two traces a request is about.
+class TraceKind extends $pb.ProtobufEnum {
+  static const TraceKind TRACE_KIND_COMPUTED =
+      TraceKind._(0, _omitEnumNames ? '' : 'TRACE_KIND_COMPUTED');
+  static const TraceKind TRACE_KIND_RAW =
+      TraceKind._(1, _omitEnumNames ? '' : 'TRACE_KIND_RAW');
+
+  static const $core.List<TraceKind> values = <TraceKind>[
+    TRACE_KIND_COMPUTED,
+    TRACE_KIND_RAW,
+  ];
+
+  static final $core.List<TraceKind?> _byValue =
+      $pb.ProtobufEnum.$_initByValueList(values, 1);
+  static TraceKind? valueOf($core.int value) =>
+      value < 0 || value >= _byValue.length ? null : _byValue[value];
+
+  const TraceKind._(super.value, super.name);
+}
+
 /// The classes of failure that reach the phone. Each is something a person
 /// holding the phone can act on, or can at least be told about in a sentence;
 /// the firmware's own log has the rest.

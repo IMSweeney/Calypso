@@ -45,7 +45,7 @@ abstract class RepArchive {
 
   Future<int> appendNew(Map<String, Uint8List> recordBlocks);
 
-  Future<List<pb.TraceSample>> trace(String uuid);
+  Future<List<pb.TraceComputedPoint>> trace(String uuid);
 }
 
 class BlockScan {
@@ -121,7 +121,7 @@ BlockScan scanBlocks(Uint8List bytes) {
       blockLength = 0;
       blockHasTrace = false;
     }
-    if (record.hasTrace()) blockHasTrace = true;
+    if (record.hasComputed()) blockHasTrace = true;
     blockLength += 4 + length;
     pos = start + length;
   }
@@ -139,7 +139,10 @@ BlockScan scanBlocks(Uint8List bytes) {
   return BlockScan(reps, truncated, bytes.length);
 }
 
-List<pb.TraceSample> assembleTraceFromBlock(Uint8List block, String uuid) {
+List<pb.TraceComputedPoint> assembleTraceFromBlock(
+  Uint8List block,
+  String uuid,
+) {
   final dump = readDump(block);
   final chunks = traceChunksFor(dump.records, uuid);
   if (chunks.isEmpty) return const [];

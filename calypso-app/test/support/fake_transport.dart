@@ -3,7 +3,6 @@ library;
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:calypso/model/rep.dart';
 import 'package:calypso/model/uuid.dart';
 
 import 'test_uuid.dart';
@@ -16,7 +15,7 @@ pb.RepSummary summary(
   int durationMs = 1400,
   double rom = 0.4,
   double peakVelocity = 0.7,
-  int traceLen = 140,
+  int computedLen = 140,
   int chunkCount = 3,
   bool decimated = false,
   bool calibrated = true,
@@ -33,22 +32,17 @@ pb.RepSummary summary(
   rollMaxDeg: 1,
   pitchMinDeg: -2,
   pitchMaxDeg: 2,
-  traceLen: traceLen,
-  chunkCount: chunkCount,
-  flags:
-      (decimated ? repFlagDecimated : 0) | (calibrated ? repFlagCalibrated : 0),
+  computedLen: computedLen,
+  computedChunks: chunkCount,
 );
 
-List<pb.TraceSample> tracePoints(int count, {int startMs = 0}) => [
+List<pb.TraceComputedPoint> tracePoints(int count, {int startMs = 0}) => [
   for (var i = 0; i < count; i++)
-    pb.TraceSample(
+    pb.TraceComputedPoint(
       tOffsetMs: startMs + i * 10,
       px: 0,
       py: 0,
       pz: -0.4 * i / (count == 1 ? 1 : count - 1),
-      ax: 0,
-      ay: 0,
-      az: -100,
       qw: 16384,
       qx: 0,
       qy: 0,
@@ -58,7 +52,7 @@ List<pb.TraceSample> tracePoints(int count, {int startMs = 0}) => [
 
 List<pb.TraceChunk> chunksFor(
   String uuid,
-  List<pb.TraceSample> points, {
+  List<pb.TraceComputedPoint> points, {
   int perChunk = 4,
 }) {
   final chunks = <pb.TraceChunk>[];
@@ -76,14 +70,11 @@ List<pb.TraceChunk> chunksFor(
         )
         ..samples.addAll([
           for (final p in slice)
-            pb.TraceSample(
+            pb.TraceComputedPoint(
               tOffsetMs: p.tOffsetMs,
               px: p.px,
               py: p.py,
               pz: p.pz,
-              ax: p.ax,
-              ay: p.ay,
-              az: p.az,
               qw: p.qw,
               qx: p.qx,
               qy: p.qy,
@@ -98,14 +89,14 @@ List<pb.TraceChunk> chunksFor(
 class FakeTransport implements RepTransport {
   FakeTransport({
     List<pb.RepSummary>? stored,
-    Map<int, List<pb.TraceSample>>? tracePoints,
+    Map<int, List<pb.TraceComputedPoint>>? tracePoints,
     Set<int>? tracesMissing,
     this.traceDelay = Duration.zero,
     this.failSummaries = false,
   }) : _stored = stored ?? [],
        _points = {
          for (final entry
-             in (tracePoints ?? <int, List<pb.TraceSample>>{}).entries)
+             in (tracePoints ?? <int, List<pb.TraceComputedPoint>>{}).entries)
            testUuid(entry.key): entry.value,
        },
        _missing = {
@@ -114,7 +105,7 @@ class FakeTransport implements RepTransport {
 
   List<pb.RepSummary> _stored;
 
-  final Map<String, List<pb.TraceSample>> _points;
+  final Map<String, List<pb.TraceComputedPoint>> _points;
 
   final Set<String> _missing;
 
@@ -145,7 +136,7 @@ class FakeTransport implements RepTransport {
   Stream<pb.RepSummary> watchSummaries() => _live.stream;
 
   @override
-  Future<List<pb.TraceSample>> trace(String uuid) async {
+  Future<List<pb.TraceComputedPoint>> trace(String uuid) async {
     traceCalls++;
     if (traceDelay > Duration.zero) await Future<void>.delayed(traceDelay);
     if (_missing.contains(uuid)) {
@@ -162,7 +153,7 @@ class FakeTransport implements RepTransport {
   @override
   Future<void> close() async => _live.close();
 
-  static List<pb.TraceSample> reassemble(
+  static List<pb.TraceComputedPoint> reassemble(
     String uuid,
     Iterable<pb.TraceChunk> chunks,
   ) {

@@ -30,7 +30,7 @@ Future<int> archiveRep(
 ) async {
   final uuid = summary.uuid!;
   if (archive.contains(uuid)) return 0;
-  List<pb.TraceSample> trace;
+  List<pb.TraceComputedPoint> trace;
   try {
     trace = await source.trace(uuid);
   } on TraceUnavailableException {

@@ -10,7 +10,7 @@ import '../protocol/calypso.pb.dart' as pb;
 class PlotPath {
   PlotPath._(this.points, this.speeds, this.speedMax, this.bounds);
 
-  final List<pb.TraceSample> points;
+  final List<pb.TraceComputedPoint> points;
   final List<double> speeds;
   final double speedMax;
   final AxisBounds bounds;
@@ -28,7 +28,7 @@ class PlotPath {
     return total;
   }
 
-  static PlotPath from(List<pb.TraceSample> all, {int maxPoints = 512}) {
+  static PlotPath from(List<pb.TraceComputedPoint> all, {int maxPoints = 512}) {
     if (all.isEmpty) {
       return PlotPath._(const [], const [], 0, AxisBounds.of(const []));
     }
@@ -47,8 +47,8 @@ class PlotPath {
     return PlotPath._(points, speeds, speedMax, AxisBounds.of(points));
   }
 
-  static List<pb.TraceSample> _decimate(
-    List<pb.TraceSample> all,
+  static List<pb.TraceComputedPoint> _decimate(
+    List<pb.TraceComputedPoint> all,
     int maxPoints,
   ) {
     final n = all.length;
@@ -67,7 +67,7 @@ class PlotPath {
     }
   }
 
-  static double _distance(pb.TraceSample a, pb.TraceSample b) {
+  static double _distance(pb.TraceComputedPoint a, pb.TraceComputedPoint b) {
     final dx = b.px - a.px, dy = b.py - a.py, dz = b.pz - a.pz;
     return math.sqrt(dx * dx + dy * dy + dz * dz);
   }
@@ -80,7 +80,7 @@ class AxisBounds {
   final double halfExtent;
 
   static AxisBounds of(
-    List<pb.TraceSample> points, {
+    List<pb.TraceComputedPoint> points, {
     double minHalfExtent = 0.12,
   }) {
     if (points.isEmpty) return AxisBounds(Vector3.zero(), minHalfExtent);

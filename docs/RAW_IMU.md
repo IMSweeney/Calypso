@@ -140,32 +140,36 @@ orientation estimate that is about to stop being an estimate.
 
 ## The trace and its header
 
-The stored point keeps its shape and loses a field:
+A rep carries **two** traces. The plotted one keeps every point a screen can tell apart; the raw
+one keeps every sample, and only a device that was asked records it.
 
 ```
-TraceSample { t_offset_ms, px/py/pz, ax/ay/az, gx/gy/gz }   // 0.01 m/s² and 1/16 dps per LSB
-TracePoint  { t_ms, pos, accel: [i16;3], gyro: [i16;3] }    // 28 B, down from 32
-Sample      { t_ms, accel: [i16;3], gyro: [i16;3] }         // 16 B, down from 20
+TraceComputedPoint { t_offset_ms, px/py/pz, qw/qx/qy/qz }   // metres and unit quaternion
+TraceRawPoint      { t_offset_ms, ax/ay/az, gx/gy/gz }      // 0.01 m/s² and 1/16 dps per LSB
 ```
 
-`ax..az` changes meaning from *linear* acceleration to *specific force*. That is the one silent
-break in the whole change — a reader that keeps the old assumption produces plausible-looking
-numbers — so the accessors are renamed on both sides rather than reused.
+`ax..az` changes meaning from *linear* acceleration to **specific force**. That is the one silent
+break in the change — a reader that keeps the old assumption produces plausible-looking numbers —
+so the accessors are renamed on both sides rather than reused.
+
+Both traces cover the same window and count from the same origin, the rep's first sample, so
+`RepSummary.t_start_ms + t_offset_ms` is a sample's uptime in either of them.
 
 Two messages carry what a summary needs to be reproducible, and to be decoded at all:
 
 ```
 RepConfig { accel_range_g, gyro_range_dps, accel_bw, gyro_bw, sample_rate_hz, detector_version }
-RepState  { v0, accel_bias, gyro_bias, attitude }
+RepState  { v0, accel_bias, gyro_bias, attitude, settled }
 ```
 
-`RepConfig` is what interprets the numbers. `RepState` is where the filter started, which is what
-makes a replay reproduce the summary instead of approximating it: the filter is deterministic
-from that state, so a trace plus its header is the summary. `RepState` replaces `TraceOrigin`,
-which carried only `v0`.
+`RepConfig` is what interprets the numbers. `RepState` is where the filter started: the filter is
+deterministic from that state, so a trace plus its header is the summary — which is what a raw trace
+is for. `settled` is part of it because "at rest" is a fact about the last 400 ms, and a replay
+without it earns that back and skips the first ZUPT.
 
-`flags` loses its calibrated bit. `ImuState` becomes raw accel, raw gyro and the derived attitude.
-`calypso_gatt.proto` loses the `Calibration` characteristic.
+The summary's counts say what it has: `computed_len`/`computed_chunks` for the plotted trace and
+`raw_len`/`raw_chunks` for the raw one, where `raw_chunks > 0` is "this rep can be replayed".
+`flags` is gone with its last live bit.
 
 ## Stages
 
@@ -214,13 +218,39 @@ motion with no lead-in rest not storing a garbage rep.
 - The trace keeps its quaternion in this stage, computed from the filter's attitude, so the wire
   format and the app are untouched. Stage 2 swaps it for the gyro.
 
-### 2. Wire format, trace and app — todo
+### 2. Wire format, trace and app — done
 
-`TraceSample`, `RepConfig`, `RepState`, `ImuState`, the `flags` bit, the GATT table (regenerate
-both sides), and on the app: the trace point model, the plot's orientation gizmo hidden for now,
-`pblog` format bumped, and the calibration hint, model and state deleted.
+**Two traces, not one**, because a rep has two consumers that want opposite things.
+`TraceComputed` is where the bar went and which way the sensor faced, decimated to a fixed budget
+of 128 points: derived data, and the only thing a plot draws. `TraceRaw` is what the sensor read —
+specific force and angular rate, every sample, never decimated — so the filter and the detector can
+be run over it again and the summary re-derived. A single message could only serve one of them
+badly: a format carrying both is either decimated until it cannot be replayed, or full rate, and the
+plot then pays for samples it cannot draw.
 
-Verified by: core and sim tests, app tests, one regenerated fixture.
+The split is also what makes a stored rep smaller. It was 512 points carrying position,
+acceleration and attitude; it is now 128 carrying position and attitude, so a rep is about a third
+of what it was and the log holds about three times as many. The raw trace costs 8–19 KB on top for
+a 4–9 s rep, which is why only a device a client has asked records one (`DevMode`, an arm of
+`SyncRequest` rather than a characteristic of its own: it is an operation, and unlike the clock
+nothing waits on it).
+
+`RepState` (velocity, attitude, both offsets, and whether the bar was at rest) replaces
+`TraceOrigin`, which carried only `v0`; `RepConfig` says what the sensor was set to and which
+detection logic closed the rep. `flags` is gone: its one live bit was "the trace was decimated",
+which at a fixed budget is true of every rep worth plotting and is derivable from the counts
+anyway. `ImuState` gains the angular rate. The `Calibration` characteristic is deleted, with
+`CalibrationStatus` and the app's hint, model and state.
+
+The archive's last fixture goes with the archive: a fused-format trace cannot become a raw one, so
+`real-deadlift.pblog` and the tests that read it are deleted rather than converted, and the other
+fixtures are regenerated from the generators.
+
+**What the implementation changed against this plan.** The raw trace is not recorded by the device
+yet, even with `DevMode` set: its sample has no gyroscope until the chip is read raw in stage 3, and
+a raw trace that cannot be replayed through the filter it exists for is not worth the log. The write
+and read paths are in `store` and exercised by the fixtures, so stage 3 has only the device's own
+use of them to add.
 
 ### 3. Device — todo
 
@@ -247,30 +277,14 @@ which becomes the story of a device settling at boot or stops being a document.
 ### 4. Reality — todo
 
 One session with its rep counts known before it starts, annotated, turned into fixtures, then
-thresholds re-derived and the maps re-run. Then two decisions the new format makes cheaper:
-whether the trace stores full rate at 100 Hz, and whether the detector consumes the filter's
-velocity.
+thresholds re-derived and the maps re-run. And the one decision the new format leaves: whether the
+detector consumes the filter's velocity.
 
-**`pos` leaves the trace, here rather than in stage 2.** It is the only derived field in a point
-— every other one is an input — and storing it freezes the trace to the filter that wrote it,
-which is the thing the trace exists to avoid. Removing it is what makes full rate affordable:
-a point drops to 16 bytes, so 8 s at 100 Hz is smaller in RAM than today's decimated trace,
-and the log lands within a few percent of its current capacity. `TRACE_POINTS` then equals
-`MAX_REP_MS` of samples, which is a buffer sized to the longest legal rep, so the decimation
-path goes rather than being tuned — the stride, the grid anchored at the last sample, and
-`REP_FLAG_DECIMATED` with it.
-
-It waits until this stage because it is the app that is forced to integrate: with the gizmo
-deferred, `pos` is the only thing the client needs a filter for. Keeping it through stage 3
-means the plot draws without new client-side maths, and the first real capture gets a
-cross-check that only becomes exact once `RepState` exists — re-run the filter over the stored
-window from its own state and compare it against the stored position.
-
-What it costs is a second implementation of the filter, in Dart — a parallel source of truth —
-so the port is pinned by vectors generated from the Rust crate and checked in, rather than by
-the port agreeing with itself. The alternative is that the device stays the only integrator,
-and a trace can never be re-derived with a better one; that is the trade, and it is taken the
-way the trace being the archive implies.
+**The two that used to be here are answered by the split.** `pos` no longer has to leave the trace
+— it moved to the one it belongs to, the derived one that only a plot reads — and full rate no
+longer has to be afforded against a plot's budget, because the raw trace is where full rate lives
+and only a device that was asked records one. The decimation path stays, but only over the plotted
+trace, where it is the format rather than a compromise.
 
 ## Open
 
@@ -293,9 +307,8 @@ way the trace being the archive implies.
 
 ## Status
 
-- **Stage 1: done.** The filter is in `calypso-core`, the simulator replays it, and the four
-  tests that could not be written before are in place. Everything downstream still reads the old
-  wire format, so the device builds and the app is untouched.
-- **Stage 2: todo.** Wire format, trace header, app.
-- **Stage 3: todo.** Device, with the input-swap A/B.
-- **Stage 4: todo.** Reality, retune, and the three deferred decisions.
+- **Stage 1: done.** The filter, and the simulator that measures it.
+- **Stage 2: done.** Both traces, the summary's header, the sync protocol, the device and the app.
+- **Stage 3: todo.** Device, with the input-swap A/B. This is where raw traces start being
+  recorded, because it is where the gyroscope appears.
+- **Stage 4: todo.** Reality, retune, and whether the detector consumes the filter's velocity.

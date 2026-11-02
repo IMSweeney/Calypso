@@ -10,20 +10,17 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'support/test_uuid.dart';
 
-List<pb.TraceSample> squatTrace({
+List<pb.TraceComputedPoint> squatTrace({
   int count = 160,
   double depth = 0.4,
   double drift = 0.03,
 }) => [
   for (var i = 0; i < count; i++)
-    pb.TraceSample(
+    pb.TraceComputedPoint(
       tOffsetMs: i * 10,
       px: drift * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
       py: 0.01 * math.sin(2 * math.pi * i / (count - 1)),
       pz: -depth * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
-      ax: 0,
-      ay: 0,
-      az: -100,
       qw: 16384,
       qx: 0,
       qy: 0,
@@ -33,7 +30,7 @@ List<pb.TraceSample> squatTrace({
 
 Future<void> pumpPlot(
   WidgetTester tester,
-  List<pb.TraceSample> points, {
+  List<pb.TraceComputedPoint> points, {
   int? scrubIndex,
   Size size = const Size(400, 300),
 }) async {
@@ -78,14 +75,11 @@ void main() {
 
   testWidgets('a one-point trace does not break the view', (tester) async {
     await pumpPlot(tester, [
-      pb.TraceSample(
+      pb.TraceComputedPoint(
         tOffsetMs: 0,
         px: 0,
         py: 0,
         pz: -0.01,
-        ax: 0,
-        ay: 0,
-        az: -100,
         qw: 16384,
         qx: 0,
         qy: 0,

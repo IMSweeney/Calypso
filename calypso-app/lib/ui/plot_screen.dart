@@ -28,7 +28,7 @@ class PlotScreen extends StatefulWidget {
 
 class _PlotScreenState extends State<PlotScreen> {
   pb.RepSummary? _summary;
-  List<pb.TraceSample> _trace = const [];
+  List<pb.TraceComputedPoint> _trace = const [];
   int? _scrubIndex;
   String? _error;
   bool _loading = true;
@@ -54,7 +54,7 @@ class _PlotScreenState extends State<PlotScreen> {
         if (trace.isEmpty) {
           _error =
               '${widget.label} has no trace in the archive '
-              '(${stored?.summary.chunkCount ?? 0} chunks were expected)';
+              '(${stored?.summary.computedChunks ?? 0} chunks were expected)';
         }
       });
     } catch (e) {

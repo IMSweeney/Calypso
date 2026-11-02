@@ -10,7 +10,6 @@ import 'package:calypso/transport/transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:logging/logging.dart';
 
-import 'support/calibration.dart';
 import 'support/fake_ble_link.dart';
 import 'support/fake_device.dart';
 import 'support/logging.dart';
@@ -158,8 +157,7 @@ void main() {
   test('a fault from the device is in the app log, and named', () async {
     final records = captureLogs();
     final link = FakeBleLink();
-    final device = FakeDevice(link)
-      ..servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2));
+    final device = FakeDevice(link);
     final transport = BleTransport(
       link,
       traceTimeout: const Duration(milliseconds: 50),
@@ -190,9 +188,9 @@ void main() {
     () async {
       final records = captureLogs();
       final link = FakeBleLink();
-      FakeDevice(link)
-        ..servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2))
-        ..servesImu(pb.ImuState(tUptimeMs: 123456, az: 981, qw: 16384));
+      FakeDevice(
+        link,
+      ).servesImu(pb.ImuState(tUptimeMs: 123456, az: 981, qw: 16384));
       final transport = BleTransport(
         link,
         traceTimeout: const Duration(milliseconds: 50),
@@ -211,7 +209,7 @@ void main() {
       expect(line.message, contains('t=123456 ms'));
       expect(
         line.message,
-        contains('a=(0.00, 0.00, 9.81) m/s^2'),
+        contains('f=(0.00, 0.00, 9.81) m/s^2'),
         reason: 'scaled out of the fixed point, so the log is readable',
       );
     },
@@ -221,8 +219,7 @@ void main() {
     final records = captureLogs();
     final link = FakeBleLink();
     // Served before connecting: the levels are a read, and the transport makes one as part of bringing the link up.
-    final device = FakeDevice(link)
-      ..servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2));
+    final device = FakeDevice(link);
     final transport = BleTransport(
       link,
       traceTimeout: const Duration(milliseconds: 50),
@@ -259,12 +256,6 @@ void main() {
 
     expect(records.map((r) => r.loggerName), everyElement('ble'));
     final messages = [for (final record in records) record.message];
-    expect(
-      messages,
-      contains(startsWith('rx ${SyncClient.calibrationUuid} calibration ')),
-      reason:
-          'a read is a message too, decoded on the characteristic it came from',
-    );
     expect(
       messages,
       contains(startsWith('rx ${SyncClient.messagesUuid} empty')),

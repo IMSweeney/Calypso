@@ -35,22 +35,21 @@ void main() {
     for (var i = 0; i < summaries.length; i++) {
       final summary = summaries[i];
       expect(summary.uuid, u(i), reason: 'rep $i carries its generator uuid');
-      expect(summary.decimated, isFalse);
       expect(
-        summary.calibrated,
-        isTrue,
-        reason: 'fixtures are recorded calibrated',
+        summary.hasRawTrace,
+        isFalse,
+        reason: 'a fixture is a plotted trace; a raw one is a dev build\'s',
       );
 
       final chunks = traceChunksFor(result.records, u(i));
-      expect(chunks.length, summary.chunkCount);
+      expect(chunks.length, summary.computedChunks);
       var points = 0;
       for (var c = 0; c < chunks.length; c++) {
         expect(chunks[c].index, c);
         expect(chunkUuid(chunks[c]), u(i));
         points += chunks[c].samples.length;
       }
-      expect(points, summary.traceLen);
+      expect(points, summary.computedLen);
     }
 
     for (final s in summaries) {
@@ -78,24 +77,24 @@ void main() {
 
     final summary = summariesOf(result.records).single;
     expect(summary.uuid, u(1));
-    expect(summary.traceLen, 1);
-    expect(summary.chunkCount, 1);
+    expect(summary.computedLen, 1);
+    expect(summary.computedChunks, 1);
 
     final chunks = traceChunksFor(result.records, u(1));
     expect(chunks.single.samples.length, 1);
   });
 
-  test('a decimated long rep keeps all 512 stored points', () {
+  test('a long rep is reduced to the plot\'s budget', () {
     final result = readDump(fixture('long-decimated'));
     final summary = summariesOf(result.records).single;
 
     expect(summary.uuid, u(1));
-    expect(summary.decimated, isTrue);
-    expect(summary.traceLen, 512);
+    expect(summary.computedLen, lessThanOrEqualTo(tracePointsBudget));
+    expect(summary.computedLen, greaterThan(tracePointsBudget ~/ 2));
 
     final chunks = traceChunksFor(result.records, u(1));
     final points = chunks.fold<int>(0, (n, c) => n + c.samples.length);
-    expect(points, 512);
+    expect(points, summary.computedLen);
 
     final all = chunks.expand((c) => c.samples).toList();
     expect(all.last.tOffsetMs, greaterThan(all[all.length - 2].tOffsetMs));
@@ -106,7 +105,7 @@ void main() {
     final summary = summariesOf(result.records).single;
 
     expect(summary.uuid, u(7));
-    expect(summary.chunkCount, 3, reason: 'the device still claims chunks');
+    expect(summary.computedChunks, 3, reason: 'the device still claims chunks');
     expect(
       traceChunksFor(result.records, u(7)),
       isEmpty,
@@ -120,13 +119,11 @@ void main() {
 
     final summary = summariesOf(result.records).single;
     expect(summary.uuid, u(99));
-    expect(summary.traceLen, 4);
-    expect(summary.decimated, isTrue);
+    expect(summary.computedLen, 4);
 
     final samples = traceChunksFor(result.records, u(99)).single.samples;
     expect(samples.length, 4);
-    expect(samples[0].ax, -32768);
-    expect(samples[0].qw, -32768);
+    expect(samples[0].qw, -2.0);
   });
 
   test('a torn dump reports truncation but keeps what it read', () {
@@ -141,8 +138,8 @@ void main() {
     final summary = summariesOf(result.records).single;
     expect(summary.uuid, u(0));
     expect(
-      result.records.where((r) => r.hasTrace()).length,
-      lessThan(summary.chunkCount),
+      result.records.where((r) => r.hasComputed()).length,
+      lessThan(summary.computedChunks),
       reason: 'the chunk being written is the one that was cut short',
     );
   });
@@ -193,47 +190,6 @@ void main() {
       0,
       reason: 'the next boot had no clock of its own, and does not inherit one',
     );
-  });
-
-  test('the real deadlift fixture is one dated, complete rep', () {
-    // The only fixture of motion a device actually recorded (`docs/FIXTURES.md`): a 5.7 s deadlift with a clean
-    // timeline, kept so the app is developed against something the sensor produced rather than a cosine.
-    final result = readDump(fixture('real-deadlift'));
-    expect(result.truncated, isFalse, reason: 'a fixture ends on a record');
-
-    final summaries = summariesOf(result.records);
-    expect(summaries.length, 1);
-    final summary = summaries.single;
-    expect(summary.uuid, startsWith('f900f046'));
-
-    // The time is the point: the device stores a rep's uptime, and the date comes from its boot's clock record.
-    expect(summary.recordedAt, DateTime.utc(2026, 10, 31, 20, 30, 56, 854));
-
-    expect(summary.chunkCount, 6);
-    expect(summary.traceLen, 285);
-    expect(summary.durationMs, 5689);
-    expect(summary.rom, closeTo(0.94, 0.01));
-    expect(
-      summary.decimated,
-      isTrue,
-      reason: 'a 5.7 s window does not fit the trace buffer at full rate',
-    );
-
-    final chunks = traceChunksFor(result.records, summary.uuid!);
-    expect(chunks.length, summary.chunkCount);
-    final times = <int>[
-      for (final chunk in chunks)
-        for (final sample in chunk.samples) sample.tOffsetMs,
-    ];
-    expect(times.length, summary.traceLen);
-    for (var i = 1; i < times.length; i++) {
-      expect(
-        times[i],
-        greaterThan(times[i - 1]),
-        reason: 'a stored window has one timeline or it is not usable',
-      );
-      expect(times[i] - times[i - 1], lessThanOrEqualTo(50));
-    }
   });
 
   test('an empty dump is valid and empty', () {

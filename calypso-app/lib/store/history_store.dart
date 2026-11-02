@@ -91,7 +91,7 @@ class HistoryStore implements RepArchive {
   bool contains(String uuid) => _uuids.contains(uuid);
 
   @override
-  Future<List<pb.TraceSample>> trace(String uuid) async {
+  Future<List<pb.TraceComputedPoint>> trace(String uuid) async {
     StoredRep? stored;
     for (final r in _reps) {
       if (r.uuid == uuid) stored = r;

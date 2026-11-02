@@ -16,36 +16,31 @@ import 'package:calypso/ui/rep_list_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/calibration.dart';
 import 'support/fake_ble_link.dart';
 import 'support/fake_device.dart';
 import 'support/test_uuid.dart';
 
 /// A rep's trace as the device answers a request with it: one chunk, one point.
-Uint8List traceChunk(String uuid, {int totalChunks = 1}) =>
-    pb.SyncMessage(
-      trace: pb.TraceChunk(
-        repUuid: uuidToBytes(uuid)!,
-        index: 0,
-        firstTOffsetMs: 0,
-        totalChunks: totalChunks,
-        samples: [
-          pb.TraceSample(
-            tOffsetMs: 0,
-            px: 0,
-            py: 0,
-            pz: 0,
-            ax: 0,
-            ay: 0,
-            az: -100,
-            qw: 16384,
-            qx: 0,
-            qy: 0,
-            qz: 0,
-          ),
-        ],
+Uint8List traceChunk(String uuid, {int totalChunks = 1}) => pb.SyncMessage(
+  computed: pb.TraceChunk(
+    repUuid: uuidToBytes(uuid)!,
+    index: 0,
+    firstTOffsetMs: 0,
+    totalChunks: totalChunks,
+    samples: [
+      pb.TraceComputedPoint(
+        tOffsetMs: 0,
+        px: 0,
+        py: 0,
+        pz: 0,
+        qw: 16384,
+        qx: 0,
+        qy: 0,
+        qz: 0,
       ),
-    ).writeToBuffer();
+    ],
+  ),
+).writeToBuffer();
 
 FixtureTransport fixtureTransport(String name) => FixtureTransport.fromBytes(
   Uint8List.fromList(File('assets/fixtures/$name.pblog').readAsBytesSync()),
@@ -135,8 +130,8 @@ Uint8List summaryMessage(String uuid, {int unixMs = deviceEpochMs}) =>
         durationMs: 1400,
         rom: 0.41,
         peakVelocity: 0.7,
-        traceLen: 3,
-        chunkCount: 1,
+        computedLen: 3,
+        computedChunks: 1,
         tUnixMs: Int64(unixMs),
       ),
     ).writeToBuffer();
@@ -304,106 +299,7 @@ void main() {
   });
 }
 
-/// Let the transport's calibration read happen, on the widget test's clock.
-///
-/// The levels are a read on the app's own interval (a second by default), so a test that changes them has to wait for the next one.
-Future<void> _pollCalibration(WidgetTester tester) async {
-  await tester.pump(const Duration(seconds: 1));
-  await tester.pumpAndSettle();
-}
-
 void _calibrationHint() {
-  Future<(FakeBleLink, FakeDevice, BleTransport)> pumpConnected(
-    WidgetTester tester,
-  ) async {
-    final link = FakeBleLink();
-    final device = FakeDevice(link);
-    final ble = BleTransport(
-      link,
-      traceTimeout: const Duration(milliseconds: 50),
-    );
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: RepListScreen(
-          archive: MemoryArchive(),
-          ble: ble,
-          fixture: '',
-          clock: fixtureNow,
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Connect'));
-    await tester.pump();
-    link.seeDevice('device-1', 'Calypso');
-    for (var i = 0; i < 8; i++) {
-      await tester.pump(const Duration(milliseconds: 10));
-    }
-    expect(find.text('Connected'), findsOneWidget);
-    return (link, device, ble);
-  }
-
-  testWidgets('an uncalibrated device explains itself, then stops', (
-    tester,
-  ) async {
-    final (_, device, ble) = await pumpConnected(tester);
-
-    expect(find.textContaining('IMU not calibrated'), findsNothing);
-
-    device.servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2));
-    await _pollCalibration(tester);
-
-    expect(find.textContaining('IMU not calibrated'), findsOneWidget);
-    expect(find.textContaining('rep recording is paused'), findsOneWidget);
-    expect(find.textContaining('still on the rack'), findsOneWidget);
-    expect(find.textContaining('accel 1/3'), findsOneWidget);
-    expect(find.textContaining('mag 0/3'), findsOneWidget);
-
-    device.servesCalibration(calibrationStatus());
-    await _pollCalibration(tester);
-    expect(find.textContaining('IMU not calibrated'), findsNothing);
-
-    await ble.close();
-  });
-
-  testWidgets('an accelerometer-only shortfall still says so', (tester) async {
-    // `ready` is the device's recording gate (gyroscope only), so this device says it is recording and is right: the
-    // hint is the only place the wandering accelerometer shows up while a set is going on.
-    final (_, device, ble) = await pumpConnected(tester);
-
-    device.servesCalibration(
-      calibrationStatus(sys: 3, accel: 1, gyro: 3, ready: true),
-    );
-    await _pollCalibration(tester);
-
-    expect(find.textContaining('Accelerometer not calibrated'), findsOneWidget);
-    expect(find.textContaining('rep recording is paused'), findsNothing);
-    expect(find.textContaining('still record'), findsOneWidget);
-    expect(find.textContaining('accel 1/3'), findsOneWidget);
-
-    device.servesCalibration(calibrationStatus());
-    await _pollCalibration(tester);
-    expect(find.textContaining('Accelerometer not calibrated'), findsNothing);
-
-    await ble.close();
-  });
-
-  testWidgets('a dropped connection takes a stale hint with it', (
-    tester,
-  ) async {
-    final (link, device, _) = await pumpConnected(tester);
-
-    device.servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 1));
-    await _pollCalibration(tester);
-    expect(find.textContaining('IMU not calibrated'), findsOneWidget);
-
-    link.dropConnection('out of range');
-    await tester.pumpAndSettle();
-    expect(find.textContaining('IMU not calibrated'), findsNothing);
-  });
-
   testWidgets('nothing is claimed before connecting', (tester) async {
     final link = FakeBleLink();
     final ble = BleTransport(

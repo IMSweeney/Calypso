@@ -12,7 +12,6 @@ import '../model/uuid.dart';
 import '../protocol/calypso.pb.dart' as pb;
 import '../protocol/pblog.dart';
 import '../state/ble_status.dart';
-import '../state/calibration.dart';
 import '../state/device_reports.dart';
 import '../sync/trace_reassembly.dart';
 import 'ble_link.dart';
@@ -34,14 +33,9 @@ const Duration _defaultXferTimeout = Duration(
   milliseconds: SyncPipe.xferTimeoutMs,
 );
 
-/// How often the app reads the IMU's calibration levels by default, while connected.
-///
-/// The same second the device polls the chip at: looking more often cannot see anything the device has not already written down.
-const Duration _defaultCalibrationPoll = Duration(seconds: 1);
-
 /// Reaching the device over the schema's interface: the UUIDs, the directions and the message types come from `proto/calypso_gatt.proto` (see `lib/gatt/gatt_client.dart`), so this file names none of them.
 ///
-/// The generated `SyncClient` reads the **calibration status**, the characteristic that carries a value.
+/// The generated `SyncClient` reads the **IMU's own sample**, the characteristic that carries a value.
 /// The pipe's two halves are deliberately not reached through it: a notification there is a chunk of a transfer, not a message, so those bytes go to the runtime in `lib/gatt/pipe.dart`.
 ///
 /// What stays here is what a schema cannot say: scanning, connecting, the trace reassembly and its timeouts, and what the archive is told.
@@ -50,7 +44,6 @@ class BleTransport implements RepTransport {
     this._link, {
     this.traceTimeout = const Duration(seconds: 30),
     this.chunkIdleTimeout = const Duration(milliseconds: 700),
-    this.calibrationPoll = _defaultCalibrationPoll,
     Duration xferTimeout = _defaultXferTimeout,
   }) : _xferTimeout = xferTimeout;
 
@@ -61,23 +54,15 @@ class BleTransport implements RepTransport {
   /// How long the device has to acknowledge a request, per attempt.
   final Duration _xferTimeout;
 
-  /// How often the app asks the device for the IMU's calibration levels.
   ///
   /// The device keeps that characteristic current from its own 1 Hz poll of the chip, so this is the app's clock and not a rate the device imposes: a read costs one ATT round trip, and how many of those a UI is willing to pay for is the UI's business (which is why the levels are a read rather than a notification).
-  final Duration calibrationPoll;
 
   /// The schema's typed client, for the characteristics that carry a value.
   ///
   /// Held per connection: its link is this connection's device id.
   SyncClient? _client;
 
-  Timer? _calibrationTimer;
-
-  /// Whether a calibration read is already on its way.
-  bool _calibrationReadInFlight = false;
-
   final BleStatusNotifier status = BleStatusNotifier();
-  final CalibrationNotifier calibration = CalibrationNotifier();
   final DeviceReports reports = DeviceReports();
 
   String? _deviceId;
@@ -104,9 +89,9 @@ class BleTransport implements RepTransport {
   final Map<String, Timer> _idleTimers = {};
 
   final Map<String, Timer> _requestTimers = {};
-  final Map<String, Completer<List<pb.TraceSample>>> _pending = {};
+  final Map<String, Completer<List<pb.TraceComputedPoint>>> _pending = {};
 
-  final Map<String, List<pb.TraceSample>> _completed = {};
+  final Map<String, List<pb.TraceComputedPoint>> _completed = {};
 
   bool _closed = false;
 
@@ -157,7 +142,7 @@ class BleTransport implements RepTransport {
       debugPrint(
         'calypso: device offers ${_describe(services)}; '
         'want ${SyncClient.serviceUuid}[${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}, '
-        '${SyncClient.calibrationUuid}, ${SyncClient.reportsUuid}, ${SyncClient.timeUuid}, '
+        '${SyncClient.reportsUuid}, ${SyncClient.timeUuid}, '
         '${SyncClient.imuUuid}]',
       );
       if (!_offersSync(services) || _strangersIn(services).isNotEmpty) {
@@ -178,7 +163,7 @@ class BleTransport implements RepTransport {
         throw StateError(
           'device offers ${_describe(services)}, not all five characteristics of '
           '${SyncClient.serviceUuid} (${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}, '
-          '${SyncClient.calibrationUuid}, ${SyncClient.reportsUuid}, '
+          '${SyncClient.reportsUuid}, '
           '${SyncClient.timeUuid})',
         );
       }
@@ -249,18 +234,13 @@ class BleTransport implements RepTransport {
     // Before the clock and before anything is asked for: from here on the device can tell
     // the app what has gone wrong, including what it raised while nobody was listening.
     await _subscribeReports();
-    // The clock before the calibration and before anything is asked for: the device holds this boot's summaries
+    // The clock before anything is asked for: the device holds this boot's summaries
     // until it has one, and they are the reps this connection exists for.
     await setClock();
     // Read the levels once now, so the hint is right from the first frame, and ask for them again on the app's own interval.
-    await refreshCalibration();
     // The sensor's own numbers once per session: what the device was seeing as the link came up,
     // which is what a log gets read against when a rep looks wrong later. Nothing shows it yet.
     await readImu();
-    _calibrationTimer = Timer.periodic(
-      calibrationPoll,
-      (_) => refreshCalibration(),
-    );
 
     bleLog.info('connected to $deviceId');
     status.set(BleStatus.connected, deviceId: deviceId);
@@ -299,28 +279,6 @@ class BleTransport implements RepTransport {
       'device ${report.kind.name}: ${describeReport(report.kind)}',
     );
     reports.add(report.kind);
-  }
-
-  /// Ask the device for the IMU's calibration levels, and publish them.
-  ///
-  /// A read rather than a subscription: a level is a state, and how often the app looks is [`calibrationPoll`]. A read that fails is a warning and nothing more — the levels are a hint, and a link that answers a read with an error is not a link to tear down over it.
-  ///
-  /// **One read at a time, whatever the poll says.** A read is an ATT round trip on a queue the pipe's writes share: on a link that is answering slowly (or not at all) a poll that ignored the last read would stack them up, and the acknowledgements the device is waiting for would end up behind them. A poll that misses its turn is no loss — the next one is a second away, and the levels change slower than that.
-  Future<void> refreshCalibration() async {
-    final client = _client;
-    if (client == null || _calibrationReadInFlight) return;
-    _calibrationReadInFlight = true;
-    try {
-      final status = await client.readCalibration();
-      bleLog.fine(
-        'rx ${SyncClient.calibrationUuid} ${describeCalibrationStatus(status)}',
-      );
-      calibration.set(status);
-    } catch (e) {
-      bleLog.warning('could not read the calibration status: $e');
-    } finally {
-      _calibrationReadInFlight = false;
-    }
   }
 
   /// The IMU as the sampler last read it: the sample the rep detector is fed.
@@ -374,9 +332,6 @@ class BleTransport implements RepTransport {
         service.characteristics.any(
           (c) => _sameUuid(c, SyncClient.requestsUuid),
         ) &&
-        service.characteristics.any(
-          (c) => _sameUuid(c, SyncClient.calibrationUuid),
-        ) &&
         // Required for the same reason as the clock: a device that cannot say what went wrong
         // is one whose failures are silent, which is the thing this characteristic exists to end.
         service.characteristics.any(
@@ -400,7 +355,6 @@ class BleTransport implements RepTransport {
         for (final characteristic in service.characteristics)
           if (!_sameUuid(characteristic, SyncClient.messagesUuid) &&
               !_sameUuid(characteristic, SyncClient.requestsUuid) &&
-              !_sameUuid(characteristic, SyncClient.calibrationUuid) &&
               !_sameUuid(characteristic, SyncClient.reportsUuid) &&
               !_sameUuid(characteristic, SyncClient.timeUuid) &&
               !_sameUuid(characteristic, SyncClient.imuUuid))
@@ -432,20 +386,15 @@ class BleTransport implements RepTransport {
     status.set(BleStatus.disconnected);
   }
 
-  /// Stop asking the device for the levels, and drop the client that asks.
-  ///
-  /// Both belong to the link that is going away, whether it was closed or lost: a poll left running would read a characteristic of a connection that no longer exists (`_client` holds its device id), once a second, for ever.
-  void _stopCalibrationPoll() {
-    _calibrationTimer?.cancel();
-    _calibrationTimer = null;
+  /// Drop the client that belongs to the link that is going away, whether it was closed or lost
+  /// (`_client` holds a device id, and a read on it would go to a connection that no longer exists).
+  void _dropClient() {
     _client = null;
-    _calibrationReadInFlight = false;
   }
 
   Future<void> _teardownConnection() async {
-    calibration.clear();
     reports.clear();
-    _stopCalibrationPoll();
+    _dropClient();
     _messagesSub?.cancel();
     _messagesSub = null;
     _reportsSub?.cancel();
@@ -468,9 +417,8 @@ class BleTransport implements RepTransport {
   void _onConnectionLost(String? error) {
     bleLog.info('connection lost${error == null ? '' : ': $error'}');
     _deviceId = null;
-    calibration.clear();
     reports.clear();
-    _stopCalibrationPoll();
+    _dropClient();
     status.set(BleStatus.disconnected, error: error);
     _failPending('connection lost');
   }
@@ -505,7 +453,7 @@ class BleTransport implements RepTransport {
   List<pb.RepSummary> get pushedSummaries => _summaries.values.toList();
 
   @override
-  Future<List<pb.TraceSample>> trace(String uuid) async {
+  Future<List<pb.TraceComputedPoint>> trace(String uuid) async {
     final cached = _completed[uuid];
     if (cached != null) return cached;
 
@@ -517,7 +465,7 @@ class BleTransport implements RepTransport {
     _assemblers[uuid] = TraceAssembler(uuid);
     _expectedChunks.remove(uuid);
     _idleTimers.remove(uuid)?.cancel();
-    final completer = Completer<List<pb.TraceSample>>();
+    final completer = Completer<List<pb.TraceComputedPoint>>();
     _pending[uuid] = completer;
     final response = completer.future;
     // The failure can arrive while the request is still going out — a dropped connection fails it there — and a completer nobody is listening to yet reports that as an unhandled error rather than to the caller that will await it below.
@@ -719,7 +667,7 @@ class BleTransport implements RepTransport {
     if (_closed || _deviceId == null) return;
     final kind = message.whichBody();
     final seen = _rxCounts.update(kind, (n) => n + 1, ifAbsent: () => 1);
-    if (kind != pb.SyncMessage_Body.trace || seen % 60 == 0) {
+    if (kind != pb.SyncMessage_Body.computed || seen % 60 == 0) {
       debugPrint('calypso: rx #$seen $kind');
     }
 
@@ -731,8 +679,11 @@ class BleTransport implements RepTransport {
         final isNew = !_summaries.containsKey(uuid);
         _summaries[uuid] = summary;
         if (isNew) _summaryCtrl.add(summary);
-      case pb.SyncMessage_Body.trace:
-        _onChunk(message.trace);
+      case pb.SyncMessage_Body.computed:
+        _onChunk(message.computed);
+      case pb.SyncMessage_Body.raw:
+        // Only a device whose dev switch is on records these, and nothing asks for one yet.
+        break;
       case pb.SyncMessage_Body.status:
         break;
       case pb.SyncMessage_Body.notSet:
@@ -775,7 +726,7 @@ class BleTransport implements RepTransport {
   void _complete(String uuid) {
     _idleTimers.remove(uuid)?.cancel();
     final points =
-        _assemblers.remove(uuid)?.assemble() ?? const <pb.TraceSample>[];
+        _assemblers.remove(uuid)?.assemble() ?? const <pb.TraceComputedPoint>[];
     _expectedChunks.remove(uuid);
     if (points.isEmpty) return;
     _completed[uuid] = points;

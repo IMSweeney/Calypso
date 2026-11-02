@@ -119,7 +119,7 @@ in `flutter test` and in the Simulator (which has no CoreBluetooth at all):
 abstract class RepTransport {
   Future<List<pb.RepSummary>> summaries();
   Stream<pb.RepSummary> watchSummaries();
-  Future<List<pb.TraceSample>> trace(String uuid);
+  Future<List<pb.TraceComputedPoint>> trace(String uuid);
   Future<void> close();
 }
 ```
@@ -250,7 +250,7 @@ transfer.
   device has no place for is found by walking the log, so nothing is refused.
 - **End of stream.** Every streamed chunk carries `total_chunks`, the number of
   chunks in that stream, so the client knows which is the last. A streamed chunk is
-  a stored one now, so that number is also the summary's `chunk_count`; the field
+  a stored one now, so that number is also the summary's `computed_chunks`; the field
   stays because a *stream* is what the client is reassembling, and a record in the
   log leaves it 0.
 - **Reassembly is tolerant.** `TraceAssembler` keys chunks by index, so out-of-order

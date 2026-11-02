@@ -6,22 +6,20 @@ import 'package:calypso/protocol/calypso.pb.dart' as pb;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vector_math/vector_math_64.dart';
 
-List<pb.TraceSample> squatTrace({int count = 100, double depth = 0.4}) => [
-  for (var i = 0; i < count; i++)
-    pb.TraceSample(
-      tOffsetMs: i * 10,
-      px: 0.02 * i / count,
-      py: 0,
-      pz: -depth * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
-      ax: 0,
-      ay: 0,
-      az: -100,
-      qw: 16384,
-      qx: 0,
-      qy: 0,
-      qz: 0,
-    ),
-];
+List<pb.TraceComputedPoint> squatTrace({int count = 100, double depth = 0.4}) =>
+    [
+      for (var i = 0; i < count; i++)
+        pb.TraceComputedPoint(
+          tOffsetMs: i * 10,
+          px: 0.02 * i / count,
+          py: 0,
+          pz: -depth * (1 - math.cos(2 * math.pi * i / (count - 1))) / 2,
+          qw: 16384,
+          qx: 0,
+          qy: 0,
+          qz: 0,
+        ),
+    ];
 
 void main() {
   test('the axis fit frames the path and keeps a minimum size', () {
@@ -30,27 +28,21 @@ void main() {
     expect(path.bounds.halfExtent, greaterThanOrEqualTo(0.2 - 0.01));
 
     final flat = PlotPath.from([
-      pb.TraceSample(
+      pb.TraceComputedPoint(
         tOffsetMs: 0,
         px: 0,
         py: 0,
         pz: 0,
-        ax: 0,
-        ay: 0,
-        az: 0,
         qw: 16384,
         qx: 0,
         qy: 0,
         qz: 0,
       ),
-      pb.TraceSample(
+      pb.TraceComputedPoint(
         tOffsetMs: 10,
         px: 0.001,
         py: 0,
         pz: 0,
-        ax: 0,
-        ay: 0,
-        az: 0,
         qw: 16384,
         qx: 0,
         qy: 0,
@@ -100,14 +92,11 @@ void main() {
   test('speed is derived from consecutive positions', () {
     final trace = [
       for (var i = 0; i < 5; i++)
-        pb.TraceSample(
+        pb.TraceComputedPoint(
           tOffsetMs: i * 10,
           px: i * 0.01,
           py: 0,
           pz: 0,
-          ax: 0,
-          ay: 0,
-          az: 0,
           qw: 16384,
           qx: 0,
           qy: 0,

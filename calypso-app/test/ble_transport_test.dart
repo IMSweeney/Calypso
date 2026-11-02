@@ -9,17 +9,15 @@ import 'package:calypso/gatt/gatt_client.dart';
 import 'package:calypso/gatt/pipe.dart' as pipe;
 import 'package:calypso/transport/ble_link.dart';
 import 'package:calypso/transport/ble_transport.dart';
-import 'package:calypso/model/calibration.dart';
 import 'package:calypso/model/rep.dart';
 import 'package:calypso/transport/transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/calibration.dart';
 import 'support/fake_ble_link.dart';
 import 'support/fake_device.dart';
 import 'support/test_uuid.dart';
 
-pb.RepSummary summaryProto(String uuid, {int traceLen = 7}) => pb.RepSummary(
+pb.RepSummary summaryProto(String uuid, {int computedLen = 7}) => pb.RepSummary(
   repUuid: uuidToBytes(uuid)!,
   tStartMs: 10_000,
   tEndMs: 11_400,
@@ -32,13 +30,13 @@ pb.RepSummary summaryProto(String uuid, {int traceLen = 7}) => pb.RepSummary(
   rollMaxDeg: 1,
   pitchMinDeg: -2,
   pitchMaxDeg: 2,
-  traceLen: traceLen,
-  chunkCount: (traceLen / 3).ceil(),
+  computedLen: computedLen,
+  computedChunks: (computedLen / 3).ceil(),
 );
 
 /// A `SyncMessage`, encoded: what one transfer carries.
-Uint8List summaryMessage(String uuid, {int traceLen = 7}) => pb.SyncMessage(
-  summary: summaryProto(uuid, traceLen: traceLen),
+Uint8List summaryMessage(String uuid, {int computedLen = 7}) => pb.SyncMessage(
+  summary: summaryProto(uuid, computedLen: computedLen),
 ).writeToBuffer();
 
 /// An acknowledgement, as the app would write it back to the device.
@@ -62,14 +60,11 @@ Uint8List chunkMessage(
 }) {
   final samples = [
     for (var i = 0; i < points; i++)
-      pb.TraceSample(
+      pb.TraceComputedPoint(
         tOffsetMs: (from + i) * 10,
         px: 0,
         py: 0,
         pz: -0.01 * (from + i),
-        ax: 0,
-        ay: 0,
-        az: -100,
         qw: 16384,
         qx: 0,
         qy: 0,
@@ -77,7 +72,7 @@ Uint8List chunkMessage(
       ),
   ];
   return pb.SyncMessage(
-    trace: pb.TraceChunk(
+    computed: pb.TraceChunk(
       repUuid: uuidToBytes(uuid)!,
       index: index,
       firstTOffsetMs: from * 10,
@@ -91,14 +86,12 @@ Future<BleTransport> connectedTransport(
   FakeBleLink link, {
   Duration? traceTimeout,
   Duration xferTimeout = const Duration(milliseconds: 50),
-  Duration calibrationPoll = const Duration(seconds: 1),
 }) async {
   final transport = BleTransport(
     link,
     traceTimeout: traceTimeout ?? const Duration(milliseconds: 200),
     chunkIdleTimeout: const Duration(milliseconds: 50),
     xferTimeout: xferTimeout,
-    calibrationPoll: calibrationPoll,
   );
   final connecting = transport.connect();
   await pumpEventQueue();
@@ -279,7 +272,7 @@ void main() {
       final link = FakeBleLink();
       final device = FakeDevice(link);
       final transport = await connectedTransport(link);
-      device.send(summaryMessage(u(1), traceLen: 7));
+      device.send(summaryMessage(u(1), computedLen: 7));
       await pumpEventQueue();
 
       final pending = transport.trace(u(1));
@@ -500,62 +493,6 @@ void main() {
     await transport.disconnect();
   });
 
-  test('the calibration status is read at connect, and leaves with it', () async {
-    final link = FakeBleLink();
-    // What the device's table holds, served before the transport reads it.
-    FakeDevice(
-      link,
-    ).servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2));
-
-    final transport = await connectedTransport(link);
-
-    final latest = transport.calibration.latest!;
-    expect(latest.accel, 1);
-    expect(latest.gyro, 2);
-    expect(latest.ready, isFalse);
-    expect(latest.action, contains('still on the rack'));
-    expect(
-      link.reads[SyncClient.calibrationUuid],
-      1,
-      reason:
-          'read once as part of connecting, so the hint is right from the start',
-    );
-
-    link.dropConnection('out of range');
-    await pumpEventQueue();
-    expect(transport.calibration.latest, isNull);
-    expect(transport.calibration.isReady, isFalse);
-  });
-
-  test('and asked for again on the app\'s own clock', () async {
-    final link = FakeBleLink();
-    final device = FakeDevice(link)
-      ..servesCalibration(calibrationStatus(sys: 1, accel: 1, gyro: 2));
-
-    final transport = await connectedTransport(
-      link,
-      calibrationPoll: const Duration(milliseconds: 20),
-    );
-    var notifications = 0;
-    transport.calibration.addListener(() => notifications++);
-
-    // A second read of the same levels: the app asks, the device answers, and nothing changed.
-    await Future<void>.delayed(const Duration(milliseconds: 60));
-    expect(
-      link.reads[SyncClient.calibrationUuid]!,
-      greaterThan(1),
-      reason: 'the poll is the app\'s, and it runs while connected',
-    );
-    expect(notifications, 0, reason: 'the same levels are not news');
-
-    device.servesCalibration(calibrationStatus(sys: 3, accel: 3, gyro: 3));
-    await Future<void>.delayed(const Duration(milliseconds: 60));
-    expect(notifications, 1);
-    expect(transport.calibration.isReady, isTrue);
-
-    await transport.close();
-  });
-
   test('the device\'s own faults arrive as sentences', () async {
     final link = FakeBleLink();
     final device = FakeDevice(link);
@@ -625,6 +562,9 @@ void main() {
         ax: 100,
         ay: -50,
         az: 981,
+        gx: 16,
+        gy: -32,
+        gz: 0,
         qw: 16384,
         qz: 4096,
       ),
@@ -642,7 +582,12 @@ void main() {
     expect(
       [state.ax, state.ay, state.az],
       [100, -50, 981],
-      reason: 'the fixed point a stored trace carries, unchanged',
+      reason: 'specific force in the fixed point a trace carries, unchanged',
+    );
+    expect(
+      [state.gx, state.gy, state.gz],
+      [16, -32, 0],
+      reason: 'angular rate at 1/16 dps per LSB',
     );
     expect([state.qw, state.qx, state.qy, state.qz], [16384, 0, 0, 4096]);
 
@@ -655,7 +600,6 @@ void main() {
         DiscoveredService(SyncClient.serviceUuid, [
           SyncClient.messagesUuid,
           SyncClient.requestsUuid,
-          SyncClient.calibrationUuid,
           SyncClient.timeUuid,
         ]),
       ];
@@ -696,8 +640,8 @@ void main() {
       final link = FakeBleLink();
       final device = FakeDevice(link);
       final transport = await connectedTransport(link);
-      device.send(summaryMessage(u(1), traceLen: 7));
-      device.send(summaryMessage(u(2), traceLen: 7));
+      device.send(summaryMessage(u(1), computedLen: 7));
+      device.send(summaryMessage(u(2), computedLen: 7));
       await pumpEventQueue();
 
       transport.watchSummaries().listen((_) {});
