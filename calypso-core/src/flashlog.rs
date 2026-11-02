@@ -280,7 +280,77 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         buf: &mut [u8],
         mut f: impl FnMut(u32, &[u8]) -> bool,
     ) -> Result<(), Error<N::Error>> {
-        // Count live sectors (valid headers within the ring's epoch window).
+        let live = self.live_sectors()?;
+        for i in 0..live {
+            if !self.scan_records(self.sector_at(i, live), buf, &mut f)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Deliver the live records from `first_id` on, oldest first, up to `max` of them.
+    ///
+    /// The cheap direction, for a caller that knows which record it wants: a trace's chunks follow its summary, so
+    /// that caller needs a dozen records, not the whole ring. It costs one binary search over the sectors — a
+    /// sector's *first* record id says which side of it an id must be on, and reading that id is one 8-byte
+    /// header — and then the records themselves.
+    ///
+    /// The distinction is not academic: a walk over every record reads every payload through `read_blocks` twice
+    /// (once for the CRC, once to deliver it) and holds the sampler off its tick for seconds (docs/GOTCHAS.md).
+    ///
+    /// An id older than anything the ring still holds starts the walk at the oldest live record, so the caller
+    /// still sees whatever of it survived; a corrupted sector's tail ends that sector, not the walk.
+    pub fn for_each_from(
+        &mut self,
+        first_id: u32,
+        max: u32,
+        buf: &mut [u8],
+        mut f: impl FnMut(u32, &[u8]) -> bool,
+    ) -> Result<u32, Error<N::Error>> {
+        let live = self.live_sectors()?;
+        if live == 0 || max == 0 {
+            return Ok(0);
+        }
+        let mut sector = self.sector_at_or_after(first_id, live)?;
+        let mut delivered = 0u32;
+        let mut stop = false;
+        loop {
+            self.scan_sector_with(sector, buf, |id, payload| {
+                if id < first_id {
+                    return true; // written before the record we were pointed at
+                }
+                if delivered == max || !f(id, payload) {
+                    stop = true;
+                    return false;
+                }
+                delivered += 1;
+                true
+            })?;
+            if stop || sector == self.head {
+                break;
+            }
+            sector = (sector + 1) % self.sectors;
+        }
+        Ok(delivered)
+    }
+
+    /// Read back a single record by id. Returns the payload length written into `buf`, if found.
+    pub fn read(&mut self, want_id: u32, buf: &mut [u8]) -> Result<Option<usize>, Error<N::Error>> {
+        let mut found = None;
+        // The walk starts at the sector `want_id` must be in or after, so the first record delivered is the record
+        // itself unless the id is not in the log — in which case the caller gets `None`, as the walk over the log would.
+        self.for_each_from(want_id, 1, buf, |id, payload| {
+            if id == want_id {
+                found = Some(payload.len());
+            }
+            false
+        })?;
+        Ok(found)
+    }
+
+    /// Number of live sectors: valid headers within the ring's epoch window.
+    fn live_sectors(&mut self) -> Result<u32, Error<N::Error>> {
         let mut live = 0u32;
         for s in 0..self.sectors {
             let mut hdr = [0u8; 8];
@@ -296,28 +366,52 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
                 live += 1;
             }
         }
-        // Sectors are written circularly with increasing epochs, so the oldest live sector is `live - 1` steps behind the head.
-        for k in (0..live).rev() {
-            let sector = (self.head + self.sectors - k) % self.sectors;
-            if !self.scan_records(sector, buf, &mut f)? {
-                break;
-            }
-        }
-        Ok(())
+        Ok(live)
     }
 
-    /// Read back a single record by id. Returns the payload length written into `buf`, if found.
-    pub fn read(&mut self, want_id: u32, buf: &mut [u8]) -> Result<Option<usize>, Error<N::Error>> {
-        let mut found = None;
-        self.for_each_while(buf, &mut |id: u32, payload: &[u8]| {
-            if id == want_id {
-                found = Some(payload.len());
-                false // stop at first match
-            } else {
-                true
+    /// The sector `i` steps from the oldest live one, which is the order records were written in.
+    /// Sectors are written circularly with increasing epochs, so the oldest live sector is `live - 1` steps behind the head.
+    fn sector_at(&self, i: u32, live: u32) -> u32 {
+        (self.head + self.sectors - (live - 1 - i)) % self.sectors
+    }
+
+    /// The oldest sector that could hold `want_id`: the last sector whose first record is at or before it.
+    ///
+    /// Ids are handed out in write order and the ring is written in that order, so a sector's first id only
+    /// increases with the sector — which is what makes this a search rather than a scan.
+    fn sector_at_or_after(&mut self, want_id: u32, live: u32) -> Result<u32, Error<N::Error>> {
+        let mut lo = 0u32;
+        let mut hi = live;
+        let mut best = None;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let sector = self.sector_at(mid, live);
+            match self.first_record_id(sector)? {
+                Some(id) if id <= want_id => {
+                    best = Some(sector);
+                    lo = mid + 1;
+                }
+                // A sector with no readable first record cannot hold a record at or before the id, and neither can
+                // anything after it: step the search back.
+                _ => hi = mid,
             }
-        })?;
-        Ok(found)
+        }
+        Ok(best.unwrap_or(self.sector_at(0, live)))
+    }
+
+    /// The id of a sector's first record, or `None` if it holds no record this log can read (a sector the ring has
+    /// only just advanced to, or a torn first header).
+    fn first_record_id(&mut self, sector: u32) -> Result<Option<u32>, Error<N::Error>> {
+        let mut hdr = [0u8; RECORD_HEADER_LEN as usize];
+        self.flash
+            .read_blocks(sector * self.sector_size + SECTOR_HEADER_LEN, &mut hdr)
+            .map_err(Error::flash(Phase::ReadRecords, sector))?;
+        if hdr.iter().all(|&b| b == ERASED)
+            || u16::from_le_bytes(hdr[0..2].try_into().unwrap()) != RECORD_MAGIC
+        {
+            return Ok(None);
+        }
+        Ok(Some(u32::from_le_bytes(hdr[4..8].try_into().unwrap())))
     }
 
     // --- internals ---------------------------------------------------------

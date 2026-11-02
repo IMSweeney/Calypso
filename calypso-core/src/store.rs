@@ -113,8 +113,60 @@ pub fn for_each_summary<'a, N: NorFlash>(
     })
 }
 
-/// Read one rep's trace back into `out`, in chunk order, oldest point first.
+/// How many records past a rep's chunks its walk may look before giving up.
+///
+/// The chunks follow the summary because `append_rep` writes them together under the log's lock, so this is
+/// headroom for the one record that can legitimately sit among them — nothing, in fact — rather than a budget: it
+/// bounds a walk that would otherwise keep reading after a rep whose chunks are not all there.
+const TRACE_WALK_SLACK: u32 = 2;
+
+/// Read one rep's trace back into `out` given where its summary sits in the log: the record after it is the rep's
+/// first chunk, and `chunk_count` chunks follow.
+///
+/// This is the read a trace request takes when the device knows where the rep's records are (the summary stream
+/// recorded it when it read the summary). It gives the same answer as `read_trace` for a walk of a dozen records
+/// instead of the whole log.
+/// Returns the number of trace points recovered (0 if none of the rep's chunks are there any more).
+pub fn read_trace_from<'a, N: NorFlash>(
+    log: &mut FlashLog<'a, N>,
+    buf: &mut [u8],
+    rec: &mut pb::msg::RepRecord,
+    first_chunk_id: u32,
+    chunk_count: u32,
+    rep_uuid: RepUuid,
+    out: &mut TraceBuf<'_>,
+) -> Result<usize, Error<N::Error>> {
+    let mut expected_index = 0u32;
+    log.for_each_from(
+        first_chunk_id,
+        chunk_count.saturating_add(TRACE_WALK_SLACK),
+        buf,
+        |id, payload| {
+            if expected_index >= chunk_count {
+                return false; // the whole trace, and nothing after it
+            }
+            decode_or_panic(rec, id, payload);
+            let Some(pb::msg::RepRecord_::Body::Trace(chunk)) = &rec.body else {
+                return true; // a boot's clock record, or a summary: not this rep's
+            };
+            if pb::chunk_uuid(chunk) != Some(rep_uuid) || chunk.index != expected_index {
+                return true;
+            }
+            for s in chunk.samples.iter() {
+                out.push(pb::trace_point_from_message(s));
+            }
+            expected_index += 1;
+            true
+        },
+    )?;
+    Ok(out.len())
+}
+
+/// Read one rep's trace back into `out`, in chunk order, oldest point first, by walking the whole log.
 /// Returns the number of trace points recovered (0 if the rep isn't in the log any more).
+///
+/// The fallback for a trace request this device cannot place: a rep whose summary it has not read this connection.
+/// Prefer [`read_trace_from`], which is the same answer without the walk.
 pub fn read_trace<'a, N: NorFlash>(
     log: &mut FlashLog<'a, N>,
     buf: &mut [u8],

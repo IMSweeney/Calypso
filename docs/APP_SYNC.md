@@ -146,6 +146,8 @@ Two paths, one destination: the archive.
 - **Incremental, on the device's side.** The device keeps a cursor (`SummaryCursor`)
   of how far its subscriber has been brought up to date, so re-subscribing sends
   only what is new, and it advances the cursor only for a message the pipe took.
+  A batch that drained the log is not read again until something is stored, so a
+  subscriber that is up to date costs the device nothing to keep.
   Nothing goes out to a subscriber that is not there: the firmware asks the server
   whether the characteristic is subscribed rather than inferring it from a notify
   that always reports success. What the batch does not send this tick is still in
@@ -240,6 +242,12 @@ transfer.
   fit a flash sector) and each record is one message: it crosses as a few
   notifications of at most 244 bytes. How many notifications a message takes is the
   pipe's business, not the client's.
+- **The device knows where the records are.** A rep's chunks are the records after
+  its summary, and the summary scan records that place as it hands the summary out,
+  so the usual request costs a walk of that rep's records rather than a pass over
+  the log — which, on the device, is the difference between milliseconds and seconds
+  of the sampler not running ([docs/GOTCHAS.md](GOTCHAS.md)). A request for a rep the
+  device has no place for is found by walking the log, so nothing is refused.
 - **End of stream.** Every streamed chunk carries `total_chunks`, the number of
   chunks in that stream, so the client knows which is the last. A streamed chunk is
   a stored one now, so that number is also the summary's `chunk_count`; the field
@@ -264,13 +272,16 @@ truth for what the app shows**:
   rather than a second copy of a rep.
 - **The list is a day at a time.** It opens on today, its arrows walk one day per
   press, and the heading says which day that is — `Yesterday` for one back, the date
-  otherwise. Forward stops at today, because nothing has happened there. A page holds
-  its reps newest first, each row labelled with the time of day: the date is the
-  heading's, and the seconds are not, since a set is reps a minute or less apart. A
-  record that carries no time at all — a capture of a boot whose clock was never set
-  — is on no day, so no page shows it. A build seeded from a fixture opens on the day
-  that fixture was recorded rather than on today, since a replay is not a day
-  ([`FIXTURES.md`](FIXTURES.md)).
+  otherwise. Forward stops at today, because nothing has happened there. A calendar
+  button beside the arrows comes back to today from any page in one press, since the
+  arrows would take that many presses; it is disabled while the screen is on today,
+  and the page follows the clock rather than pinning a date, so a screen left open
+  across midnight turns over. A page holds its reps newest first, each row labelled
+  with the time of day: the date is the heading's, and the seconds are not, since a
+  set is reps a minute or less apart. A record that carries no time at all — a capture
+  of a boot whose clock was never set — is on no day, so no page shows it. A build
+  seeded from a fixture opens on the day that fixture was recorded rather than on
+  today, since a replay is not a day ([`FIXTURES.md`](FIXTURES.md)).
 - **A rep's time is in its record.** The device dates every summary it sends
   ([Time](#time)), so the archive holds when each rep happened and there is no
   second file to keep in step with it. The list is ordered by that time rather than

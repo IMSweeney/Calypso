@@ -1,7 +1,7 @@
 mod common;
 
 use calypso_core::flashlog::{Error, FlashLog};
-use common::{mount, MockError, MockFlash, SECTOR};
+use common::{mount, reads, reset_reads, BigFlash, MockError, MockFlash, SECTOR};
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 
 #[test]
@@ -102,6 +102,93 @@ fn corrupt_record_is_skipped_on_remount() {
     let id = log.append(b"new").unwrap();
     let n = log.read(id, &mut buf).unwrap().unwrap();
     assert_eq!(&buf[..n], b"new");
+}
+
+/// A record is found, not walked to.
+///
+/// Measured in bytes the flash hands out, because that is what the cost is: a walk reads every payload twice (once
+/// for the CRC, once to deliver it), and on the device a walk of a full log is seconds the sampler spends stopped
+/// (docs/GOTCHAS.md). The comparison, not the constant, is what this test is about.
+#[test]
+fn finding_a_record_reads_a_fraction_of_the_log() {
+    let mut flash = BigFlash::new();
+    let payload = [0x5Au8; 180];
+    let mut ids = Vec::new();
+    {
+        let mut log = mount(&mut flash);
+        for _ in 0..150 {
+            ids.push(log.append(&payload).unwrap());
+        }
+    }
+
+    let mut log = FlashLog::mount(&mut flash).unwrap();
+    let mut buf = [0u8; 256];
+
+    reset_reads();
+    let mut walked = 0u32;
+    log.for_each(&mut buf, |_, _| walked += 1).unwrap();
+    let walk = reads();
+    assert_eq!(walked, 150);
+
+    reset_reads();
+    let n = log.read(ids[147], &mut buf).unwrap().unwrap();
+    let point = reads();
+    assert_eq!(&buf[..n], &payload[..]);
+    assert!(
+        point * 4 < walk,
+        "{point} bytes read to find one record, {walk} to walk them all"
+    );
+}
+
+#[test]
+fn a_walk_from_an_id_crosses_a_sector_boundary() {
+    let mut flash = BigFlash::new();
+    let mut ids = Vec::new();
+    {
+        let mut log = mount(&mut flash);
+        for i in 0..50u8 {
+            ids.push(log.append(&[i; 180]).unwrap());
+        }
+    }
+
+    let mut log = FlashLog::mount(&mut flash).unwrap();
+    let mut buf = [0u8; 256];
+    let mut seen = Vec::new();
+    let delivered = log
+        .for_each_from(ids[18], 10, &mut buf, |id, payload| {
+            let i = ids.iter().position(|other| *other == id).unwrap();
+            assert_eq!(payload, &[i as u8; 180], "record {i} came back as another");
+            seen.push(id);
+            true
+        })
+        .unwrap();
+    assert_eq!(delivered, 10);
+    assert_eq!(seen, ids[18..28].to_vec());
+}
+
+#[test]
+fn a_walk_from_a_dropped_id_starts_at_the_oldest_record() {
+    let payload = [0x42u8; 100];
+    let mut flash = MockFlash::new();
+    let mut log = mount(&mut flash);
+    for _ in 0..30 {
+        log.append(&payload).unwrap();
+    }
+
+    let mut buf = [0u8; 128];
+    let mut live = Vec::new();
+    log.for_each(&mut buf, |id, _| live.push(id)).unwrap();
+    let oldest = live[0];
+
+    // Id 1 is older than the ring: the walk still starts somewhere real rather than reading nothing.
+    let mut seen = Vec::new();
+    log.for_each_from(1, 3, &mut buf, |id, _| {
+        seen.push(id);
+        true
+    })
+    .unwrap();
+    assert_eq!(seen, vec![oldest, oldest + 1, oldest + 2]);
+    assert!(log.read(1, &mut buf).unwrap().is_none());
 }
 
 #[test]

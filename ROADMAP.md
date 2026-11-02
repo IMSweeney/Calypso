@@ -25,6 +25,14 @@ Where Calypso is and what is left. Feature documentation lives in
   (`calypso-app/lib/gatt/gatt_client.dart`), both committed and both naming the
   command that regenerates them, since nothing checks them against the schema.
   **Not yet checked on hardware.**
+- **A summary stream that has nothing to read does not read** — the batch remembers
+  what the log looked like when it was collected, so a caught-up subscriber no longer
+  makes the device walk every record once a second; and a trace request is a walk of
+  that rep's own records, from a place the summary scan recorded, rather than of the
+  whole log. Both walks were holding the sampler off its tick for seconds (see
+  [docs/GOTCHAS.md](docs/GOTCHAS.md)). The fallback for a rep the device has no place
+  for is still the walk. **Not yet re-run on hardware**, which is what would close
+  [*A rep's timeline has a hole in it*](#firmware).
 - **Client app** — sync, the archive of record, rep list, 3D bar-path plot,
   calibration hint, BLE transport, all testable without hardware.
 - **Bench mode** — `cargo run --features fake-reps` stores a synthetic rep every
@@ -224,16 +232,18 @@ Where Calypso is and what is left. Feature documentation lives in
 ### Firmware
 
 - [ ] **A rep's timeline has a hole in it.** Nine of the fourteen reps in one capture
-      carry a ~2.2 s jump in their stored sample times, and each jump is followed by a
-      burst of samples 1–7 ms apart before the normal spacing resumes. The point count
-      is that of a whole window, so the samples were taken and it is the *timestamps*
-      that are wrong — which puts every number derived from the timeline on a distorted
-      axis: duration, peak and mean velocity, ROM, the 0.4–8 s span bounds and the
-      0.10 m travel check. The sampler now logs `sampler hole: … ms without a sample`
-      at the gap and raises `REPORT_KIND_SAMPLER_HOLE`, so the boot log says when it
-      happened, the flash windows and link events around that line say what was running,
-      and the app says a rep from then may read long. What to do about a rep that spans
-      one is still open, and is the item above.
+      carry a ~2.2 s jump in their stored sample times, each followed by a burst of
+      samples 1–7 ms apart, and the cause is known: the BLE arm walking the flash log on
+      the sampler's thread, which it did on every idle second and on every trace request
+      ([docs/GOTCHAS.md](docs/GOTCHAS.md)). Both of those walks are gone; what is left is
+      to record a session and confirm the gaps with them, which is also what closes the
+      capture item above. A *collect* still walks the whole log once per connection and
+      once per batch of summaries, so a freeze of that shape can still land in a rep —
+      making that walk incremental is the next step if a capture shows one. The sampler
+      logs `sampler hole: … ms without a sample` at the gap and raises
+      `REPORT_KIND_SAMPLER_HOLE`, so the boot log says when it happened and the app says a
+      rep from then may read long. What to do about a rep that spans a hole is the item
+      above.
 - [ ] **OTA code updates** — the app partition is 1.5 MB with headroom; dual
       slots would mean shrinking the log partition.
 - [ ] On-device tests with [`embedded-test`](https://crates.io/crates/embedded-test):

@@ -160,6 +160,22 @@ impl FlashStore {
 /// Summaries collected per pass of the summary stream. Each is ~76 bytes, so the batch is a heap buffer rather than a local.
 const SUMMARY_BATCH: usize = 16;
 
+/// How many records this boot has added to the flash log.
+///
+/// The summary stream re-reads the whole log every time it fills a batch, and a walk over a full log holds the
+/// sampler off its 100 Hz tick for seconds — which is where the sampler's timeline holes come from
+/// (docs/GOTCHAS.md). A stream with nothing new to read must therefore not read: every append bumps this, and a
+/// batch remembers the value it was collected at.
+///
+/// A count rather than a flag because the writes are in three places (a rep, a boot's clock, the client's clock
+/// write) and the reader only has to tell "same as last time" from "not the same".
+static LOG_APPENDS: AtomicU32 = AtomicU32::new(0);
+
+/// Say that the log has changed in a way the summary stream has to see.
+fn log_changed() {
+    LOG_APPENDS.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Window handed to the detector when a rep closes: `MAX_REP_MS` plus the ZUPT margins (9 s at 100 Hz).
 const REP_WINDOW_SAMPLES: usize = 900;
 /// Trace points kept per rep; longer reps are decimated uniformly.
@@ -566,6 +582,7 @@ async fn main(spawner: Spawner) -> ! {
                                             store,
                                             sync_rec_buf,
                                             sync_rec_msg,
+                                            &batch,
                                             &mut sync,
                                             &conn,
                                             request,
@@ -742,11 +759,15 @@ async fn main(spawner: Spawner) -> ! {
                                 })
                             };
                             match stored {
-                                Ok(n) => info!(
-                                    "rep {} stored as {} log records",
-                                    UuidShort(Some(&rep_uuid)),
-                                    n
-                                ),
+                                Ok(n) => {
+                                    // A new summary for the stream to read, and a walk it can now skip.
+                                    log_changed();
+                                    info!(
+                                        "rep {} stored as {} log records",
+                                        UuidShort(Some(&rep_uuid)),
+                                        n
+                                    )
+                                }
                                 Err(e) => {
                                     warn!(
                                         "rep {} could not be stored: {}",
@@ -1155,16 +1176,40 @@ impl Sync<'_> {
 struct SummaryBatch {
     messages: &'static mut AllocVec<msg::RepSummary>,
     next: usize,
+    /// What the log looked like when this batch was collected, or `None` if it never has been: a collect that
+    /// drained the log is not repeated while the answer cannot have changed.
+    collected_at: Option<u32>,
+    /// Whether that collect ran out of log rather than out of batch. A batch that was *filled* has more behind it
+    /// whatever `LOG_APPENDS` says, which is what keeps a log of exactly one batch's worth of reps from stalling.
+    drained: bool,
+    /// Where the records of the reps this batch handed out are.
+    ///
+    /// Not cleared by `reset`: a rep's records do not move, and the app may still ask for a trace of a rep it was
+    /// sent on the connection before this one.
+    index: BatchIndex,
 }
 
 impl SummaryBatch {
     fn new(messages: &'static mut AllocVec<msg::RepSummary>) -> Self {
         messages.clear();
-        SummaryBatch { messages, next: 0 }
+        SummaryBatch {
+            messages,
+            next: 0,
+            collected_at: None,
+            drained: false,
+            index: BatchIndex::new(),
+        }
     }
 
     fn spent(&self) -> bool {
         self.next >= self.messages.len()
+    }
+
+    /// Whether collecting again could find a summary this batch does not hold.
+    ///
+    /// Two reasons it could: the last collect filled the batch rather than the log, or the log has grown since.
+    fn stale(&self) -> bool {
+        !self.drained || self.collected_at != Some(LOG_APPENDS.load(Ordering::Relaxed))
     }
 
     fn peek(&self) -> Option<&msg::RepSummary> {
@@ -1179,8 +1224,16 @@ impl SummaryBatch {
     fn reset(&mut self) {
         self.messages.clear();
         self.next = 0;
+        self.collected_at = None;
+        self.drained = false;
     }
 }
+
+/// Where the reps this batch handed out sit in the log, so the trace each summary causes is a walk of that rep's
+/// records rather than of the whole log (`calypso_core::sync::RepIndex`).
+///
+/// Not cleared by `reset` (see the field), and never the record of what exists: a miss falls back to the walk.
+type BatchIndex = calypso_core::sync::RepIndex;
 
 /// Push any log summaries the subscriber hasn't been sent yet, oldest first.
 ///
@@ -1202,16 +1255,31 @@ async fn stream_new_summaries(
         if !sync.session.is_idle() {
             return;
         }
-        let total = {
+        // A collect walks every record in the log, and the sampler stops for as long as it runs (docs/GOTCHAS.md):
+        // one that already drained the log is not run again until the log has changed.
+        if !batch.stale() {
+            return;
+        }
+        let collected_at = LOG_APPENDS.load(Ordering::Relaxed);
+        let collected = {
             let mut guard = store.lock().await;
-            collect_summaries(&mut guard, rec_buf, rec, cursor, batch.messages)
+            collect_summaries(
+                &mut guard,
+                rec_buf,
+                rec,
+                cursor,
+                batch.messages,
+                &mut batch.index,
+            )
         };
-        let Some(total) = total else {
+        let Some(collected) = collected else {
             return;
         };
         // Reps fall off the ring as it wraps; never point past the end.
-        cursor.clamp_to(total);
+        cursor.clamp_to(collected.total);
         batch.next = 0;
+        batch.drained = collected.drained;
+        batch.collected_at = Some(collected_at);
     }
 
     let Some(summary) = batch.peek() else {
@@ -1223,7 +1291,21 @@ async fn stream_new_summaries(
     }
 }
 
-/// Fill `batch` with the next summaries the subscriber hasn't seen, returning how many summaries the log holds (or `None` if the log couldn't be read).
+/// What one pass of the log found.
+struct Collected {
+    /// Summaries in the log, the ones behind the cursor included.
+    total: usize,
+    /// Whether the pass ran out of log rather than out of batch: everything the cursor could be offered is in the
+    /// batch, or this boot's clock is still missing and the stream is holding for it. A batch that was *filled* is
+    /// not this: there is more behind it, and the cursor has not been sent it.
+    drained: bool,
+}
+
+/// Fill `batch` with the next summaries the subscriber hasn't seen, returning what the log holds and whether there
+/// was more than the batch could take (or `None` if the log couldn't be read).
+///
+/// Also records where each summary it hands out sits in the log, which is how the trace request that summary causes
+/// is answered without reading the log again (see [`BatchIndex`]).
 ///
 /// **Everything that goes out carries a time** (`calypso_core::clock`), and the two kinds of untimed summary are handled differently:
 /// one from a boot that never had a clock can never gain one, so it is stepped over for good; one from *this* boot is only waiting for the client to set the clock, so the batch holds there rather than sending a rep the app cannot place in time.
@@ -1236,7 +1318,8 @@ fn collect_summaries(
     rec: &mut msg::RepRecord,
     cursor: &mut SummaryCursor,
     batch: &mut AllocVec<msg::RepSummary>,
-) -> Option<usize> {
+    index: &mut BatchIndex,
+) -> Option<Collected> {
     let (flash, pt_mem) = store.split();
     let pt = partitions::read_partition_table(flash, pt_mem).ok()?;
     let partition = pt
@@ -1260,13 +1343,18 @@ fn collect_summaries(
     let skip = cursor.next();
     let mut summaries = 0usize;
     let mut holding = false;
+    let mut filled = false;
     if let Err(e) = store::for_each_record(&mut log, rec_buf, rec, |id, record| {
         match &record.body {
             Some(msg::RepRecord_::Body::Clock(clock)) => boots.on_clock(clock),
             Some(msg::RepRecord_::Body::Summary(s)) => {
                 // 1-based here, and `skip` counts the summaries already behind the cursor.
                 summaries += 1;
-                if summaries <= skip || holding || batch.len() >= batch.capacity() {
+                if summaries <= skip || holding {
+                    return;
+                }
+                if batch.len() >= batch.capacity() {
+                    filled = true;
                     return;
                 }
                 let Some(t_unix_ms) = boots.boot_of(id).rep_time_ms(s.t_start_ms) else {
@@ -1283,6 +1371,11 @@ fn collect_summaries(
                 };
                 let mut summary = s.clone();
                 summary.t_unix_ms = t_unix_ms;
+                // A trace request for this rep comes as soon as this summary lands on the phone, and its chunks are
+                // the records that follow it (`store::append_rep` writes them together).
+                if let Some(rep_uuid) = calypso_core::pb::summary_uuid(s) {
+                    index.record(rep_uuid, id + 1, s.chunk_count);
+                }
                 batch.push(summary);
             }
             _ => {}
@@ -1296,7 +1389,10 @@ fn collect_summaries(
         report(msg::ReportKind::LogUnusable);
         return None;
     }
-    Some(summaries)
+    Some(Collected {
+        total: summaries,
+        drained: !filled,
+    })
 }
 
 /// Read a requested rep's trace out of the log into the session, and start streaming it: one `TraceChunk` per transfer, in chunk order.
@@ -1306,6 +1402,7 @@ async fn stream_trace(
     store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
     rec_buf: &mut [u8],
     rec: &mut msg::RepRecord,
+    batch: &SummaryBatch,
     sync: &mut Sync<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     request: msg::TraceRequest,
@@ -1317,12 +1414,13 @@ async fn stream_trace(
     };
 
     // Read it into the session's storage, which is where the cursor that streams it looks: one copy, and no lifetime dance to hand the points over.
+    //
     let (t0_ms, points) = {
         let mut trace = TraceBuf::new(sync.session.trace_storage());
         {
             let mut guard = store.lock().await;
             // The log work stays out of this future: see `collect_summaries`.
-            if !read_trace_from_log(&mut guard, rec_buf, rec, rep_uuid, &mut trace) {
+            if !read_trace_from_log(&mut guard, rec_buf, rec, rep_uuid, &batch.index, &mut trace) {
                 warn!(
                     "trace for rep {} is no longer in the log",
                     UuidShort(Some(&rep_uuid))
@@ -1351,12 +1449,17 @@ async fn stream_trace(
 
 /// Read one rep's trace out of the log into `trace`, returning whether it was there at all (a rep the ring has overwritten reads back empty).
 ///
+/// `index` is where the summary stream saw the rep's records: with it the read is a walk of those records, and
+/// without it the rep is found by walking the log (which holds the sampler off its tick for seconds, so it is the
+/// answer for a rep this connection has not seen rather than the usual one).
+///
 /// Sync, and separate from its caller for the same reason as [`collect_summaries`].
 fn read_trace_from_log(
     store: &mut FlashStore,
     rec_buf: &mut [u8],
     rec: &mut msg::RepRecord,
     rep_uuid: RepUuid,
+    index: &BatchIndex,
     trace: &mut TraceBuf<'_>,
 ) -> bool {
     let (flash, pt_mem) = store.split();
@@ -1372,9 +1475,19 @@ fn read_trace_from_log(
     let Ok(mut log) = FlashLog::mount(&mut region) else {
         return false;
     };
-    store::read_trace(&mut log, rec_buf, rec, rep_uuid, trace)
-        .map(|n| n > 0)
-        .unwrap_or(false)
+    let read = match index.find(&rep_uuid) {
+        Some(place) => store::read_trace_from(
+            &mut log,
+            rec_buf,
+            rec,
+            place.first_chunk_id,
+            place.chunk_count,
+            rep_uuid,
+            trace,
+        ),
+        None => store::read_trace(&mut log, rec_buf, rec, rep_uuid, trace),
+    };
+    read.map(|n| n > 0).unwrap_or(false)
 }
 
 /// A rep UUID for logs: its short form, or a placeholder when absent.
@@ -1425,6 +1538,9 @@ async fn set_clock(
         return;
     };
     CLOCK_EPOCH_S.store(epoch_s, Ordering::Relaxed);
+    // Both outcomes change what the summary stream would read: a written record, or the RAM epoch that dates this
+    // boot's summaries without one.
+    log_changed();
 
     let written = {
         let mut guard = store.lock().await;

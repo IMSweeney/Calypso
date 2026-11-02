@@ -7,6 +7,27 @@ pub const SECTOR: usize = 256;
 pub const SECTORS: usize = 8;
 pub const BIG_SECTOR: usize = 4096;
 pub const BIG_SECTORS: usize = 8;
+/// A log big enough for the device's own ratio of records to sectors: the flash the firmware has is 624 of these.
+pub const WIDE_SECTOR: usize = 4096;
+pub const WIDE_SECTORS: usize = 64;
+
+// Bytes the mock flash has handed out read.
+//
+// Counted outside the flash because the log borrows the flash for as long as it lives: a test that measures what a
+// read cost cannot touch the flash to ask.
+std::thread_local! {
+    static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Forget the reads so far, so a measurement starts from zero.
+pub fn reset_reads() {
+    READS.with(|r| r.set(0));
+}
+
+/// Bytes read since the last [`reset_reads`].
+pub fn reads() -> usize {
+    READS.with(|r| r.get())
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct MockError;
@@ -36,6 +57,7 @@ impl MockData {
             return Err(MockError);
         }
         bytes.copy_from_slice(&self.data[start..start + bytes.len()]);
+        READS.with(|r| r.set(r.get() + bytes.len()));
         Ok(())
     }
 
@@ -122,6 +144,7 @@ macro_rules! define_mock_flash {
 
 define_mock_flash!(MockFlash, SECTOR, SECTORS);
 define_mock_flash!(BigFlash, BIG_SECTOR, BIG_SECTORS);
+define_mock_flash!(WideFlash, WIDE_SECTOR, WIDE_SECTORS);
 
 pub fn mount<N: NorFlash>(flash: &mut N) -> FlashLog<'_, N> {
     FlashLog::mount(flash).unwrap()

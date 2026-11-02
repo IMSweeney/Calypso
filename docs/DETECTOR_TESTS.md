@@ -172,8 +172,9 @@ The fix is in: the integration starts from the bar's velocity at the rep's left 
 - **Noise map: todo.** `Rng` and `Impairments` exist in `sim/src/motion.rs`, but the noise
   slice of the map and any noise pins are not written yet.
 - **False positives: done.** `sim/examples/false_positive_map.rs` sweeps `Push` (the
-  unrack/re-rack/bump) and `Wobble` (the oscillation). The captured non-rep stays pinned in
-  `sim/tests/real_capture.rs`.
+  unrack/re-rack/bump) and `Wobble` (the oscillation). There is no captured non-rep left to pin:
+  the one capture's windows carry holes in their own timelines, so a test against them would pin
+  numbers that came from bridging a gap (see [FIXTURES.md](FIXTURES.md)).
 - **Sets: done.** The `Set` generator is in `sim/src/motion.rs`, `sim/examples/set_probe.rs` prints
   the detected sequence, and `sim/tests/sets.rs` pins that a set comes back whole, in order, with the
   unrack/re-rack unstored. The no-rest set splits correctly, and its later reps read their travel now

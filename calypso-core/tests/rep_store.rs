@@ -6,7 +6,7 @@ use calypso_core::sampler::{Sample, QUAT_SCALE};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::uuid::{fixture_uuid, RepUuid};
 use calypso_sim::fixtures::{detect_and_trace, squat_set};
-use common::{mount, BigFlash, MockFlash};
+use common::{mount, reads, reset_reads, BigFlash, MockFlash, WideFlash};
 
 const Q_ID: [i16; 4] = [QUAT_SCALE as i16, 0, 0, 0];
 
@@ -149,6 +149,70 @@ fn oldest_reps_fall_off_when_the_ring_wraps() {
         );
     }
     assert_eq!(surviving.len(), (20 - first_surviving + 1) as usize);
+}
+
+/// A trace read that is told where the rep is: the same points as the walk, and a fraction of the reads.
+///
+/// This is the path a trace request takes, and the cost is the thing being tested: the walk is what used to hold the
+/// sampler off its tick for seconds while the phone waited for a trace (docs/GOTCHAS.md).
+#[test]
+fn a_trace_read_from_its_summary_walks_the_reps_records_only() {
+    let (samples, _) = squat_set(1, 1500, 800, 0.4);
+    let (traces, summaries) = pipeline(&samples);
+    let trace = &traces[0];
+    let chunks = calypso_core::pb::chunk_count_for(trace.len());
+
+    let mut flash = WideFlash::new();
+    let mut buf = [0u8; RECORD_BUF_BYTES];
+    let mut places = Vec::new();
+    {
+        let mut log = mount(&mut flash);
+        store::append_clock(&mut log, &mut buf, 1_760_000_000).unwrap();
+        for i in 1..=20u32 {
+            let mut summary = summaries[0].clone();
+            summary.rep_uuid = calypso_core::pb::uuid_to_field(&fixture_uuid(i));
+            let summary_id = log.next_id();
+            store::append_rep(&mut log, &mut buf, &mut summary, trace).unwrap();
+            // The chunks are the records right after the summary, and the summary says how many there are.
+            assert_eq!(summary.chunk_count, chunks);
+            places.push(summary_id + 1);
+        }
+    }
+
+    let mut log = mount(&mut flash);
+    let mut rec = msg::RepRecord::default();
+    let mut storage = vec![TracePoint::ZERO; trace.len()];
+    let mut walked = TraceBuf::new(&mut storage);
+    reset_reads();
+    let n = store::read_trace(&mut log, &mut buf, &mut rec, fixture_uuid(12), &mut walked).unwrap();
+    let walk = reads();
+
+    let mut storage = vec![TracePoint::ZERO; trace.len()];
+    let mut from = TraceBuf::new(&mut storage);
+    reset_reads();
+    let m = store::read_trace_from(
+        &mut log,
+        &mut buf,
+        &mut rec,
+        places[11],
+        chunks,
+        fixture_uuid(12),
+        &mut from,
+    )
+    .unwrap();
+    let point = reads();
+
+    assert_eq!(n, trace.len(), "the walk reads the whole trace");
+    assert_eq!(m, n, "and so does the walk from the summary");
+    for (a, b) in walked.iter().zip(from.iter()) {
+        assert_eq!(a.t_ms, b.t_ms);
+        assert_eq!(a.accel, b.accel);
+        assert!((a.pos[2] - b.pos[2]).abs() < 1e-6);
+    }
+    assert!(
+        point * 4 < walk,
+        "{point} bytes read for one trace, {walk} to walk the log for it"
+    );
 }
 
 #[test]

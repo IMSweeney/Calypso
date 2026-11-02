@@ -18,6 +18,30 @@ bootloader onwards. Reads are unaffected.
 **Fix.** `FlashStorage::new(..).multicore_auto_park()` is not optional here. It
 parks the other core for the duration of each operation.
 
+### A walk of the log stops the sampler
+
+**Symptom.** Reps in a real capture carry ~2.2 s jumps in their sample times, one per rep,
+and the phone's 1 Hz calibration notifications arrive in runs of four with 3.4–3.8 s of
+silence between them — through a session in which nothing was wrong with the link.
+
+**Cause.** Everything runs in one task (`join3` in `main.rs`), so a synchronous flash
+walk on the BLE arm is the sampler not running: it is not a slow tick, it is no tick. Two
+paths walked the whole log whenever they ran — `collect_summaries`, which scans every
+record to find the summaries past a cursor, and `read_trace`, which scans every record to
+find the chunks of one rep — and the first of them ran on *every* idle second, because a
+spent batch asked for another collect and a caught-up stream collected zero summaries
+every time.
+
+**What to do.** Never add a walk to a path something else waits on, and ask for a record
+by id rather than for the log: `FlashLog::for_each_from` finds a record by binary
+searching the sectors on their first record id (a sector's first id only increases along
+the ring), so the reader pays for one sector search and the records it came for.
+`read_trace_from` uses that with the place the summary scan recorded, and a summary that
+the log has not changed since is not collected again (`SummaryBatch::stale`, fed by
+`LOG_APPENDS`). The place of a rep's chunks is a *cache*: the summary and chunks are
+written together under the log's lock, so the chunks follow the summary, but a request
+for a rep the cache has no place for must fall back to the walk rather than be refused.
+
 ### `Rep log unusable` in the boot log
 
 The line carries the reason, and the reason decides what to do:
@@ -278,10 +302,15 @@ the ring no longer held. One `RepWindowUnavailable` landed 1.1 s after the gate 
 and every other flap cost a rep silently. Closing the gate now resets the detector, as
 saving a profile already did.
 
-**Test it against a set that never pauses.** `calypso-core/tests/rep.rs` has five reps
-back to back with rest only after the last: before the change it was one span of the
+**Test it against a set that never pauses.** `sim/tests/sets.rs` has a no-rest set, five
+reps back to back with rest only after the last: before the change it was one span of the
 whole set, now it is five. That test also had to fix its own motion model — a sine is a
 push that never comes back, and a detector tuned on one has nothing to learn about reps.
+The generated motion lives in `calypso-sim`, which is where the detector's behaviour is
+pinned now; `calypso-core/tests/rep.rs` is the arithmetic underneath it — the rotation,
+the angles, the integration and its detrend — on hand-written samples with answers worked
+out on paper, so a failure there says the maths is wrong rather than that a threshold
+moved.
 
 ### A turn is a speed, so a gentle return is invisible
 
@@ -336,7 +365,9 @@ chain, a hold breaks it.
 ROM is 1.28 m off a deadlift — and its trace times jump 2–4 s, then a burst of samples
 1–7 ms apart, then the normal spacing.
 
-**Cause.** Something in the sampler loop blocked. `Ticker::every` advances its deadline by
+**Cause.** The BLE arm walked the flash log, on the sampler's thread (see *A walk of the
+log stops the sampler*, below): every store already in the log is a payload read, twice,
+and the sampler does not run until the walk ends. `Ticker::every` advances its deadline by
 one period rather than resetting it to now, so every deadline missed while the loop was
 stopped fires the instant it resumes: the burst is that catch-up, and the jump is the gap
 it leaves behind. `compute_rep` integrates the gap as one trapezoid, which adds seconds of
@@ -344,10 +375,19 @@ acceleration to the velocity at once; that rep climbs about 1 m in the 1.1 s aft
 gap. Nothing downstream can see the gap — `Sample` carries a timestamp and no count of
 what should have been there.
 
+**The timestamps are not wrong.** Measured on the capture, the stamped intervals still
+add up to wall clock and the point count is still about one per 10 ms, because the
+catch-up hands the missed deadlines their samples back: what is missing is the *motion*
+inside the gap, not the axis. A reading of the trace therefore cannot be repaired by
+re-spacing it — the gap is a hole in what the device knows.
+
 **Fix.** The sampler logs `sampler hole: … ms without a sample` where the gap is made, on
 the boot clock, so the flash windows and link events above it are the candidate causes,
 and raises `REPORT_KIND_SAMPLER_HOLE` so the phone says a rep from then may read long
-while the person is still in the gym.
+while the person is still in the gym. The walks themselves are gone from both paths that
+ran them uninvited (see *A walk of the log stops the sampler*); a *collect* still walks
+the log once per connection and once per batch of summaries, which is a freeze worth
+knowing about but not one that repeats.
 
 **A gap is also inside the stored window, not just between reps.** The tracer copies a
 window out of the ring, so the jump comes with it: of 61 replayed windows from one
@@ -358,6 +398,24 @@ with a timeline, because judging a detector on a window that does not describe i
 motion is not a measurement. What the integration should do with the time is
 still open (`ROADMAP.md`): read a rep that spans a hole as short, or as unusable, or
 remove the holes.
+
+**A clean timeline is not the whole story.** The first rep stored after the holes were
+fixed still cannot be replayed as a stream, and not because anything is wrong with it. The
+window is the motion span with `MARGIN_MS` asked for before it and whatever had been
+sampled after it — the tail is cut at the close — and on this rep even the 200 ms before
+the onset are inside motion: the first sample carries 7.0 m/s² against a 0.6 m/s²
+on-threshold, the last 1.1 against a 0.25 m/s² rest threshold. Neither end is rest, so the
+detector fed that window cold closes no span at all.
+
+**And the trace cannot reproduce its own summary.** The trace keeps every second sample of
+the window, and on this motion travel depends on the step it is integrated at: re-running
+`compute_rep` over the 20 ms trace reads 1.10 m where the summary stored 0.94, and every
+second sample again (40 ms) reads 1.42. On a synthetic rep of the same length the same
+decimation costs under 1%, so this is the real motion's own structure, not the maths.
+What that means: a summary is a function of the samples it was computed from, and a stored
+trace is not that sample set. So `sim/tests/real_capture.rs` pins what the bytes *are* —
+identity, completeness, timeline, date — and a detector is still judged on synthetic
+motion and on a live stream.
 
 ## The radio
 

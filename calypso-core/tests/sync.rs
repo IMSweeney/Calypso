@@ -7,7 +7,9 @@
 use calypso_core::gatt::pipe_sync;
 use calypso_core::pb::{self, msg};
 use calypso_core::pipe::MESSAGE_MAX;
-use calypso_core::sync::{summary_message, trace_request, SummaryCursor};
+use calypso_core::sync::{
+    summary_message, trace_request, RepIndex, RepPlace, SummaryCursor, REP_INDEX_LEN,
+};
 use calypso_core::uuid::fixture_uuid;
 
 /// A message as the pipe carries it: the bytes the app reassembles, and their length.
@@ -158,4 +160,37 @@ fn trace_requests_are_validated() {
     assert!(trace_request_of(&scratch[..n]).is_none());
     assert!(trace_request_of(&encode(fixture_uuid(1), false, 9999)).is_none());
     assert!(trace_request_of(&[0xFF, 0xFF, 0xFF, 0xFF]).is_none());
+}
+
+/// Where a rep's records are, so a trace request is a walk of them rather than of the log.
+///
+/// The index is a cache and is allowed to forget: the test that matters is that a forgotten rep is a *miss* (which
+/// the device answers by walking the log) rather than a wrong answer, which would send the app another rep's trace.
+#[test]
+fn the_device_remembers_where_a_reps_records_are() {
+    let mut index = RepIndex::new();
+    assert_eq!(index.find(&fixture_uuid(1)), None, "nothing yet");
+
+    index.record(fixture_uuid(1), 42, 5);
+    assert_eq!(
+        index.find(&fixture_uuid(1)),
+        Some(RepPlace {
+            rep_uuid: fixture_uuid(1),
+            first_chunk_id: 42,
+            chunk_count: 5,
+        })
+    );
+
+    // A full index forgets the oldest place first: the asks a batch causes come in the order it was sent.
+    for i in 0..REP_INDEX_LEN as u32 {
+        index.record(fixture_uuid(100 + i), 1000 + i, 1);
+    }
+    assert_eq!(index.find(&fixture_uuid(1)), None, "the oldest is gone");
+    assert!(
+        index.find(&fixture_uuid(101)).is_some(),
+        "and the ones after it are not"
+    );
+    // Re-recording a rep that is in the index moves nothing: same uuid, same place.
+    index.record(fixture_uuid(101), 1001, 1);
+    assert_eq!(index.find(&fixture_uuid(101)).unwrap().first_chunk_id, 1001);
 }
