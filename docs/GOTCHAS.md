@@ -375,8 +375,8 @@ is wrong rather than that a threshold moved.
 the boundary sits between 0.12 and 0.14 m/s of peak return speed — at the very slow end
 of a deliberate negative, and inside the range of a lifter lowering under control.
 
-**Cause.** The detector delimits a rep by turning points, and a turn is the speed falling
-below `VEL_MIN` (0.15 m/s) for `T_TURN_MS`. A stroke that never reaches that speed never
+**Cause.** The detector delimits a rep by turning points, and a turn is the vertical speed
+falling below `VEL_MIN` (0.07 m/s) for `T_TURN_MS`. A stroke that never reaches that speed never
 turns, so it never becomes a leg, and no leg means no rep — regardless of how far the bar
 actually went.
 
@@ -385,6 +385,43 @@ point model fixed stalls and ROM fidelity, and the cost was accepted. Closing a 
 on bounded travel as well as on a turn would cover it. Until then,
 `sim/tests/detector_tolerance.rs::a_gentle_return_is_not_detected_yet` pins the behaviour
 so it fails — loudly, with instructions — if it is ever fixed.
+
+### A turn read off the whole velocity never happens on a real frame
+
+**Symptom.** The device is recording — the sampler says the filter is settled and the detector
+line prints a bias and an acceleration — but `legs` climbs slowly or not at all and nothing is
+stored. `|v|` in that line never falls to the centimetres a turnaround should, while the
+acceleration it is integrating looks small.
+
+**Cause.** The turn test compared `VEL_MIN` against the *whole* velocity. A leg is a signed
+*vertical* travel measured on Z, but X and Y carry the frame's residue, and the fusion's own
+documentation allows a couple of degrees of it — `g·sin(2°)` is 0.34 m/s², which over a
+one-second stroke is 0.34 m/s of horizontal velocity, five times `VEL_MIN`, and it stays there
+because the detector damps velocity only while no leg is open. The bar turned; the speed did
+not. Nothing the sensor reads is wrong: the vertical is clean, and the horizontal was never
+part of the rep.
+
+**Fix.** `Detector::vertical_speed` is what a turn is read on, and what `moved` is set from, so
+a bar carried sideways while it turns is still turning. `Detector::speed` still reports the whole
+velocity for the log — it is the number that says the frame is drifting — and it is deliberately
+not the number the turn test reads. `sim/tests/turns.rs` pins a gyro offset that arrives with the
+rep, which is how this arrives on a real device.
+
+### A leg under the travel threshold consumes the rep before it
+
+**Symptom.** A set stores one rep fewer than it should, or it splits a rep in two, and the
+missing one is the drive that followed a bar settling back at its turnaround. Nothing logs a
+rejection: the detector simply never pairs that drive with anything.
+
+**Cause.** Every leg was allowed to replace or clear the pending one. A bar gives a few
+centimetres back at lockout, which is motion in the opposite direction and fast enough to turn,
+so a 3–6 cm leg arrived between a drive and its return — under `MIN_ROM_M`, so it could not pair,
+but it replaced the drive it followed. The drive was then the one thrown away, and the return
+that came after it had nothing to pair with.
+
+**Fix.** A leg under `MIN_ROM_M` is dropped and leaves the pending leg alone. The one exception
+is a same-direction leg with no rest between them, which is a stall inside a stroke: its travel
+is added to that stroke whatever its size. `sim/tests/turns.rs` pins the settle at three sizes.
 
 ### A history ring answers a stale question with a default
 

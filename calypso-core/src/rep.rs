@@ -180,9 +180,20 @@ impl Detector {
         self.legs
     }
 
-    /// Speed the bar is taken to be moving at (m/s) — the number the turn test compares against [`VEL_MIN`].
+    /// The bar's whole velocity (m/s), for the log. The turn test reads the vertical, not this.
     pub fn speed(&self) -> f32 {
         magnitude(self.v)
+    }
+
+    /// Vertical speed (m/s), which is the one a leg is delimited by.
+    ///
+    /// Every leg is a signed **vertical** travel, so the vertical is the axis a rep is measured on
+    /// and the only one that can say the bar has stopped moving along it. The other two carry the
+    /// mount's heading and whatever the frame has left in it — a couple of degrees of attitude is
+    /// tenths of a metre per second squared, which over a stroke is a velocity no turnaround would
+    /// ever fall below, so a turn read off the whole speed is a turn that never happens.
+    pub fn vertical_speed(&self) -> f32 {
+        absf(self.v[2])
     }
 
     /// Whether a leg is open right now.
@@ -255,7 +266,7 @@ impl Detector {
             }
         }
 
-        let speed = magnitude(self.v);
+        let speed = self.vertical_speed();
 
         if self.leg_start.is_none() {
             // Looking for a motion onset, which is only needed at the start of a stream: every leg after the first begins where the previous one turned.
@@ -321,10 +332,31 @@ impl Detector {
             }
             return None;
         };
-        let pmag = p.disp_z.abs();
         let opposite = p.disp_z * leg.disp_z < 0.0;
 
-        if opposite && pmag >= MIN_ROM_M && mag >= MIN_ROM_M {
+        // A stall that reaches no rest continues the stroke it interrupted, so its travel belongs
+        // to that stroke whatever size it is.
+        if !opposite && !leg.had_rest {
+            self.pending = Some(Leg {
+                start_ms: p.start_ms,
+                end_ms: leg.end_ms,
+                disp_z: p.disp_z + leg.disp_z,
+                had_rest: p.had_rest,
+                state: p.state,
+            });
+            return None;
+        }
+
+        // **A leg under [`MIN_ROM_M`] is not a stroke, and it does not consume one.** A bar settling
+        // a few centimetres at a turnaround is motion in the opposite direction and it can reach
+        // `VEL_MIN`, so it arrives here as a leg; letting it pair — or letting it replace the leg
+        // before it, which is what the same-direction case used to do — throws away the rep it
+        // followed. It is dropped, and what was pending keeps waiting.
+        if mag < MIN_ROM_M {
+            return None;
+        }
+
+        if opposite {
             let span = RepSpan {
                 start_ms: p.start_ms,
                 end_ms: leg.end_ms,
@@ -337,22 +369,8 @@ impl Detector {
             return None;
         }
 
-        let next = if !opposite && !leg.had_rest {
-            Leg {
-                start_ms: p.start_ms,
-                end_ms: leg.end_ms,
-                disp_z: p.disp_z + leg.disp_z,
-                had_rest: p.had_rest,
-                state: p.state,
-            }
-        } else {
-            leg
-        };
-        self.pending = if next.disp_z.abs() >= MIN_ROM_M {
-            Some(next)
-        } else {
-            None
-        };
+        // The same direction after a rest is a one-way push, and the older leg is the finished one.
+        self.pending = Some(leg);
         None
     }
 
@@ -484,7 +502,7 @@ impl<'a> TraceBuf<'a> {
 /// Bumped when a change makes a stored summary mean something else — a threshold that moves is a
 /// different measurement wearing the same name, and two numbers from two versions are then not
 /// comparable as if they were one.
-pub const DETECTOR_VERSION: u32 = 1;
+pub const DETECTOR_VERSION: u32 = 2;
 
 impl msg::RepSummary {
     /// Whether this is a rep at all: the bar has to have gone up or down [`MIN_ROM_M`].

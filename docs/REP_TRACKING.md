@@ -61,10 +61,17 @@ travel rather than momentum. **A rep is an out-and-back**: the bar goes more tha
 `MIN_ROM_M` one way, turns, and comes more than `MIN_ROM_M` back.
 
 ```
-turn: the bar's speed falls below VEL_MIN for T_TURN_MS
+turn: the bar's vertical speed falls below VEL_MIN for T_TURN_MS
 leg:  the signed vertical travel between two turns
 rep:  two consecutive legs, opposite directions, each past MIN_ROM_M
 ```
+
+**A turn is read on the vertical, not on the whole velocity**, because the vertical is the
+only axis a rep is measured on. The frame's horizontal residue — a couple of degrees of
+attitude, which is what an accelerometer offset leaves behind — integrates to more than
+`VEL_MIN` inside one stroke, and a turn read off the whole speed would then never happen.
+The bar turns along Z; where the estimate thinks it is heading in X and Y is not part of
+the rep.
 
 The detector integrates each sample's acceleration (rotated into the world frame) into a
 velocity, which is zero wherever the bar stops — at the bottom and at the top of every
@@ -73,9 +80,11 @@ nobody pauses through splits at each end the same way a slow one does. Tunables 
 constants at the top of `calypso-core/src/rep.rs`.
 
 **Travel is part of detection, not a check afterwards.** A leg too short to be half a
-rep is never kept, so it cannot pair with anything: a bump, a re-rack and a hand on the
-rack (the one capture had four spans of 0.03–0.09 m among ten real reps) are rejected by
-the same measurement that accepts a press. A one-way push tall enough to be a leg is
+rep is never kept, so it cannot pair with anything, and it cannot consume the leg before
+it: a bump, a re-rack and a hand on the rack (the one capture had four spans of 0.03–0.09 m
+among ten real reps) are rejected by the same measurement that accepts a press, and the few
+centimetres a bar settles back at a turnaround are motion that leaves the drive still
+waiting for its return. A one-way push tall enough to be a leg is
 dropped when the bar rests and then sets off the same way again — that is an unrack, not
 a rep. The summary is still checked against `MIN_ROM_M` when it is stored, against the
 travel the trace computes rather than the one integrated on the way in.

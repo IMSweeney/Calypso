@@ -67,9 +67,11 @@ Where Calypso is and what is left. Feature documentation lives in
 - **A rep is out and back** — the detector closes a rep on the return, not where the bar
   rests, so a bench rep held at lockout is captured as one rep instead of split into a
   drive and a lowering (or lost). A one-way push that pauses (an unrack) is dropped
-  rather than merged into the next rep. See [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
+  rather than merged into the next stroke, as long as that stroke goes the same way;
+  the set that starts with a lowering is below. See
+  [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
 - **A rep is two strokes between turns** — the detector finds the turning points from the
-  bar's velocity and measures the signed vertical travel between them, so the travel check
+  bar's *vertical* velocity and measures the signed vertical travel between them, so the travel check
   is part of detection instead of a test afterwards: a leg under `MIN_ROM_M` can never
   pair, and a stroke that stalls mid-drive is one rep with its whole travel rather than a
   rep cut short or lost. Chosen over the momentum detector on measurement — 0 cells where
@@ -148,6 +150,21 @@ Where Calypso is and what is left. Feature documentation lives in
       today, because the summaries are re-streamed. Not seen since the pipe — the
       real session forwarded every notification it received — but the transport is
       unchanged, so this is unanswered rather than fixed.
+
+### The rep detector
+
+- [ ] **An unrack followed by a lowering is paired as a rep.** A rep is two opposite legs
+      past `MIN_ROM_M`, and a one-way push is dropped only when the stroke after it goes the
+      same way. A bench or squat set's first stroke after the unrack is the lowering, so the
+      unrack pairs with it: the first stored rep is the unrack plus a descent, and every rep
+      after that is one stroke out of phase — an ascent and the next rep's descent, which
+      reads the right ROM over a window that spans the rest between two reps. With a rest
+      long enough to push the shifted pair past `MAX_REP_MS`, the set stores nothing. The
+      simulator cannot see it: `Rep` always drives up first, so the unrack merges with the
+      first drive there instead. Nothing about the pair separates the two cases — not the
+      pause, since a paused rep has one too, and not the directions — so the measurement to
+      take on a session is the travel asymmetry between an unrack and a stroke, and the rule
+      is a decision rather than an inference.
 
 ### First real device capture
 

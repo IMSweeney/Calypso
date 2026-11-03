@@ -63,6 +63,12 @@ pub struct Rep {
     pub speed_out: f32,
     pub pause_top_ms: u32,
     pub pause_bottom_ms: u32,
+    /// How far the bar settles back at the top before the return, and the peak speed it does it at.
+    ///
+    /// A bar does not stop where it is caught: at lockout it gives a few centimetres back and comes
+    /// again, which is motion in the opposite direction to the drive and short of half a rep.
+    pub settle_m: f32,
+    pub settle_speed: f32,
 }
 
 impl Rep {
@@ -74,6 +80,8 @@ impl Rep {
             speed_out: 0.35,
             pause_top_ms: 150,
             pause_bottom_ms: 300,
+            settle_m: 0.0,
+            settle_speed: 0.0,
         }
     }
 
@@ -84,6 +92,8 @@ impl Rep {
             speed_out: 0.70,
             pause_top_ms: 150,
             pause_bottom_ms: 300,
+            settle_m: 0.0,
+            settle_speed: 0.0,
         }
     }
 
@@ -95,6 +105,8 @@ impl Rep {
             speed_out: 0.80,
             pause_top_ms: 150,
             pause_bottom_ms: 300,
+            settle_m: 0.0,
+            settle_speed: 0.0,
         }
     }
 
@@ -104,6 +116,10 @@ impl Rep {
     pub fn strokes(&self, out: &mut Vec<Sample>, from_ms: u32) -> u32 {
         let mut t = stroke(out, from_ms, self.travel, self.speed_in, 1.0);
         t = push_rest(out, t, self.pause_top_ms);
+        if self.settle_m > 0.0 {
+            t = stroke(out, t, self.settle_m, self.settle_speed, -1.0);
+            t = stroke(out, t, self.settle_m, self.settle_speed, 1.0);
+        }
         t = stroke(out, t, self.travel, self.speed_out, -1.0);
         push_rest(out, t, self.pause_bottom_ms)
     }
