@@ -15,7 +15,6 @@ Service `0000ca20-b0cd-11ec-871f-d45ddf138840` — advertised, so a scan can fil
 |---|---|---|
 | `0000ca21-…` | notify | everything the device says: chunks of a `SyncMessage`, and the acknowledgements of what the app sent |
 | `0000ca22-…` | write-without-response | everything the app asks for: chunks of a `SyncRequest`, and the acknowledgements of what the device sent |
-| `0000ca24-…` | read | the IMU's calibration state, as a `CalibrationStatus` |
 | `0000ca25-…` | notify | the device's own faults, as a `Report` |
 | `0000ca23-…` | write | the device's clock, as unix seconds — the app sets it on every connection |
 | `0000ca26-…` | read | the IMU as the sampler last read it, as an `ImuState` |
@@ -27,12 +26,7 @@ oneof rather than a new characteristic, a new UUID and a new subscription. The
 acknowledgements travel on the characteristic they are *not* about, which is what
 lets two carry both directions.
 
-Calibration is the exception, and says what the rule is about: a level is a
-**state**, not a message about something happening, so it is a value the app reads
-when its UI wants it rather than a body pushed at the device's choice of moment.
-See [`CALIBRATION.md`](CALIBRATION.md) for what the levels mean.
-
-The faults are the exception on the other side of the same rule, and the reason the
+The faults are the exception on the other side of that rule, and the reason the
 pipe could not carry them. They *are* events, so they are pushed — but not as pipe
 transfers, for three reasons that all come from what a transfer costs: the pipe carries
 one message at a time, so a fault would queue behind the trace it is waiting on; the
@@ -50,14 +44,16 @@ The clock is the other one, and the same argument the other way round: it is a s
 the app **writes**, once per device boot. On the pipe it would queue behind the
 summaries it exists to date, because the device holds this boot's summaries until it
 has a clock — see [Time](#time). It is required at connect like the rest — a device
-missing any of the five is refused, by name, before anything is read or written — and
+missing any of them is refused, by name, before anything is read or written — and
 the clock and the faults are the two whose absence would otherwise be silent.
 
 The IMU's own values are the one **diagnostic** in the table: the sample the rep
-detector is fed — linear acceleration, quaternion, and when the sampler read it — at
-the fixed point a stored trace carries, so a readout can be compared against a rep's
-own numbers. The device republishes it ten times a second, so a reader gets the most
-recent sample whenever it asks, and `t_uptime_ms` says how recent.
+detector is fed — specific force, the attitude the filter computed for it, and when
+the sampler read it — at the fixed point a stored trace carries, so a readout can be
+compared against a rep's own numbers. The device republishes it ten times a second,
+so a reader gets the most recent sample whenever it asks, and `t_uptime_ms` says how
+recent. The attitude is the firmware's rather than the chip's: a non-fusion mode has
+no orientation to report ([`RAW_IMU.md`](RAW_IMU.md)).
 
 The app reads it once per connection and logs it; **nothing on screen shows it yet**.
 A generic BLE client — nRF Connect and the like, or a script on a laptop — is the
@@ -128,7 +124,7 @@ The types are the generated ones throughout, down to the plot: the archive store
 records and the UI reads fields off the messages, so a field added to
 `proto/calypso.proto` reaches the screen without anyone remembering to copy it.
 What `lib/model/` holds is extensions that *derive* from the messages — physical
-units, tilt ranges, the calibration wording.
+units, tilt ranges, what a rep's counts mean.
 
 ## Summary sync
 

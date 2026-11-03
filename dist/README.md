@@ -23,8 +23,8 @@ espflash save-image --chip esp32 --merge \
 
 The `--partition-table` flag bakes `calypso-esp32/partitions.csv` — which defines
 the `log` data partition the rep log uses — into the merged image. **The first
-flash with this table repartitions the device**; `nvs` keeps its default offset,
-so the stored BNO055 calibration survives.
+flash with this table repartitions the device.** Reps in the log survive a reflash, which
+is the point of the ring; wipe it when a build changes what a stored record means.
 
 ## Deploy
 

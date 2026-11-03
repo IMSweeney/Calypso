@@ -3,10 +3,10 @@
 How a barbell rep gets from the IMU to a stored, plottable trace.
 
 ```
-BNO055 (IMU mode, 100 Hz)
+BNO055 (ACCGYRO, 100 Hz)
    │  I²C @ 400 kHz
    ▼
-Sampler ──► RAM ring (~12 s of samples)
+Sampler ──► RAM ring (~13 s of samples)
    │
    ▼
 Rep detector (turning points, ZUPT at rest)
@@ -20,22 +20,39 @@ Flash log (ring of 4 KB sectors) ──► BLE sync to the app
 
 ## Sampling
 
-- The BNO055 runs in **IMU mode**: accelerometer + gyroscope fusion, no
-  magnetometer (unreliable next to a barbell's steel). Fused output at 100 Hz:
-  linear acceleration with gravity removed, plus a quaternion orientation.
-- I²C at 400 kHz. One sample is ~14 bytes, so ~0.5 ms of the 10 ms period.
+- The BNO055 runs in **ACCGYRO**: its accelerometer and gyroscope registers, raw and
+  uncompensated, no fusion and no magnetometer (unreliable next to a barbell's
+  steel). There is no orientation from the chip — the firmware computes it, which is
+  what makes a still bar read 1 g instead of an estimate's idea of zero
+  ([`RAW_IMU.md`](RAW_IMU.md)).
+- I²C at 400 kHz. One sample is two 6-byte register reads, so under a millisecond of
+  the 10 ms period.
 - Sample format, fixed point, 16 bytes:
-  `{ t_ms: u32, accel: [i16; 3], gyro: [i16; 3] }` — accel at 0.01 m/s² per LSB
-  (BNO055 native) and gyro at 1/16 dps per LSB. The acceleration is **specific
-  force**, gravity still in it: a still sensor reads 1 g, which is the fact the filter
-  is built on ([`RAW_IMU.md`](RAW_IMU.md)). The device still fills it from the chip's
-  fused output — a stopgap — while it waits to be read raw.
+  `{ t_ms: u32, accel: [i16; 3], gyro: [i16; 3] }` — accel at 0.01 m/s² per LSB and
+  gyro at 1/16 dps per LSB, which are the chip's own register scales: the device
+  copies the two readings into the sample and converts nothing. The acceleration is
+  **specific force**, gravity still in it, so a still sensor reads 1 g.
   `t_ms` is monotonic device uptime; the device has no RTC, so a rep's wall-clock
   time comes from the boot's clock, which the app sets ([`APP_SYNC.md`](APP_SYNC.md)).
-- Samples go into a RAM ring of `SAMPLE_RING_LEN` = 12 s (`REP_WINDOW_SAMPLES` = 900
-  = 9 s of motion, plus 3 s headroom). The detector never asks for more than 9 s.
-- The sampler also reads the gravity vector once a second, for the level verdict in
-  the firmware log (`Sensor is level on the X axis` — how the device gets levelled).
+- The range settings do not change those scales — only what clips, and how noisy the
+  sensor is inside the chip. A rep's summary carries what they were
+  (`RepConfig`), which is why a trace can be read without assuming today's build.
+- Samples go into a RAM ring of `SAMPLE_RING_LEN` = 13 s (`REP_WINDOW_SAMPLES` = 1000
+  = 10 s, which is the longest window a rep can ask for with its 500 ms margins,
+  plus 3 s headroom).
+- The sampler also logs a level verdict once a second (`Sensor is level on the X
+  axis` — how the device gets levelled). The chip has no gravity vector to read in a
+  non-fusion mode, so that is the world's up axis carried into the sensor's frame by
+  the filter's attitude: the same number the fusion used to report, from an estimate
+  corrected only while the bar is still.
+
+**Nothing is recorded until the filter has settled.** It seeds gravity and both
+sensor offsets from a still window, so before that there is no vertical for a rep to
+be measured against — a trace taken then would be fiction rather than a measurement.
+The sampler logs `imu settling` while the gate is shut and `imu settled` when it
+opens, both only when the state changes. This is the whole of what used to be a
+calibration ritual: hold the bar still for a second, and the filter knows which way
+is down.
 
 ## Detecting a rep
 

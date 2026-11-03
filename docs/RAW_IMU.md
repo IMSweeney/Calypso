@@ -246,18 +246,22 @@ The archive's last fixture goes with the archive: a fused-format trace cannot be
 `real-deadlift.pblog` and the tests that read it are deleted rather than converted, and the other
 fixtures are regenerated from the generators.
 
-**What the implementation changed against this plan.** The raw trace is not recorded by the device
-yet, even with `DevMode` set: its sample has no gyroscope until the chip is read raw in stage 3, and
-a raw trace that cannot be replayed through the filter it exists for is not worth the log. The write
-and read paths are in `store` and exercised by the fixtures, so stage 3 has only the device's own
-use of them to add.
+**What the implementation changed against this plan.** The raw trace was not recorded by the
+device when this stage landed, even with `DevMode` set: its sample had no gyroscope until the chip
+was read raw, and a raw trace that cannot be replayed through the filter it exists for is not worth
+the log. The write and read paths were in `store` and exercised by the fixtures, so stage 3 had only
+the device's own use of them to add — which it did, one stage early: dev mode records and streams a
+rep's window end to end, and the buffer one is streamed from is allocated on the first request
+rather than at boot.
 
-### 3. Device — todo
+### 3. Device — done
 
-`ACCGYRO` with the range and bandwidth set in CONFIG mode first; one burst read of accel and
-gyro. `load_calibration`, the profile save, the 1 Hz calibration poll and the
-`CALIBRATION_SAVED` path all go, along with `calibration.rs`; the recording gate becomes the
-fusion's own readiness — seeded from a still window — rather than a level the chip reports.
+`ACCGYRO` with the range and bandwidth set in CONFIG mode first; one read of accel and one of
+gyro, straight into the sample (`0.01 m/s²` and `1/16 dps` per LSB are the chip's register
+scales, so nothing is converted). `load_calibration`, the profile save, the 1 Hz calibration
+poll and the `CALIBRATION_SAVED` path all go, along with `calibration.rs`; the recording gate
+becomes the fusion's own readiness — seeded from a still window — rather than a level the chip
+reports.
 
 **The deliberate A/B:** the detection logic — the turning points, the pairing, the thresholds —
 is unchanged, and only what feeds it is new. If the device starts storing reps again, that is
@@ -269,23 +273,37 @@ without a wipe the app pulls old-format records and plots them as though they we
 
 Verified by: a release build, fake reps through the whole path, then a real session.
 
-**What has already landed ahead of it.** Dev mode is wired end to end: a client arming it
-makes every rep from then on keep its raw window as well as its plotted trace, and a
-`TraceKind::Raw` request streams those chunks back out of the log. The buffer a raw trace
-is streamed from is allocated on the first such request rather than at boot, because a
-window of full-rate samples is the largest thing a session can be asked to hold and a
-session that never serves one should not pay for it.
+**What the implementation changed against this plan.**
 
-What this does **not** yet give is a trace worth replaying: the sampler still builds its
-sample from the fused `linear_acceleration` and a zero angular rate (see the stopgap in
-`main`), so a raw trace recorded today has the right shape and no gyroscope. That is the
-point of doing the plumbing first — a session that syncs 19 KB of chunks is the path
-working, and stage 3 is what makes the numbers in it mean something.
-
-The documentation moves with it, because it describes the system rather than the plan:
-[`REP_TRACKING.md`](REP_TRACKING.md) for what a sample is and where the frame comes from,
-[`APP_SYNC.md`](APP_SYNC.md) for the characteristics, and [`CALIBRATION.md`](CALIBRATION.md),
-which becomes the story of a device settling at boot or stops being a document.
+- **The gyroscope keeps the chip's defaults — 2000 dps at 32 Hz — rather than the ±500
+  chosen above.** The driver can set the accelerometer's configuration and not the
+  gyroscope's (`GYR_Config`, 0x0F, is not exposed and its register writes are private), and
+  the plan's reason for ±500 — the internal sensor is quietest at the low end — buys a few
+  milli-dps of quantisation on a signal that never comes near either clip point. The chip's
+  2000 dps cannot clip a barbell, and the register's *output* scale does not move with the
+  range, so a trace decodes the same either way. It is recorded as 2000, not left at 0.
+- **The accelerometer's bandwidth is written explicitly** (62.5 Hz, recorded as 63, which is
+  the number the chip's own tables use for that step) even though it is the chip's default:
+  a summary that claims a setting is a summary that should not be describing a default
+  someone could change. ±8 g is set above it, for the clip headroom the plan argues for, and
+  read back before the mode switch — the write reports only that the bus took it.
+- **The level verdict moved onto the filter.** A non-fusion mode has no gravity vector to
+  read (`GRV_DATA` is a fusion output), so `Sensor is level on the X axis` is now the world's
+  up axis carried into the sensor's frame by the estimated attitude. Same number, same
+  threshold, from an estimate corrected only while the bar is still.
+- **`CALIBRATION.md` stops being a document**, and its one surviving fact — nothing is
+  recorded until the filter has settled, which takes a second of stillness — is in
+  [`REP_TRACKING.md`](REP_TRACKING.md) where the sampling path is described.
+- **The app needed no change at all.** Its half of the calibration surface went in stage 2,
+  and nothing else it reads moved: `ImuState`'s quaternion is the filter's now rather than
+  the chip's, at the same scale and in the same frame.
+- **The chip hands over a new reading on every poll.** It was open whether a non-fusion mode
+  runs at the rate it is polled at, since the datasheet's table pins the rate for fusion modes
+  only and a poll that outran the sensor would read the same register twice. Counted on a still
+  board: no two consecutive reads were identical in twelve thousand samples, so the 100 Hz poll
+  is neither oversampling the chip nor missing an update. Stillness is where that is easiest to
+  see — a sensor that repeats gives the same bytes back, and the sensor's own noise is what
+  changes them — so it says nothing yet about how the rate behaves through a stroke.
 
 ### 4. Reality — todo
 
@@ -314,16 +332,18 @@ trace, where it is the format rather than a compromise.
   heading and nothing else.
 - **The annotated captures are unreachable until stage 4.** In the interim the detector is tuned
   against synthetic motion alone, so stage 4 should not slip far behind stage 3.
-- **The `bno055` crate may not expose ACCGYRO reads usefully.** Worth checking before stage 3 is
-  sized: if there is no raw path, it is a small register read behind the same trait, not a
-  redesign.
+- **The gyroscope's range is the chip's default** and cannot be set through the driver. If the
+  noise ever matters, it is a register write behind the same trait (`Destroy`, one I2C
+  transaction, and the chip's config mode), not a redesign.
+- **The `bno055` crate does expose ACCGYRO reads** — `accel_data_fixed` and `gyro_data_fixed`,
+  at the scales this sample format already uses. The unknown that answered *no* was the
+  gyroscope's configuration, above.
 
 ## Status
 
 - **Stage 1: done.** The filter, and the simulator that measures it.
 - **Stage 2: done.** Both traces, the summary's header, the sync protocol, the device and the app.
-- **Stage 3: in part.** Dev mode records and serves raw traces, end to end on both sides.
-  Still to do: `ACCGYRO`, the range and bandwidth in CONFIG mode, the calibration surface
-  deleted, the recording gate moved onto the filter's readiness — and the input-swap A/B
-  that all of that is for.
+- **Stage 3: done.** The device reads the chip raw, filters it here, and records nothing until
+  the filter has settled. The input swap is the A/B, and it is unrun: no session has been
+  recorded on the new path yet.
 - **Stage 4: todo.** Reality, retune, and whether the detector consumes the filter's velocity.

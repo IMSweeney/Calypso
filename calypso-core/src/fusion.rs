@@ -197,6 +197,14 @@ impl Fusion {
         self.state
     }
 
+    /// How long the bar has held still, in seconds: the number readiness is counted toward.
+    ///
+    /// For the log, so a device that never becomes ready can say whether it is being held or whether the sensor is
+    /// giving it nothing it can call still.
+    pub fn still_for_s(&self) -> f32 {
+        self.still_s
+    }
+
     /// Whether the attitude knows which way is down, which is the gate on recording anything.
     pub fn ready(&self) -> bool {
         self.ready

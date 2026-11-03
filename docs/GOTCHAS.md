@@ -8,7 +8,7 @@ each one is symptom → cause → what to do.
 ### A flash write or erase needs the other core parked
 
 **Symptom.** Every erase and write fails — including the log partition's first
-format — while reads work perfectly. The stored calibration reads back fine, so it
+format — while reads work perfectly. A read of an earlier write comes back fine, so it
 looks like broken flash or a bad partition.
 
 **Cause.** `esp-storage`'s default `MultiCoreStrategy::Error` refuses every write
@@ -21,7 +21,7 @@ parks the other core for the duration of each operation.
 ### A walk of the log stops the sampler
 
 **Symptom.** Reps in a real capture carry ~2.2 s jumps in their sample times, one per rep,
-and the phone's 1 Hz calibration notifications arrive in runs of four with 3.4–3.8 s of
+and the phone's once-a-second notification arrives in runs of four with 3.4–3.8 s of
 silence between them — through a session in which nothing was wrong with the link.
 
 **Cause.** Everything runs in one task (`join3` in `main.rs`), so a synchronous flash
@@ -87,10 +87,9 @@ nothing. The log reads records *by their length*: the CRC walk and the payload c
 however long the record happens to be, which is never guaranteed to be a multiple of 4.
 
 The asymmetry that made this hard to see: the **same region** implements the *other*
-trait too, and `ReadStorage::read` (which the NVS calibration blob read resolves to)
-copies through a whole-sector scratch buffer and accepts any length. So a 22-byte NVS
-read worked, 8-byte sector and record headers worked, a 64-byte probe worked — and a
-2459-byte record payload did not.
+trait too, and `ReadStorage::read` copies through a whole-sector scratch buffer and accepts
+any length. So a 22-byte NVS read worked, 8-byte sector and record headers worked, a
+64-byte probe worked — and a 2459-byte record payload did not.
 
 **Fix.** Every read goes through `flashlog::ReadBlocks::read_blocks`, which reads whole
 64-byte blocks and copies out the window asked for — the shape the diagnostic probe had
@@ -103,14 +102,17 @@ it to "a read in sector 6", and the probe reading that whole sector end to end f
 shallower frame is what proved the bytes were fine and pointed at the shape of the call
 rather than the flash.
 
-### NVS holds one thing, in one sector
+### NVS is empty, and stays in the table anyway
 
-The BNO055 calibration profile starts at offset `0x00`, and that is the whole of
-it now. It used to share the partition with a BLE device-name blob at `0x1000`
-— a second sector, so that erasing either could never touch the other — until the
-name became a compile-time constant (the app can no longer rename the device).
-NOR flash bits only go from 1 to 0, so a save is erase-then-write, not an
-overwrite, and the sector erase is why one region per sector was ever the layout.
+The BNO055 calibration profile used to live at offset `0x00` of the `nvs` partition,
+and it was the whole of it — one region per 4 KB sector, because NOR flash bits only go
+from 1 to 0, so a save is erase-then-write rather than an overwrite. A BLE device-name
+blob at `0x1000` was the other, until the name became a compile-time constant.
+
+Nothing writes that partition now: there is no profile to save once the chip is read raw,
+and the log has its own. It stays in `partitions.csv` because removing it would move every
+partition after it, and 4 KB nobody uses is cheaper than a layout change with nothing to
+show for it.
 
 ## Stack and heap
 
@@ -233,9 +235,11 @@ panics — and the panic handler used to be `loop {}` with no output.
 
 **Fix / how to read it.** The handler now prints `*** PANIC: ... ***`. The heap is
 two `esp_alloc` regions (98,768 B reclaimed DRAM + 64 KB static) and the buffer
-set is large: sample ring, 9 s rep window, two 512-point trace buffers, record
+set is large: sample ring, 10 s rep window, two plotted-trace buffers, record
 scratch, decode scratch, summary batch. The radio takes ~54 KB of it before any
-of that.
+of that. A raw trace a dev client asks for adds a window's worth of samples — 16 KB —
+allocated on the request rather than at boot, and refused when the heap cannot spare it
+alongside 8 KB of headroom.
 
 The figures to watch, and what they mean:
 
@@ -243,55 +247,66 @@ The figures to watch, and what they mean:
 |---|---|
 | `Radio up, heap free N B` | ~109 KB free after the radio came up. This is the number that says whether the radio was cheap or expensive. |
 | `Rep detector ready, heap free N B` | ~45 KB free. |
-| `Sync buffers ready, heap free N B` | ~22 KB free. **Under ~8 KB** is a device that will not accept a connection. |
+| `Sync buffers ready, heap free N B` | ~22 KB free, measured when the trace buffers were four times their present size. **Under ~8 KB** is a device that will not accept a connection. |
 
 The 30 s sample ring was 36 KB more than the device needs (the detector never
-asks for more than 9 s) and is now 12 s; Wi-Fi was removed and gave back most of
-the radio's 54 KB. Do not grow either without reading these numbers.
+asks for more than 10 s) and is now 13 s; Wi-Fi was removed and gave back most of
+the radio's 54 KB. Do not grow any of this without reading those numbers.
 
 ## The IMU
 
-### `sys` never reaches 3 in IMU mode, and nothing should wait for it
+### A status register that cannot advance is a gate that never opens
 
-**Symptom.** The boot log says `imu acc:3 gyro:3 mag:0 sys:0 — rep recording paused
-until the IMU is calibrated`, for ever: no rep is ever recorded, and the app's hint
-never clears.
+**Symptom.** The old build gated recording on the chip's calibration levels, and one of
+them never reached 3: `sys` is the aggregate and counts the magnetometer, which this build
+disables (no mag — steel barbell). A gate that waits on it is a gate that never opens.
 
-**Cause.** `CALIB_STAT`'s `sys` bits are the chip's aggregate and **count the
-magnetometer**, which this build disables (IMU mode, no mag — steel barbell). So `sys`
-stays at 0 however well the accelerometer and gyroscope are calibrated, and readiness
-required it at 3.
+**Cause and cost.** `is_ready()` ended up as `accel == 3 && gyro == 3`, which fixed the
+symptom and hid the shape of the bug: the calibration profile was saved on the same
+transition, so a gate that never opened also meant the accelerometer's offsets were never
+written to NVS. After a reboot `gyro` came back at 3 (the chip re-derives it from
+stillness) and `accel` at 0, which reads as "the save is broken" rather than "the save
+never ran", and it cost a power cycle to tell them apart. **When a save looks broken,
+first check that whatever triggers it can actually happen.**
 
-**Fix.** `is_ready()` is `accel == 3 && gyro == 3`. `sys` and `mag` are still reported,
-for a console that says which sensor is behind.
+The whole surface is gone now: an IMU in a non-fusion mode has no autocalibration at all
+(§3.6, §3.11 of the datasheet), `CALIB_STAT` cannot advance, and the offsets are the
+host's to estimate — see [`RAW_IMU.md`](RAW_IMU.md).
 
-**It cost a power cycle to see the rest of it.** The calibration profile is saved on the
-transition to `is_ready()`, so a gate that never opened also meant the accelerometer's
-offsets were never written to NVS: after a reboot, `gyro` came back at 3 (the chip
-re-derives that from stillness) and `accel` at 0 — which reads as "the save is broken"
-rather than "the save never ran". When a save looks broken, first check that whatever
-triggers it can actually happen.
+### A fusion output is not a sensor reading
 
-### `ready` is the recording gate, not "calibrated"
+**Symptom.** Moving the device off the chip's fusion left two things broken that nothing
+reported: the rep detector was fed an acceleration it had been reconstructing from the
+chip's *estimate*, and the 1 Hz level verdict read `gravity()`, which a non-fusion mode
+does not have.
 
-**Symptom.** The app's calibration hint never appears on a device whose accelerometer has
-clearly wandered — the reps it records even carry the "not calibrated" flag — and the one
-case it was written for is the case it stays silent on.
+**Cause.** Fusion mode's outputs are derived — linear acceleration is "gravity removed"
+by definition, and the gravity vector is the estimate it was removed with. Anything read
+from them is an estimate's opinion, and in a mode that does not fuse there is nothing to
+read at all: `linear_acceleration*`, `gravity*` and `quaternion` return `InvalidMode`
+without touching the bus.
 
-**Cause.** `CalibrationStatus.ready` is the device's own `can_record()`: the gyroscope at
-3 and nothing else, because gating on the accelerometer cost reps at random (see below).
-So a device with `gyro: 3, accel: 1` serves `ready: true` and is telling the truth about
-*recording*. A client that reads `ready` as "fully calibrated", and hides its hint when it
-is set, goes quiet for exactly the shortfall worth mentioning. The reverse mistake is as
-easy: requiring every level at 3 for readiness means a hint that never clears, since the
-magnetometer is disabled in IMU mode and the aggregate `sys` counts it.
+**Fix.** The filter estimates the attitude, and the level verdict carries the world's up
+axis back into the sensor's frame with it — the same number the fusion reported, from an
+estimate corrected only while the bar is still. The app's `ImuState` quaternion is the
+filter's for the same reason. If an orientation is ever read off a chip again, ask first
+whether it is a measurement or an inference.
 
-**Fix.** The levels are the truth; `ready` is only the answer to "will a rep be stored".
-`needsAttention`/`records` in `calypso-app/lib/model/calibration.dart` decide from `gyro`
-and `accel`, and the hint has two looks for the two cases: red for no reps being recorded
-(gyroscope short), advisory for reps being recorded with numbers worth less
-(accelerometer short). `test/support/calibration.dart` fakes the same rule, so a test
-that calls an accelerometer-only shortfall "not ready" is told it is wrong.
+### The IMU driver configures the accelerometer and not the gyroscope
+
+**Symptom.** A plan that says "set both ranges in CONFIG mode" meets a driver whose
+`AccConfig` covers `ACC_Config` and whose `GYR_Config` is not exposed at all.
+
+**Cause.** `bno055` 0.4.0 writes page 1's `ACC_Config` through `set_acc_config` and reads
+it back through `get_acc_config`; the gyroscope's register (`0x0F`) has no accessor and
+the register writes behind it are private.
+
+**Fix.** The accelerometer is set (±8 g, 62.5 Hz) and read back before the mode switch;
+the gyroscope keeps the chip's defaults, **2000 dps at 32 Hz**, which cannot clip a
+barbell and is recorded in `RepConfig` rather than left at 0. Neither range changes the
+scale a trace decodes with — the data registers are fixed at 1 m/s² = 100 LSB and
+1 dps = 16 LSB (§3.6.5.1, §3.6.5.3) — so the range is about clipping and internal noise
+and nothing else.
 
 ### A rep only counts if it ends in a pause
 
@@ -299,9 +314,9 @@ that calls an accelerometer-only shortfall "not ready" is told it is wrong.
 long. Nothing in the app or in either log says a rep was discarded, so the set looks like
 it was never done. **Find it with a test, not with a session**: the one real capture that
 looked like this had stored nothing at all for two and a half hours, which was the
-calibration gate and not the detector ("The recording gate" in `ROADMAP.md`). The
-mechanism below is real and reproducible — a no-pause set is one span — but a missing set
-on hardware is more often the gate, because the gate leaves no reps to look at.
+recording gate and not the detector (see the IMU section above). The mechanism below is
+real and reproducible — a no-pause set is one span — but a missing set on hardware is
+more often the gate, because the gate leaves no reps to look at.
 
 **Cause.** A rep closed only after `|a|` stayed under 0.25 m/s² for 250 ms. A set nobody
 pauses through never produces that, so the span stayed open and ran from the first rep
@@ -317,11 +332,13 @@ make that work: the accelerometer's bias is learned **only while the bar is stil
 damping — either one running between two reps of a no-pause set quietly merges them
 again.
 
-**The gate had the same shape of bug.** The detector is not fed while the calibration
-gate is shut, but was not reset, so the span after a flap was measured from a timestamp
-the ring no longer held. One `RepWindowUnavailable` landed 1.1 s after the gate reopened,
-and every other flap cost a rep silently. Closing the gate now resets the detector, as
-saving a profile already did.
+**The gate had the same shape of bug.** The detector is not fed while the recording gate
+is shut, and it used to be reopened by a status that flapped: a span after a flap was
+measured from a timestamp the ring no longer held, one `RepWindowUnavailable` landed
+1.1 s after the gate reopened, and every other flap cost a rep silently. Closing the gate
+resets the detector, and that is the rule to keep: **whatever shuts a gate must also
+forget any span measured across it.** The gate is a latch now — the filter settles once and
+never un-settles — so nothing can shut it, and nothing can strand a span in the first place.
 
 **Test it against a set that never pauses.** `sim/tests/sets.rs` has a no-rest set, five
 reps back to back with rest only after the last: before the change it was one span of the
@@ -623,7 +640,7 @@ attribute table, and **drops the rest without a word**: `set_notify` matches no
 handle and does nothing, `should_notify` is then false, and
 `Characteristic::notify` returns `Ok(())` *without sending anything*. That one slot
 went to the gravity characteristic, which came before the sync service in the table
-— so it worked and `0xca21` / `0xca23` (calibration, summaries, traces) were dead.
+— so it worked, and the sync service's messages and its acknowledgements were dead.
 Every host test passed: they check the table and the encoders, not that a
 subscription survives. (The gravity characteristic is gone now, and the sync service
 has one notifiable characteristic rather than two — so the count cannot be got wrong
@@ -817,10 +834,11 @@ a transfer that never started.)
   the app's own 244-byte writes arrive whole. A peer that *did* negotiate a small MTU
   still gets frames that fit what it asked for.
 
-**Corollary: a poll is traffic too.** The app's calibration read is once a second and
-invisible next to that blast, but six of them were completing in the same millisecond —
-queued behind the same congested link, in front of the writes the pipe was waiting on. A
-poll keeps one request in flight for that reason.
+**Corollary: a poll is traffic too.** The app used to read a characteristic once a second,
+invisible next to that blast, and six of those reads were completing in the same
+millisecond — queued behind the same congested link, in front of the writes the pipe was
+waiting on. A poll keeps one request in flight for that reason, and the one read left (the
+IMU diagnostic) happens once per connection rather than on a clock.
 
 ### An acknowledgement is also a request for the next message
 
@@ -836,10 +854,11 @@ status, ack, status, ack. The pipe carries one message at a time, so the same va
 held the pipe against the summaries queued behind it — a self-sustaining loop rather
 than wasted notifications.
 
-**Fix.** Calibration is not a message at all any more: it is a characteristic the app
-**reads** (`0000ca24-…`, `proto/calypso_gatt.proto`), which is the design this trap
-argues for. Anything a client can ask for on its own clock does not need to be pushed,
-and what is not pushed cannot be pushed again by an acknowledgement of it.
+**Fix.** The calibration status stopped being a message at all: it became a characteristic
+the app **reads** on its own clock, which is the design this trap argues for — and that
+characteristic is gone too now, because there is no calibration to report. The rule it was
+an instance of is what stays: anything a client can ask for on its own clock does not need
+to be pushed, and what is not pushed cannot be pushed again by an acknowledgement of it.
 
 The first attempt kept it on the pipe and had `Session` remember the levels it had told
 that connection (`f868486`) — which worked, and put the reason in the sender rather than
@@ -894,16 +913,15 @@ Everything else is the generated type, on the device too: `compute_rep` returns 
 `msg::RepSummary` (the caller fills in the uuid it minted and the `chunk_count` its
 storage will use), and a rep is stored, streamed and logged as the messages it is.
 
-The app keeps no mirror types at all: `model/rep.dart` and `model/calibration.dart`
-are extensions that *derive* from the messages (units, tilt ranges, the calibration
-wording), so a field added to the proto reaches the UI instead of being dropped by a
-hand-written conversion.
+The app keeps no mirror types at all: `model/rep.dart` is extensions that *derive* from
+the messages (units, tilt ranges, what a rep's counts mean), so a field added to the proto
+reaches the UI instead of being dropped by a hand-written conversion.
 
 ### A protobuf message is not a `const`
 
 `package:protobuf` messages compare by *content* (`GeneratedMessage` overrides `==` and
-`hashCode`), so a `ValueNotifier`/`ChangeNotifier` holding one behaves as expected — the
-1 Hz calibration push does not notify when nothing changed. They cannot be `const`
+`hashCode`), so a `ValueNotifier`/`ChangeNotifier` holding one behaves as expected — a
+value pushed once a second does not notify when nothing changed. They cannot be `const`
 though, so a test that wants a fixed message builds it in a `final`, not a `const`.
 
 ## Tests and tooling

@@ -19,10 +19,9 @@ use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex as AsyncMutex;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
+use embedded_storage::ReadStorage;
 use embedded_storage::nor_flash::NorFlash;
-use embedded_storage::{ReadStorage, Storage};
 use esp_bootloader_esp_idf::partitions;
-use esp_hal::Blocking;
 use esp_hal::clock::CpuClock;
 use esp_hal::i2c::master::I2c;
 use esp_hal::rng::Rng;
@@ -36,8 +35,7 @@ use trouble_host::prelude::*;
 
 use alloc::boxed::Box;
 use bno055::Bno055;
-use bno055::{BNO055_CALIB_SIZE, BNO055Calibration, BNO055OperationMode};
-use calypso_core::calibration::Calibration;
+use bno055::{AccBandwidth, AccGRange, BNO055OperationMode};
 use calypso_core::clock::{self, Boots};
 use calypso_core::flashlog::{self, FlashLog};
 use calypso_core::fusion::{Fusion, GRAVITY, conjugate, rotate_by_quat};
@@ -79,17 +77,8 @@ const CONNECTIONS_MAX: usize = 1;
 // Signal channel + ATT channel
 const L2CAP_CHANNELS_MAX: usize = 2;
 
-const BNO055_CALIBRATION_ADDR: u32 = 0x00;
-
 /// The BLE device name: a compile-time constant, and read-only over GATT.
 const DEVICE_NAME: &str = "Calypso";
-
-/// The IMU's calibration levels (`Calibration::to_bits`), written by the 1 Hz poll and read by the sampler to decide whether reps are recordable.
-/// Zero until the first poll, which reads as "not calibrated" — the safe thing to believe.
-static CALIBRATION_BITS: AtomicU32 = AtomicU32::new(0);
-
-/// Whether the calibration profile has been written to NVS this boot, so the save (a flash erase and write) does not repeat on every poll.
-static CALIBRATION_SAVED: AtomicBool = AtomicBool::new(false);
 
 /// Whether a client has armed dev mode this boot: every rep stored from here on keeps its raw trace as well as its plotted one.
 ///
@@ -131,11 +120,21 @@ const FAKE_REPS: bool = cfg!(feature = "fake-reps");
 
 /// What a stored rep's summary says about the sensor that recorded it.
 ///
-/// The rate and the detector's version are this build's; the sensor's own range and bandwidth settings are
-/// not configured yet — the chip's fused output is what is being read — so they travel as 0, which is the
-/// schema's "not recorded" rather than a claim about a setting nobody made.
-const SAMPLER_CONFIG: calypso_core::sampler::RepConfig =
-    calypso_core::sampler::RepConfig::of(SAMPLE_RATE_HZ, calypso_core::rep::DETECTOR_VERSION);
+/// The settings are the ones `main` puts the chip in before it starts sampling, and the read-back there is what says the
+/// chip agreed. The accelerometer's range and bandwidth are chosen; the gyroscope's are the chip's defaults, because this
+/// driver can set only the accelerometer's and 2000 dps is past anything a barbell does.
+///
+/// None of it changes the scale a trace is decoded with — the registers are fixed at 1 m/s² = 100 LSB and 1 dps = 16 LSB
+/// whatever the range — so this is what the numbers were taken under, not how to convert them.
+const SAMPLER_CONFIG: calypso_core::sampler::RepConfig = calypso_core::sampler::RepConfig {
+    accel_range_g: 8,
+    gyro_range_dps: 2000,
+    // The chip's step names it 62.5 Hz; its own tables label the same step 63.
+    accel_bandwidth_hz: 63,
+    gyro_bandwidth_hz: 32,
+    sample_rate_hz: SAMPLE_RATE_HZ,
+    detector_version: calypso_core::rep::DETECTOR_VERSION,
+};
 
 /// Bench mode's period, and how much of the ring each synthetic rep covers, which has to leave room for the ZUPT margins inside `REP_WINDOW_SAMPLES` (9 s).
 const FAKE_REP_PERIOD_S: u32 = 30;
@@ -270,10 +269,42 @@ async fn main(spawner: Spawner) -> ! {
     let mut bno055 = Bno055::new(i2c).with_alternative_address();
     bno055.init(&mut delay).unwrap();
     info!("Bno055 initialized");
-    // IMU mode: accel + gyro fusion, no magnetometer (unreliable near barbells). Roll/pitch stay accurate; yaw drift is corrected per rep by ZUPT (Phase 3).
+    // **The raw sensors, not the chip's fusion.** ACCGYRO reports uncompensated accelerometer and gyroscope registers;
+    // the orientation is this firmware's (`fusion.rs`), because the fused output cannot say whether its own reading is
+    // right and a residue it left behind kept a session from recording anything.
+    //
+    // The range is set here because a non-fusion mode is the only one that allows it, and it decides only what clips:
+    // the registers' scale is fixed at 1 m/s² = 100 LSB and 1 dps = 16 LSB whatever the range. ±8 g clips at 78 m/s²,
+    // past a rep and past a rerack; the chip's 4 g default clips at 39 m/s², which a hard rerack can reach. The
+    // bandwidth is written too, so the number a rep's summary carries is one this build chose rather than a default.
+    //
+    // The gyroscope keeps the chip's defaults — 2000 dps at 32 Hz — because this driver can set only the accelerometer's,
+    // and at 2000 dps it cannot clip. Both are recorded in `SAMPLER_CONFIG`.
+    let mut acc = bno055.get_acc_config().unwrap();
+    acc.set_g_range(AccGRange::G8);
+    acc.set_bandwidth(AccBandwidth::Hz62_5);
+    bno055.set_acc_config(&acc).unwrap();
+    // Read back, because the write reports only that the bus took it: what a rep's summary claims has to be what the
+    // chip holds, or a trace is decoded against settings nobody had.
+    match bno055.get_acc_config() {
+        Ok(after) if after.bits() == acc.bits() => {}
+        Ok(after) => warn!(
+            "Accelerometer reads back {=u8:02x}, not the {=u8:02x} just written",
+            after.bits(),
+            acc.bits()
+        ),
+        Err(_) => warn!("Accelerometer configuration could not be read back"),
+    }
     bno055
-        .set_mode(BNO055OperationMode::IMU, &mut delay)
+        .set_mode(BNO055OperationMode::ACC_GYRO, &mut delay)
         .unwrap();
+    info!(
+        "Bno055 in ACCGYRO: accel {} g at {} Hz, gyro {} dps at {} Hz (chip defaults)",
+        SAMPLER_CONFIG.accel_range_g,
+        SAMPLER_CONFIG.accel_bandwidth_hz,
+        SAMPLER_CONFIG.gyro_range_dps,
+        SAMPLER_CONFIG.gyro_bandwidth_hz,
+    );
 
     // `multicore_auto_park` is not optional on this chip: esp-storage's default strategy *refuses* every write and erase while the second core is running (`MultiCoreStrategy::Error`), and CPU1 is up in this build. Reads are unaffected, which is what makes it so confusing — the NVS reads worked while every erase, including the log partition's first format, came back as an I/O error.
     let flash = FlashStorage::new(peripherals.FLASH).multicore_auto_park();
@@ -283,9 +314,6 @@ async fn main(spawner: Spawner) -> ! {
     let pt_mem: &'static mut [u8] =
         Box::leak(alloc::vec![0u8; partitions::PARTITION_TABLE_MAX_LEN].into_boxed_slice());
     let mut store = FlashStore { flash, pt_mem };
-
-    // Apply a stored calibration profile if there is one, but never wait for the IMU to calibrate: this used to block boot, which left an uncalibrated device with no BLE, no app and no way to find out why. It now comes up fully and says what it is waiting for (see docs/CALIBRATION.md).
-    load_calibration(&mut bno055, &mut store);
 
     info!("BLE device name: {}", DEVICE_NAME);
 
@@ -684,12 +712,9 @@ async fn main(spawner: Spawner) -> ! {
             let mut last_t_ms: Option<u32> = None;
             // Said once, in bench mode, so a session cannot be mistaken for a real one.
             let mut logged_fake_reps = false;
-            // The IMU's calibration levels, refreshed once a second — and logged only when they change, so "paused until the IMU is calibrated" is printed when it becomes true rather than 3,600 times an hour.
-            let mut calibration = Calibration::default();
-            let mut logged_calibration: Option<Calibration> = None;
+            // Whether the filter had settled, logged only when it changes, so "paused until the filter knows which way is down" is printed when it becomes true rather than 3,600 times an hour.
+            let mut logged_ready: Option<bool> = None;
             let mut logged_level: Option<bool> = None;
-            // For the profile read-back, which the bno055 crate needs a delay for (it briefly switches the chip to CONFIG mode).
-            let mut delay = Delay;
             loop {
                 ticker.next().await;
                 let t_ms = boot.elapsed().as_millis() as u32;
@@ -704,56 +729,36 @@ async fn main(spawner: Spawner) -> ! {
                 }
                 last_t_ms = Some(t_ms);
 
-                // 1 Hz: read the calibration levels, publish them for the BLE task, and save the profile the first time they are good enough.
-                //
-                // Before this tick's sample, for two reasons: the detector's gate is never a state behind, and the save switches the chip's mode for ~40 ms, after which the first sample read back can be odd.
-                if n.is_multiple_of(SAMPLE_RATE_HZ) {
-                    let was_ready = calibration.can_record();
-                    let (updated, saved) =
-                        poll_calibration(&mut bno055, &mut delay, store).await;
-                    calibration = updated;
-                    if saved || (was_ready && !calibration.can_record()) {
-                        // Drop the detector's state so the post-mode-switch sample cannot close a rep around itself. It re-arms from the next real rest.
-                        // The same goes for the gate closing: the detector is not fed while it is shut, so a rep it was mid-way through would otherwise be closed against a start the ring can no longer reach — a rep lost with only a window error to show for it.
-                        detector = Detector::new();
-                    }
-                }
-
-                let Ok(accel) = bno055.linear_acceleration_fixed() else {
-                    warn!("BNO055 linear accel read error");
+                // The chip's two sensor registers, straight into the sample's fixed point: 1 m/s² = 100 LSB and
+                // 1 dps = 16 LSB are this format's scales, so nothing is converted and nothing is rounded twice.
+                let Ok(accel) = bno055.accel_data_fixed() else {
+                    warn!("BNO055 accelerometer read error");
                     report(msg::ReportKind::ImuReadFailed);
                     continue;
                 };
-                let Ok(q) = bno055.quaternion() else {
-                    warn!("BNO055 quaternion read error");
+                let Ok(gyro) = bno055.gyro_data_fixed() else {
+                    warn!("BNO055 gyroscope read error");
                     report(msg::ReportKind::ImuReadFailed);
                     continue;
                 };
-                // **A stopgap until the chip is read raw.** The fused output is a linear acceleration
-                // and an attitude, and what the filter takes is specific force — the bar's
-                // acceleration plus the gravity the attitude implies. Rebuilding it is exact, and it
-                // is the same acceleration the fusion reported, so this changes nothing about what a
-                // rep reads; what it cannot supply is the gyroscope, which is why the attitude here
-                // is still the chip's. Reading `ACC_DATA`/`GYR_DATA` is what replaces this.
-                let attitude = [q.s, q.v.x, q.v.y, q.v.z];
-                let up = rotate_by_quat(conjugate(attitude), [0.0, 0.0, 1.0]);
-                let specific_force = [
-                    accel.x as f32 / 100.0 + up[0] * GRAVITY,
-                    accel.y as f32 / 100.0 + up[1] * GRAVITY,
-                    accel.z as f32 / 100.0 + up[2] * GRAVITY,
-                ];
-                let sample = Sample::from_f32(t_ms, specific_force, [0.0; 3]);
+                let sample = Sample {
+                    t_ms,
+                    accel: [accel.x, accel.y, accel.z],
+                    gyro: [gyro.x, gyro.y, gyro.z],
+                };
                 samples.borrow_mut().push(sample);
-                critical_section::with(|cs| {
-                    *LAST_SAMPLE.borrow(cs).borrow_mut() = Some((sample, attitude));
-                });
                 let filtered = fusion.update(&sample);
+                // The attitude the app reads is the filter's: the chip no longer reports one.
+                critical_section::with(|cs| {
+                    *LAST_SAMPLE.borrow(cs).borrow_mut() =
+                        Some((sample, fusion.state().attitude));
+                });
 
                 // Detect reps; on close, slice the window out of the ring and compute the ZUPT-anchored trace + summary, then persist it.
                 //
-                // Only while the IMU is trustworthy. Uncalibrated, the gyro and accelerometer report drift as motion: the detector would fire on it and the stored trace would be fiction rather than a measurement (see docs/CALIBRATION.md). Not feeding the detector at all also means it starts from a real rest once calibration completes.
+                // Only once the filter knows which way is down: it seeds gravity and both offsets from a still window, and before that there is no vertical for a rep to be measured against, so a trace recorded then would be fiction rather than a measurement.
                 let span = if FAKE_REPS {
-                    // Bench mode: one synthetic rep per period, covering the last FAKE_REP_MS of samples whatever the motion was. The calibration gate is deliberately *not* applied — the chip's `acc` status flaps on its own (see docs/GOTCHAS.md), so gating would make reps appear and vanish at random, and this data is not meant to be trustworthy anyway. Everything downstream is untouched: the records are ordinary ones the app syncs and plots.
+                    // Bench mode: one synthetic rep per period, covering the last FAKE_REP_MS of samples whatever the motion was. The filter's readiness is deliberately *not* applied — these windows are cut from whatever the sensor read rather than detected in it, and a bench session should not depend on the bar holding still first. Everything downstream is untouched: the records are ordinary ones the app syncs and plots.
                     if !logged_fake_reps {
                         logged_fake_reps = true;
                         warn!(
@@ -776,15 +781,10 @@ async fn main(spawner: Spawner) -> ! {
                     } else {
                         None
                     }
-                } else if calibration.can_record() {
-                    // The filter is fed every sample, so its offsets and its attitude keep up with the
-                    // sensor; only the detector is gated, because a rep is not recordable until the
-                    // filter knows which way is down.
-                    if fusion.ready() {
-                        detector.update(&filtered)
-                    } else {
-                        None
-                    }
+                } else if fusion.ready() {
+                    // The filter is fed every sample, so its offsets and its attitude keep up with the sensor; only
+                    // the detector is gated, and it starts from a real rest whenever the gate opens.
+                    detector.update(&filtered)
                 } else {
                     None
                 };
@@ -882,29 +882,23 @@ async fn main(spawner: Spawner) -> ! {
                 }
 
                 n += 1;
-                // The level verdict and the calibration levels are *read* at 1 Hz, but logged only when they change, or once a minute. Two lines a second used to say the same thing forever: the levels and the verdict only move when the sensor does, and the ring and heap figures are there to spot a leak, not to be watched. The minute keeps the boot-log figures this device is debugged from (see docs/GOTCHAS.md).
+                // The level verdict and the sampler figures are *read* at 1 Hz, but logged only when they change, or once a minute. Two lines a second used to say the same thing forever: the verdict only moves when the sensor does, and the ring and heap figures are there to spot a leak, not to be watched. The minute keeps the boot-log figures this device is debugged from (see docs/GOTCHAS.md).
                 if n.is_multiple_of(SAMPLE_RATE_HZ) {
-                    let level = level_sense(&mut bno055);
+                    let (x_grav, is_level) = level_sense(fusion.state().attitude);
                     // Compared on the verdict, not the reading: X-grav moves by a hundredth a second, and the question is only whether it is level.
-                    let verdict = level.map(|(_, is_level)| is_level);
-                    if verdict != logged_level {
-                        logged_level = verdict;
-                        match level {
-                            Some((x, true)) => {
-                                info!("Sensor is level on the X axis (X-grav={=f32})", x)
-                            }
-                            Some((x, false)) => warn!("Sensor is not level, X-grav={=f32}", x),
-                            None => {
-                                warn!("BNO055 gravity read error");
-                                report(msg::ReportKind::ImuReadFailed);
-                            }
+                    if logged_level != Some(is_level) {
+                        logged_level = Some(is_level);
+                        if is_level {
+                            info!("Sensor is level on the X axis (X-grav={=f32})", x_grav)
+                        } else {
+                            warn!("Sensor is not level, X-grav={=f32}", x_grav)
                         }
                     }
 
-                    // Every 5 s while recording: what the detector is subtracting, and how much motion it sees.
+                    // Every 5 s while recording: what the filter is subtracting, and how much motion it sees.
                     //
                     // A session that stores nothing has two causes that look identical from outside — the sensor's offset never came out of the signal, or the bar really was still — and the once-a-minute sampler line says neither.
-                    if calibration.can_record() && n.is_multiple_of(SAMPLE_RATE_HZ * 5) {
+                    if fusion.ready() && n.is_multiple_of(SAMPLE_RATE_HZ * 5) {
                         let b = fusion.state().accel_bias;
                         // Centimetres per second squared, because defmt has no precision hint and whole numbers read better than raw floats.
                         let a = calypso_core::fusion::magnitude(filtered.linear_accel);
@@ -921,35 +915,33 @@ async fn main(spawner: Spawner) -> ! {
                         );
                     }
 
-                    if n.is_multiple_of(SAMPLE_RATE_HZ * 60)
-                        || logged_calibration != Some(calibration)
-                    {
-                        logged_calibration = Some(calibration);
+                    let ready = fusion.ready();
+                    if n.is_multiple_of(SAMPLE_RATE_HZ * 60) || logged_ready != Some(ready) {
+                        logged_ready = Some(ready);
                         let (len, pushed) = {
                             let r = samples.borrow();
                             (r.len(), r.pushed())
                         };
-                        if calibration.can_record() {
+                        if ready {
                             info!(
-                                "sampler: {} Hz, ring {}/{} samples, {} pushed, {} reps, imu {} (recording), stack {}, heap free {} B",
+                                "sampler: {} Hz, ring {}/{} samples, {} pushed, {} reps, imu settled (stack {}, heap free {} B)",
                                 SAMPLE_RATE_HZ,
                                 len,
                                 SAMPLE_RING_LEN,
                                 pushed,
                                 reps,
-                                CalibrationLog(calibration),
                                 Stack,
                                 esp_alloc::HEAP.free()
                             );
                         } else {
-                            // Warn, not info: nothing is being recorded, and the levels say which sensor to work on.
+                            // Warn, not info: nothing is being recorded until the bar holds still for a moment.
                             warn!(
-                                "sampler: {} Hz, ring {}/{} samples, {} pushed, imu {} — rep recording paused until the IMU is calibrated (stack {})",
+                                "sampler: {} Hz, ring {}/{} samples, {} pushed, imu {=f32} s of stillness — rep recording paused until the filter knows which way is down (stack {})",
                                 SAMPLE_RATE_HZ,
                                 len,
                                 SAMPLE_RING_LEN,
                                 pushed,
-                                CalibrationLog(calibration),
+                                fusion.still_for_s(),
                                 Stack
                             );
                         }
@@ -1186,7 +1178,7 @@ type BleVec = heapless::Vec<u8, PIPE_STORAGE_MAX>;
 
 /// The sending side of the sync service: the pipe's session, the one characteristic every message goes out on, and the buffer each frame is built in.
 ///
-/// One characteristic means one payload buffer, and the pipe means one *message* at a time: a summary and a trace chunk are both transfers, and only one of them can be in flight. (Calibration is not one: it is a characteristic a client reads.)
+/// One characteristic means one payload buffer, and the pipe means one *message* at a time: a summary and a trace chunk are both transfers, and only one of them can be in flight.
 struct Sync<'a> {
     session: &'a mut Session<'static>,
     characteristic: &'a Characteristic<BleVec>,
@@ -1857,168 +1849,11 @@ fn store_rep(
     }
 }
 
-/// Apply the stored BNO055 calibration profile, if there is a usable one.
-///
-/// Deliberately does **not** wait for the IMU to calibrate. This is the routine that used to block boot in a loop, which meant an uncalibrated device had no BLE, no app, and nothing to say about why. The device now boots fully and tells the app what to do; it just does not record reps until the levels are good (see `docs/CALIBRATION.md`).
-fn load_calibration(bno055: &mut Bno055<I2c<'_, Blocking>>, store: &mut FlashStore) {
-    let Some(profile) = read_calibration(store) else {
-        info!("No stored IMU calibration; waiting for the sensor to calibrate");
-        return;
-    };
-    let mut delay = Delay;
-    if bno055.set_calibration_profile(profile, &mut delay).is_err() {
-        warn!("BNO055 rejected the stored calibration profile");
-        report(msg::ReportKind::CalibrationProfile);
-        return;
-    }
-
-    // **Read it back, because the write is fire-and-forget.** `set_calibration_profile`
-    // is one I2C burst and reports only that the bus took it, so a profile the chip ignored is indistinguishable from one it accepted until its levels are read — which is exactly the ambiguity that "the accelerometer is 0 after every reboot" has been sitting in. The two outcomes need different fixes: bytes that do not come back mean the restore is not landing (our write, or the chip's mode), while bytes that do come back mean the chip holds the offsets and simply does not report `acc` as calibrated from them.
-    //
-    // Two more mode switches (~40 ms) and 22 bytes, once per boot, only when there is a profile to apply.
-    match bno055.calibration_profile(&mut delay) {
-        Ok(after) if after == profile => {
-            info!("Stored IMU calibration applied, and reads back byte for byte")
-        }
-        Ok(after) => {
-            warn!(
-                "Stored IMU calibration applied, but the chip reads back {=[u8]:02x}",
-                after.as_bytes()
-            );
-            report(msg::ReportKind::CalibrationProfile);
-        }
-        Err(_) => {
-            warn!("Stored IMU calibration applied, but could not be read back");
-            report(msg::ReportKind::CalibrationProfile);
-        }
-    }
-}
-
-/// The calibration profile stored in NVS, or `None` when there isn't a usable one.
-///
-/// The blob has no checksum — it is the chip's own register dump, written as-is — so erased flash is recognised by its all-ones pattern. Without that check a fresh device would apply 22 bytes of `0xFF` as calibration offsets, which is worse than starting uncalibrated.
-fn read_calibration(store: &mut FlashStore) -> Option<BNO055Calibration> {
-    let (flash, pt_mem) = store.split();
-    let pt = match partitions::read_partition_table(flash, pt_mem) {
-        Ok(pt) => pt,
-        Err(e) => {
-            warn!("NVS: partition table unreadable: {}", e);
-            return None;
-        }
-    };
-    let nvs = match pt.find_partition(partitions::PartitionType::Data(
-        partitions::DataPartitionSubType::Nvs,
-    )) {
-        Ok(Some(nvs)) => nvs,
-        Ok(None) => {
-            warn!("NVS: no nvs partition in the flashed table");
-            return None;
-        }
-        Err(e) => {
-            warn!("NVS: partition lookup failed: {}", e);
-            return None;
-        }
-    };
-    let mut nvs_partition = nvs.as_embedded_storage(flash);
-
-    let mut blob = [0u8; BNO055_CALIB_SIZE];
-    if let Err(e) = nvs_partition.read(BNO055_CALIBRATION_ADDR, &mut blob) {
-        warn!("NVS: calibration read failed: {}", e);
-        return None;
-    }
-    if blob.iter().all(|&b| b == 0xFF) {
-        // Distinguishable on purpose: from the caller's one line, "this device has never been calibrated" and "the calibration is there and unreadable" look the same, and they are not the same problem.
-        info!("NVS: no stored calibration (the sector is erased)");
-        return None;
-    }
-    Some(BNO055Calibration::from_buf(&blob))
-}
-
-/// Persist the IMU's calibration profile, so the next power cycle starts calibrated instead of putting the user through it again.
-///
-/// Returns whether the write succeeded. The profile lives at offset 0 of the NVS partition's first sector — it is the only thing in there now that the device name is a compile-time constant — and that sector is erased first: NOR flash bits only go from 1 to 0 when written, so a second save over an older profile would AND the two together.
-fn save_calibration(store: &mut FlashStore, profile: &BNO055Calibration) -> bool {
-    let (flash, pt_mem) = store.split();
-    let Ok(pt) = partitions::read_partition_table(flash, pt_mem) else {
-        warn!("NVS: partition table read failed");
-        return false;
-    };
-    let Ok(Some(nvs)) = pt.find_partition(partitions::PartitionType::Data(
-        partitions::DataPartitionSubType::Nvs,
-    )) else {
-        warn!("NVS: partition not found");
-        return false;
-    };
-    let mut nvs_partition = nvs.as_embedded_storage(flash);
-
-    // Each error named: `OtherCoreRunning` here means the flash refused because the other core was up, and the erase-then-write below is why that matters — an erase that succeeds and a write that does not leaves no profile at all, so which of the two failed decides whether there is anything left to recover.
-    let erased = flash_window("NVS calibration erase", || {
-        nvs_partition.erase(BNO055_CALIBRATION_ADDR, BNO055_CALIBRATION_ADDR + 0x1000)
-    });
-    if let Err(e) = erased {
-        warn!("NVS: calibration erase failed: {}", e);
-        report(msg::ReportKind::CalibrationProfile);
-        return false;
-    }
-    let written = flash_window("NVS calibration write", || {
-        Storage::write(
-            &mut nvs_partition,
-            BNO055_CALIBRATION_ADDR,
-            profile.as_bytes(),
-        )
-    });
-    if let Err(e) = written {
-        warn!("NVS: calibration write failed: {}", e);
-        report(msg::ReportKind::CalibrationProfile);
-        return false;
-    }
-    true
-}
-
-/// Read the IMU's calibration levels, publish them for the BLE task, and — the first time they are good enough to record with — save the profile.
-///
-/// Returns the levels and whether the profile was saved just now. Called at 1 Hz from the sampler task, which owns the I2C bus.
-///
-/// The read-back and save switch the chip to CONFIG mode and back (~40 ms, during which it stops fusing), so the caller resets its detector afterwards.
-async fn poll_calibration(
-    bno055: &mut Bno055<I2c<'_, Blocking>>,
-    delay: &mut Delay,
-    store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
-) -> (Calibration, bool) {
-    let calibration = match bno055.get_calibration_status() {
-        Ok(s) => Calibration::new(s.sys, s.acc, s.gyr, s.mag),
-        Err(_) => {
-            // A transient read error must not look like "calibration lost": keep reporting the levels we last saw.
-            warn!("BNO055 calibration status read error");
-            Calibration::from_bits(CALIBRATION_BITS.load(Ordering::Relaxed))
-        }
-    };
-    CALIBRATION_BITS.store(calibration.to_bits(), Ordering::Relaxed);
-
-    // The accelerometer as well as the gyroscope, which is not the recording rule: a rep is recorded on the gyroscope alone, but the profile's offsets are the part that cannot be re-derived, so it is only worth writing once the accelerometer has settled. `sys` and `mag` are deliberately not asked for — IMU mode never calibrates the magnetometer and the aggregate counts it, so waiting on them is waiting for a number that cannot arrive.
-    if !calibration.profile_worth_saving() || CALIBRATION_SAVED.load(Ordering::Relaxed) {
-        return (calibration, false);
-    }
-    let Ok(profile) = bno055.calibration_profile(delay) else {
-        warn!("could not read the calibration profile back");
-        return (calibration, false);
-    };
-    let saved = {
-        let mut guard = store.lock().await;
-        save_calibration(&mut guard, &profile)
-    };
-    if saved {
-        CALIBRATION_SAVED.store(true, Ordering::Relaxed);
-        info!("IMU calibration saved");
-    }
-    (calibration, saved)
-}
-
 /// Whether the peer has this characteristic's notifications enabled.
 ///
 /// **This is the only way to know, and it is why the logs and the summary cursor are built on it rather than on a notification's result.**
 /// `Characteristic::notify` returns `Ok(())` whether or not anybody is subscribed:
-/// trouble-host checks its per-connection CCCD table (`should_notify`) and returns early *without sending* when the peer is not in it. So "the notification succeeded" is not evidence of anything, and code that treated it as evidence got it wrong twice here — a `calibration status delivered to the app` line printed once a second to a device that was sending nothing, and a summary cursor that walked the whole log into the void while nobody was listening.
+/// trouble-host checks its per-connection CCCD table (`should_notify`) and returns early *without sending* when the peer is not in it. So "the notification succeeded" is not evidence of anything, and code that treated it as evidence got it wrong twice here — a line printed once a second to a device that was sending nothing, and a summary cursor that walked the whole log into the void while nobody was listening.
 fn is_subscribed(
     server: &CalypsoGatt<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
@@ -2271,29 +2106,14 @@ impl defmt::Format for Stack {
     }
 }
 
-/// Calibration levels for logs, so a serial console alone says what to work on:
-/// `acc:1 gyro:3 mag:0 sys:1`.
-struct CalibrationLog(Calibration);
-
-impl defmt::Format for CalibrationLog {
-    fn format(&self, f: defmt::Formatter) {
-        defmt::write!(
-            f,
-            "acc:{} gyro:{} mag:{} sys:{}",
-            self.0.accel,
-            self.0.gyro,
-            self.0.mag,
-            self.0.sys
-        )
-    }
-}
-
-/// The IMU's X-axis gravity, and whether that reads as level.
+/// The device's X-axis gravity as the filter sees it, and whether that reads as level.
 ///
-/// `None` when the read failed, which is *not* the same as "not level": a failed I2C read is not a measurement, and a bar can be perfectly still with the sensor unreadable. Logged by the caller, and only when the verdict changes — this used to print `Sensor is not level` every second and bury everything else.
-fn level_sense(bno055: &mut Bno055<I2c<'_, Blocking>>) -> Option<(f32, bool)> {
-    bno055
-        .gravity()
-        .ok()
-        .map(|grav| (grav.x, calypso_core::is_level_along_axis(grav.x)))
+/// A non-fusion mode has no gravity vector to read, so this is the world's up axis carried back into the sensor's frame
+/// by the attitude the filter estimated — the same quantity the fusion used to report, from an estimate that is
+/// corrected only while the bar is still. Logged by the caller, and only when the verdict changes: this used to print
+/// `Sensor is not level` every second and bury everything else.
+fn level_sense(attitude: [f32; 4]) -> (f32, bool) {
+    let up = rotate_by_quat(conjugate(attitude), [0.0, 0.0, 1.0]);
+    let x_grav = up[0] * GRAVITY;
+    (x_grav, calypso_core::is_level_along_axis(x_grav))
 }

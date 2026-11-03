@@ -1,6 +1,10 @@
 # Partition table for Calypso firmware (4MB flash).
-# nvs / phy_init keep their default offsets so existing stored data
-# (the BNO055 calibration) survives the repartition.
+# nvs / phy_init keep their default offsets so a repartition does not move them:
+# nothing in nvs is used any more, but the table a device was flashed with is the
+# one every stored record's offset was written under.
+#
+# `log` is the rep log ring. It survives a reflash — wipe it (see README) when a
+# build changes what a stored record means.
 # Name,     Type, SubType,  Offset,    Size
 nvs,        data, nvs,      0x9000,    0x6000
 phy_init,   data, phy,      0xf000,    0x1000

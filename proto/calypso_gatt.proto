@@ -118,8 +118,8 @@ service Sync {
     };
   }
 
-  // Everything the device sends: a `SyncMessage`, as chunks. Summaries and
-  // calibration stream to a subscriber; trace chunks answer a request.
+  // Everything the device sends: a `SyncMessage`, as chunks. Summaries stream to a
+  // subscriber; trace chunks answer a request.
   //
   // One characteristic, so the frame that carries an acknowledgement travels
   // beside the chunks it is about rather than on a third characteristic of its own.

@@ -1,6 +1,4 @@
 //! BLE sync: what the device says on the pipe — the envelope a summary goes in, the request it will serve, and the cursor tracking how much of the log the app has been sent.
-//!
-//! Calibration is not here: the app reads it off its own characteristic (`proto/calypso_gatt.proto`).
 
 use crate::pb::{self, msg};
 use crate::uuid::RepUuid;

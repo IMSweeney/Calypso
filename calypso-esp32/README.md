@@ -3,9 +3,10 @@
 Calypso firmware for the original ESP32 (Xtensa, target `xtensa-esp32-none-elf`),
 e.g. the ESP32-PICO-D4 this project targets.
 
-It samples a BNO055 IMU over I²C at 100 Hz, detects reps, computes and stores a
-trace per rep in a flash log, and serves summaries and traces to a phone over BLE.
-Everything in here is chip or board specific; the logic lives in `calypso-core/`.
+It samples a BNO055's accelerometer and gyroscope over I²C at 100 Hz, filters them
+into an attitude here, detects reps, computes and stores a trace per rep in a flash
+log, and serves summaries and traces to a phone over BLE. Everything in here is chip
+or board specific; the logic lives in `calypso-core/`.
 
 ## Build
 
@@ -26,8 +27,18 @@ cargo run                # builds, flashes with espflash, and opens the monitor
 That is the normal dev loop; `cargo run --release` for an optimised build. It
 writes the partition table along with the bootloader and the app, so the `log`
 partition (see `partitions.csv`) exists on the device afterwards and the rep log
-can mount. The first flash repartitions the board; NVS keeps its offsets, so the
-stored IMU calibration survives.
+can mount. The first flash repartitions the board.
+
+**A reflash does not clear the rep log**, and it should not: reps survive a power
+cycle by design. When a change makes the stored records mean something else — a new
+trace format, or the raw input in place of the fused one — wipe the partition (or the
+app's archive) before collecting anything, or the app will sync yesterday's reps as
+though today's build had stored them. The `log` partition is 2.5 MB at `0x190000`
+(`partitions.csv`):
+
+```sh
+espflash erase-region --chip esp32 0x190000 0x270000
+```
 
 For a standalone image to hand to someone else, see [`dist/README.md`](../dist/README.md).
 
@@ -42,8 +53,8 @@ was — instead of running the detector. Everything downstream is untouched, so 
 exercises the whole path on a bench with nobody lifting: the flash log, the
 summaries, the trace streaming, and the app syncing and plotting them.
 
-- The calibration gate is deliberately not applied, so reps appear at a steady
-  rate rather than at the chip's opinion of itself. Real builds still gate.
+- The filter's readiness is deliberately not applied, so reps appear at a steady
+  rate rather than once the bar has held still. Real builds still gate.
 - It says so: one `fake-reps: storing a synthetic rep every 30 s, not detecting
   real ones` line at the start, so a bench session cannot be mistaken for a real
   one in a log.

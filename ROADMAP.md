@@ -9,9 +9,12 @@ Where Calypso is and what is left. Feature documentation lives in
   ZUPT-anchored trace and summary stats. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
 - **Per-rep storage** — a flash log ring holds each rep's summary and trace, and
   survives power loss. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
-- **IMU calibration routine** — the device stays up and usable while uncalibrated,
-  the app explains what to do, and recording is gated. See
-  [docs/CALIBRATION.md](docs/CALIBRATION.md).
+- **Raw IMU, filtered in firmware** — the device reads the BNO055's accelerometer and
+  gyroscope registers and computes its own attitude, gravity and offsets instead of
+  trusting the chip's fusion. Recording is gated on that filter having settled on a
+  still window — one second of stillness, no calibration ritual. Dev mode stores a
+  rep's window at full rate for replay. See [docs/RAW_IMU.md](docs/RAW_IMU.md).
+  **Not yet run on hardware**: the swap is the A/B, and it is what stage 4 opens.
 - **BLE sync** — summaries auto-stream to a subscriber, traces stream on request,
   per-rep UUIDs identify reps across reboots. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
 - **A chunked pipe over one characteristic each way** — messages larger than one
@@ -33,8 +36,8 @@ Where Calypso is and what is left. Feature documentation lives in
   [docs/GOTCHAS.md](docs/GOTCHAS.md)). The fallback for a rep the device has no place
   for is still the walk. **Not yet re-run on hardware**, which is what would close
   [*A rep's timeline has a hole in it*](#firmware).
-- **Client app** — sync, the archive of record, rep list, 3D bar-path plot,
-  calibration hint, BLE transport, all testable without hardware.
+- **Client app** — sync, the archive of record, rep list, 3D bar-path plot, the
+  device's faults, BLE transport, all testable without hardware.
 - **Bench mode** — `cargo run --features fake-reps` stores a synthetic rep every
   30 s, exercising the whole device → log → BLE → app path without lifting. See
   [calypso-esp32/README.md](calypso-esp32/README.md).
@@ -46,9 +49,9 @@ Where Calypso is and what is left. Feature documentation lives in
   hardware.** See [docs/APP_SYNC.md](docs/APP_SYNC.md).
 - **Diagnostics that can be read back** — the app logs every BLE message to a
   rotating file, the firmware's boot log carries the heap and stack figures, and the
-  IMU's own last sample — linear acceleration, quaternion, and when the sampler read
-  it — is a `read` on its own characteristic, in the fixed point a stored trace
-  carries. The app reads it once per connection and logs it (nothing on screen shows
+  IMU's own last sample — specific force, the attitude the filter computed, and when
+  the sampler read it — is a `read` on its own characteristic, in the fixed point a
+  stored trace carries. The app reads it once per connection and logs it (nothing on screen shows
   it yet), and any BLE client can read it. **Not yet run on hardware.** See
   [docs/APP_SYNC.md](docs/APP_SYNC.md).
 - **The device's own faults reach the app** — a failed mount, a rep that could not be
@@ -61,12 +64,6 @@ Where Calypso is and what is left. Feature documentation lives in
 - **A day at a time** — the rep list opens on today and an arrow either side walks it
   back a day per press, headed by the date, so the archive is browsable instead of
   only the current day being reachable. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
-- **Recording survives the accelerometer's status** — a rep is gated on the gyroscope
-  alone, so a chip whose `acc` level wanders no longer stops recording at random, and
-  each rep carries whether the accelerometer was calibrated anyway (a bit on
-  `RepSummary.flags`) instead of the reps being thrown away. The profile save still
-  wants both, because its offsets are the part that cannot be re-derived. **Not yet
-  run on hardware.** See [docs/CALIBRATION.md](docs/CALIBRATION.md).
 - **A rep is out and back** — the detector closes a rep on the return, not where the bar
   rests, so a bench rep held at lockout is captured as one rep instead of split into a
   drive and a lowering (or lost). A one-way push that pauses (an unrack) is dropped
@@ -89,27 +86,16 @@ Where Calypso is and what is left. Feature documentation lives in
 
 ### The raw IMU
 
-- [ ] **Read the accelerometer and gyroscope raw, and filter them in firmware.** The chip's
-      fused orientation cannot say whether its own reading is right — "linear acceleration" is
-      zero at rest by definition — and a residue it left behind kept the device from storing a
-      rep for a whole session. Reading `ACC_DATA`/`GYR_DATA` and running the filter here makes
-      gravity an input rather than an estimate. The plan and its four stages are
-      [docs/RAW_IMU.md](docs/RAW_IMU.md): the filter, the simulator, the wire format — two
-      traces, a raw one only a dev switch records — and the dev switch itself, which stores a
-      rep's window and streams it back out, are done. What is left is the device's `ACCGYRO` read
-      with the calibration surface deleted, and a real session to retune against. Until that
-      lands the device keeps working the old way, which also means the samples it records carry no
-      gyroscope: the path is live and the traces in it are not yet worth replaying.
-
-### The recording gate
-
-- [ ] **Settle whether the saved calibration is what the chip wants.** Applying
-      the profile reads back byte-for-byte, yet `acc` reads 0 afterwards while
-      `gyro` returns to 3 on its own, so either the profile is not the thing the
-      chip derives `ACC` from or the restore is not complete. Recording no longer
-      waits on `acc` at all, so this now costs the flag on a rep rather than the
-      rep; what still waits on it is the profile save, so a chip that never reports
-      `acc == 3` never has its offsets written.
+- [ ] **A real session with the raw input, and the map re-run against it.** Stage 3 of
+      [docs/RAW_IMU.md](docs/RAW_IMU.md) swapped what feeds the detector and deliberately changed
+      nothing else, so the first session is evidence rather than tuning: if reps are stored where
+      the fused build stored none, the fused output was the problem. What it does not settle is
+      whether the detector now reads travel correctly on a live bar — the maps are synthetic and
+      the annotated captures are gone — so the session's rep counts are written down before it
+      starts, dev mode records the windows, and the fixtures come from them.
+- [ ] **Whether the detector consumes the filter's velocity.** Two integrators run in firmware
+      today, deliberately, and they disagree. Folding the detector onto the filter's velocity is
+      one decision taken on that session's data, not before it.
 
 ### Sync over the pipe
 
@@ -131,12 +117,10 @@ Where Calypso is and what is left. Feature documentation lives in
 ### BLE link stability
 
 - [ ] **The link drops while idle.** Four drops in one session, each preceded by
-      nothing but the calibration message, ~1.2 s before CoreBluetooth reported
-      `The connection has timed out unexpectedly`. That message turned out to be
-      repeating at round-trip rate (see [docs/GOTCHAS.md](docs/GOTCHAS.md), "An
-      acknowledgement is also a request for the next message"), so the drops
-      actually followed a flood, and the levels are a read now — what is left is
-      the app's own poll, a read a second. The flash experiment is readable from
+      nothing but the IMU characteristic being polled, ~1.2 s before CoreBluetooth reported
+      `The connection has timed out unexpectedly`. The flood that was there then is gone (see
+      [docs/GOTCHAS.md](docs/GOTCHAS.md), "An acknowledgement is also a request for the next
+      message"); what is left is a read a second. The flash experiment is readable from
       the device's log alone now: a millisecond stamp on every line, both ends and
       the duration of every erase and write, and the reason a disconnect gives —
       `Connection Timeout` is the supervision timer expiring over a radio that

@@ -8,7 +8,6 @@
 extern crate alloc;
 
 pub mod ble;
-pub mod calibration;
 pub mod clock;
 pub mod flashlog;
 pub mod fusion;
