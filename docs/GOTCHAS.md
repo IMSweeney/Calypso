@@ -308,6 +308,25 @@ scale a trace decodes with — the data registers are fixed at 1 m/s² = 100 LSB
 1 dps = 16 LSB (§3.6.5.1, §3.6.5.3) — so the range is about clipping and internal noise
 and nothing else.
 
+### A reset in the middle of a read leaves the bus locked
+
+**Symptom.** One boot in about eight halts at 0.2 s with `I2c(Timeout)` unwrapped out of the
+sensor's `init`, and the device stays dead until it is unplugged. Every other boot is normal, and
+nothing in the log leads up to it because it is the first I²C transaction of the boot.
+
+**Cause.** `Error::Timeout` is the bus timeout, not a missing ACK: SCL never came back. Resetting the
+ESP32 in the middle of a 100 Hz read leaves the sensor holding SDA low, waiting for clocks that are
+not coming, so the next transaction cannot even send a START. The fault is made by the reset, which
+is why it hides on a normal boot and appears when the device is reset while it is sampling — a
+reflash, a watchdog, a brownout.
+
+**Fix.** A failed attempt is retried: esp-hal clears the bus on a timeout, so each attempt runs on a
+clean one, and five of them cover a sensor that was mid-transfer or still coming up. If all five
+fail the device reboots instead of halting, because a halted one needs a person to unplug it. Two
+failures in eight resets before the change, ten clean boots after it — but the retry never fired in
+those ten, so what is established is that the failure is no longer fatal, not that a retry clears
+it.
+
 ### A rep only counts if it ends in a pause
 
 **Symptom.** A set of reps stores one rep, or none, and the reps that survive are 3–8 s

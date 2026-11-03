@@ -136,6 +136,16 @@ const SAMPLER_CONFIG: calypso_core::sampler::RepConfig = calypso_core::sampler::
     detector_version: calypso_core::rep::DETECTOR_VERSION,
 };
 
+/// Attempts at starting the sensor before the device reboots.
+///
+/// A reset that lands in the middle of an I²C read leaves the sensor holding SDA low, and the first transaction after it
+/// times out rather than answering; the driver clears the bus on that error, so the next attempt is on a clean one. Five
+/// is enough for that and for a sensor still coming up, and short enough that a genuinely absent sensor reboots quickly.
+const BNO055_INIT_ATTEMPTS: u32 = 5;
+
+/// How long each attempt after the first waits, in milliseconds.
+const BNO055_INIT_RETRY_MS: u32 = 100;
+
 /// Bench mode's period, and how much of the ring each synthetic rep covers, which has to leave room for the ZUPT margins inside `REP_WINDOW_SAMPLES` (9 s).
 const FAKE_REP_PERIOD_S: u32 = 30;
 const FAKE_REP_MS: u32 = 6_000;
@@ -267,7 +277,32 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Setting up Bno055");
     let mut bno055 = Bno055::new(i2c).with_alternative_address();
-    bno055.init(&mut delay).unwrap();
+    // Retried, and rebooted rather than halted if every attempt fails: this device spends its life in a gym bag, and one
+    // that halts on a bad first read needs a person to unplug it. A reboot loop is visible in the log and recovers itself.
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match bno055.init(&mut delay) {
+            Ok(()) => break,
+            Err(e) if attempt < BNO055_INIT_ATTEMPTS => {
+                warn!(
+                    "Bno055 init attempt {} of {} failed ({:?}), retrying",
+                    attempt,
+                    BNO055_INIT_ATTEMPTS,
+                    defmt::Debug2Format(&e)
+                );
+                Timer::after(Duration::from_millis(BNO055_INIT_RETRY_MS as u64)).await;
+            }
+            Err(e) => {
+                error!(
+                    "Bno055 init failed {} times ({:?}), rebooting",
+                    BNO055_INIT_ATTEMPTS,
+                    defmt::Debug2Format(&e)
+                );
+                esp_hal::system::software_reset();
+            }
+        }
+    }
     info!("Bno055 initialized");
     // **The raw sensors, not the chip's fusion.** ACCGYRO reports uncompensated accelerometer and gyroscope registers;
     // the orientation is this firmware's (`fusion.rs`), because the fused output cannot say whether its own reading is
