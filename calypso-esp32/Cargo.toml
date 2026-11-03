@@ -75,6 +75,15 @@ calypso-core = { path = "../calypso-core" }
 #
 fake-reps = []
 
+# Record raw sample windows on a timer and store them as if they were reps, running no
+# detector and no travel check, so a session that stores nothing still leaves the samples
+# it was made of. The filter runs — its offsets and attitude are half of what a capture is
+# for — and every window is marked with detector version 0, because none closed it.
+#
+#   cargo run --release --features record-mode
+#
+record-mode = []
+
 [profile.dev.package.esp-storage]
 opt-level = 3
 

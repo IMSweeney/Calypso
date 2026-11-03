@@ -38,7 +38,7 @@ use bno055::Bno055;
 use bno055::{AccBandwidth, AccGRange, BNO055OperationMode};
 use calypso_core::clock::{self, Boots};
 use calypso_core::flashlog::{self, FlashLog};
-use calypso_core::fusion::{Fusion, GRAVITY, conjugate, rotate_by_quat};
+use calypso_core::fusion::{Fusion, FusionState, GRAVITY, conjugate, rotate_by_quat};
 use calypso_core::gatt::{
     CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncImuValue, SyncReportsValue,
 };
@@ -83,11 +83,9 @@ const DEVICE_NAME: &str = "Calypso";
 /// Whether a client has armed dev mode this boot: every rep stored from here on keeps its raw trace as well as its plotted one.
 ///
 /// Off at every boot and never persisted (`msg::DevMode` says why): a switch left on fills the log three times as fast,
-/// and a switch remembered would cost a reflash to turn off.
-///
-/// A trace recorded by this build has no angular rate in it — the sampler's sample still comes from the fused output,
-/// which is the stopgap — so it has the right shape and does not replay through the filter yet.
-static DEV_MODE: AtomicBool = AtomicBool::new(false);
+/// and a switch remembered would cost a reflash to turn off. On from the first sample in a record-mode build, because
+/// the raw trace is the whole of what that build is for and no client is there to ask for it.
+static DEV_MODE: AtomicBool = AtomicBool::new(RECORD_MODE);
 
 /// The wall clock the client last set: unix seconds at this boot's uptime zero, or 0 while nothing has set one.
 ///
@@ -117,6 +115,26 @@ const CLOCK_RECORD_BYTES: usize = 16;
 /// Bench mode: store a synthetic "rep" every this many seconds instead of detecting real ones (`--features fake-reps`).
 /// A build flag rather than a runtime setting, so the device is not one accidental setting away from recording fiction as a measurement.
 const FAKE_REPS: bool = cfg!(feature = "fake-reps");
+
+/// Record mode: raw windows of whatever the sensor read, on a timer, with no detector (`--features record-mode`).
+///
+/// The opposite question to [`FAKE_REPS`]: that one exercises the path with motion that never happened, and this one
+/// captures motion that did, whether or not anything in it was a rep — which is the only evidence a session that
+/// stored nothing can leave behind. The filter still runs, because its offsets and its attitude are half of what a
+/// capture is read for; only the decision that a window is worth keeping is taken away from the detector.
+const RECORD_MODE: bool = cfg!(feature = "record-mode");
+
+/// A build asks for one bench behaviour, not two: a device that both fabricated reps and recorded windows would tell a
+/// reader nothing about which of them a stored record was.
+const _: () = assert!(!(FAKE_REPS && RECORD_MODE));
+
+/// How much of the ring a recorded window holds, and how long after one closes the next opens.
+///
+/// Nine seconds rather than ten: the window is copied into `REP_WINDOW_SAMPLES`, and ten seconds at 100 Hz is one
+/// sample more than that buffer holds. The period leaves the gap the append needs — a flash write stops the sampler
+/// for its duration, so it belongs between windows rather than inside one.
+const RECORD_WINDOW_MS: u32 = 9_000;
+const RECORD_PERIOD_MS: u32 = 30_000;
 
 /// What a stored rep's summary says about the sensor that recorded it.
 ///
@@ -340,6 +358,14 @@ async fn main(spawner: Spawner) -> ! {
         SAMPLER_CONFIG.gyro_range_dps,
         SAMPLER_CONFIG.gyro_bandwidth_hz,
     );
+    if RECORD_MODE {
+        // Said once and loudly, for the reason fake-reps says its own: a device recording whatever it hears must not be
+        // mistaken for one detecting reps, and the log is where a session is read back from.
+        warn!(
+            "record mode: no detector; {} ms of raw samples every {} ms, dev mode on from boot",
+            RECORD_WINDOW_MS, RECORD_PERIOD_MS
+        );
+    }
 
     // `multicore_auto_park` is not optional on this chip: esp-storage's default strategy *refuses* every write and erase while the second core is running (`MultiCoreStrategy::Error`), and CPU1 is up in this build. Reads are unaffected, which is what makes it so confusing — the NVS reads worked while every erase, including the log partition's first format, came back as an I/O error.
     let flash = FlashStorage::new(peripherals.FLASH).multicore_auto_park();
@@ -750,6 +776,12 @@ async fn main(spawner: Spawner) -> ! {
             // Whether the filter had settled, logged only when it changes, so "paused until the filter knows which way is down" is printed when it becomes true rather than 3,600 times an hour.
             let mut logged_ready: Option<bool> = None;
             let mut logged_level: Option<bool> = None;
+            // Record mode's open window: when it began, and where the filter stood then, because a window nine
+            // seconds old has nothing else to replay `compute_rep` from.
+            let mut recording: Option<(u32, FusionState)> = None;
+            // The earliest moment the next recorded window may open, set past each append because an append stops
+            // the sampler for its duration.
+            let mut next_record_ms: u32 = 0;
             loop {
                 ticker.next().await;
                 let t_ms = boot.elapsed().as_millis() as u32;
@@ -792,7 +824,39 @@ async fn main(spawner: Spawner) -> ! {
                 // Detect reps; on close, slice the window out of the ring and compute the ZUPT-anchored trace + summary, then persist it.
                 //
                 // Only once the filter knows which way is down: it seeds gravity and both offsets from a still window, and before that there is no vertical for a rep to be measured against, so a trace recorded then would be fiction rather than a measurement.
-                let span = if FAKE_REPS {
+                let window = if RECORD_MODE {
+                    // The detector is not asked, so nothing here can decide a window is not a rep. This sample either
+                    // opens one or ends one; the close is logged with the moment the next is due, so the log says
+                    // plainly which of recording and waiting the device is doing, and when.
+                    match recording {
+                        None if t_ms >= next_record_ms => {
+                            recording = Some((t_ms, filtered.state));
+                            info!(
+                                "record: window opened at {} ms, {} ms of samples to go",
+                                t_ms, RECORD_WINDOW_MS
+                            );
+                            None
+                        }
+                        Some((start_ms, state))
+                            if t_ms.saturating_sub(start_ms) >= RECORD_WINDOW_MS =>
+                        {
+                            recording = None;
+                            next_record_ms = t_ms + RECORD_PERIOD_MS;
+                            info!(
+                                "record: window {}..{} closed, next opens at {} ms",
+                                start_ms, t_ms, next_record_ms
+                            );
+                            Some((
+                                RepSpan {
+                                    start_ms,
+                                    end_ms: t_ms,
+                                },
+                                Some((start_ms, state)),
+                            ))
+                        }
+                        _ => None,
+                    }
+                } else if FAKE_REPS {
                     // Bench mode: one synthetic rep per period, covering the last FAKE_REP_MS of samples whatever the motion was. The filter's readiness is deliberately *not* applied — these windows are cut from whatever the sensor read rather than detected in it, and a bench session should not depend on the bar holding still first. Everything downstream is untouched: the records are ordinary ones the app syncs and plots.
                     if !logged_fake_reps {
                         logged_fake_reps = true;
@@ -809,34 +873,40 @@ async fn main(spawner: Spawner) -> ! {
                     if n.is_multiple_of(SAMPLE_RATE_HZ * FAKE_REP_PERIOD_S)
                         && t_ms >= FAKE_REP_MS
                     {
-                        Some(RepSpan {
-                            start_ms: t_ms - FAKE_REP_MS,
-                            end_ms: t_ms,
-                        })
+                        Some((
+                            RepSpan {
+                                start_ms: t_ms - FAKE_REP_MS,
+                                end_ms: t_ms,
+                            },
+                            None,
+                        ))
                     } else {
                         None
                     }
                 } else if fusion.ready() {
                     // The filter is fed every sample, so its offsets and its attitude keep up with the sensor; only
                     // the detector is gated, and it starts from a real rest whenever the gate opens.
-                    detector.update(&filtered)
+                    detector.update(&filtered).map(|span| (span, None))
                 } else {
                     None
                 };
-                if let Some(span) = span {
-                    // The window starts where the filter state does, which is not always `MARGIN_MS`
-                    // before the rep: one close behind the boot has no filtered history that far back.
-                    let (from_ms, state) = detector.rep_state();
+                if let Some((span, edge)) = window {
+                    // Where the window begins and where the filter stood: the detector's answer for a rep it closed,
+                    // the snapshot taken when the window opened for one that was recorded. A detected rep's is not
+                    // always `MARGIN_MS` before it, because one close behind the boot has no history that far back.
+                    let (from_ms, state) = edge.unwrap_or_else(|| detector.rep_state());
                     let copied = samples
                         .borrow()
                         .copy_window(from_ms, span.end_ms, 0, MARGIN_MS, rep_window);
-                    // Logged at the moment the detector closes one, before anything can reject it: without this line a session that stores nothing cannot tell "the detector never fired" from "every rep was thrown away", and the two have different fixes.
-                    info!(
-                        "span closed: {}..{} ({} ms)",
-                        span.start_ms,
-                        span.end_ms,
-                        span.duration_ms()
-                    );
+                    // Logged at the moment the detector closes one, before anything can reject it: without this line a session that stores nothing cannot tell "the detector never fired" from "every rep was thrown away", and the two have different fixes. A recorded window logs its own open and close, so this would only repeat half of it.
+                    if !RECORD_MODE {
+                        info!(
+                            "span closed: {}..{} ({} ms)",
+                            span.start_ms,
+                            span.end_ms,
+                            span.duration_ms()
+                        );
+                    }
                     if copied == 0 {
                         warn!("rep window unavailable (ring too short)");
                         report(msg::ReportKind::RepWindowUnavailable);
@@ -849,7 +919,9 @@ async fn main(spawner: Spawner) -> ! {
                             state
                         };
                         let mut sum = compute_rep(&rep_window[..copied], &state, &mut rep_trace);
-                        if !sum.is_a_rep() {
+                        // A recorded window is kept whatever it measured: a session in which nothing was a rep is
+                        // exactly the case it exists to leave evidence of.
+                        if !RECORD_MODE && !sum.is_a_rep() {
                             info!(
                                 "rep discarded: {} m of travel, under the {} m a rep needs",
                                 sum.rom,
@@ -864,7 +936,17 @@ async fn main(spawner: Spawner) -> ! {
                             // Identity is minted when the rep closes, so it is set here rather than computed with the stats.
                             sum.rep_uuid = calypso_core::pb::uuid_to_field(&rep_uuid);
                             // What the sensor was set to, so the trace can be read without assuming today's build.
-                            sum.set_config(calypso_core::pb::config_message(&SAMPLER_CONFIG));
+                            // A recorded window says version 0: no detection logic closed it, and 0 is what the field
+                            // says when nothing did.
+                            let config = if RECORD_MODE {
+                                calypso_core::sampler::RepConfig {
+                                    detector_version: 0,
+                                    ..SAMPLER_CONFIG
+                                }
+                            } else {
+                                SAMPLER_CONFIG
+                            };
+                            sum.set_config(calypso_core::pb::config_message(&config));
                             // A dev session keeps what the sensor read on top of what it plotted: the plotted trace is what a screen draws, and only the raw one can be replayed. Same window, so the two cover the same rep.
                             let raw = DEV_MODE
                                 .load(Ordering::Relaxed)

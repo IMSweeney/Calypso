@@ -438,6 +438,22 @@ closes.
 **Fix.** A leg records `v0` as it opens (`Detector::open_leg`), not at the pair. The same
 trap applies to any new field read out of `hist_*`.
 
+### A fake rep's window is not the span it claims
+
+**Symptom.** In a `--features fake-reps` build a summary says its window is 24–30 s and the raw
+samples in it are 17–27 s: a trace shifted seconds earlier than the rep it belongs to, and cut
+short before that rep's own end.
+
+**Cause.** The window is sliced from `Detector::rep_state()`, and bench mode never feeds the
+detector, so it answers with its initial `(0, LEVEL)`. `copy_window` then starts at the ring's
+oldest sample instead of at the span's start, and stops when its output buffer fills instead of
+at the span's end.
+
+**Fix.** A window nothing detected has to name its own start: `--features record-mode` does,
+because it opens each window itself and keeps the filter state from that moment. The fake-reps
+branch is the one caller left asking a detector that never ran, and its trace stays offset until
+it does the same.
+
 ### A rep window must not begin inside a rest
 
 **Symptom.** Every rep after the first in a set reads high — 24% over travel — and the
