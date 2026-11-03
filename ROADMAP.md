@@ -88,6 +88,16 @@ Where Calypso is and what is left. Feature documentation lives in
 
 ### The raw IMU
 
+- [ ] **Whether the filter's stillness gates survive the sensor's noise.** The boot gate is
+      one unbroken second of a 400 ms window whose per-axis range stays under `STILL_SPREAD`,
+      and `resting` is decided one sample at a time; both were written and measured against
+      noise-free synthetic motion. On the simulator, white per-sample noise of a few
+      centimetres per second squared is enough that the filter never settles at all — so
+      nothing is recorded, for a reason that looks exactly like a detector that never fires.
+      The noise map in [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md) is the instrument that
+      would say where the sensor actually is: its axes are sized from the part's datasheet
+      rather than from one capture, and it needs a still window from a device first, because
+      the part's own noise accounts for only half of the rest spread a bar in a rack shows.
 - [ ] **A real session with the raw input, and the map re-run against it.** Stage 3 of
       [docs/RAW_IMU.md](docs/RAW_IMU.md) swapped what feeds the detector and deliberately changed
       nothing else, so the first session is evidence rather than tuning: if reps are stored where
@@ -239,8 +249,8 @@ Where Calypso is and what is left. Feature documentation lives in
       lift profile — bench, deadlift, squat — described by travel, speed in, speed out and
       a pause at each end, swept so each class's boundary of detectability is a curve
       rather than the few shapes that were captured. The first map measures `is_a_rep`
-      alone (would this motion be stored); the noise map adds the impairments the one
-      capture showed; the false-positive map aims the same sweep at motion that is not a
+      alone (would this motion be stored); the noise map adds the impairments the part's
+      datasheet allows; the false-positive map aims the same sweep at motion that is not a
       rep. The maps run by hand, `cargo test` pins the deterministic points, and the
       labelled capture stays the reference rather than being replaced. Plan:
       [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).

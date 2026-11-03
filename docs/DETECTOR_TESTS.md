@@ -15,10 +15,10 @@ Three kinds of evidence, and the suite is only worth having if it takes all thre
   example that needs it, so a later change is measured against the same motion and there
   is no `.pblog` to regenerate and re-commit. (The app's fixtures are the other case —
   the client loads files at runtime, so those stay checked in.)
-- **Error injections** — the impairments the capture showed, added to **synthetic** reps so
-  a loss can be attributed to one of them rather than to "the detector got worse". Never
-  added to a captured rep: that already carries the device's own error, and adding more to
-  it measures the sum of two things instead of one.
+- **Error injections** — the impairments the capture showed and the part's datasheet allows,
+  added to **synthetic** reps so a loss can be attributed to one of them rather than to "the
+  detector got worse". Never added to a captured rep: that already carries the device's own
+  error, and adding more to it measures the sum of two things instead of one.
 
 The detector has been tuned on a handful of reps and one 14-rep session. This is the
 instrument that turns the next tuning change into a measurement instead of a hope.
@@ -96,20 +96,126 @@ neighbours.
 
 ## 2. Noise map — todo
 
-The same map with impairments injected into the synthetic motion — never into a captured
-rep — so a cell stops being a bit and becomes a rate over seeds. Brief for now: the axes
-and what each does.
+§1 asks what the detector does with one motion. This asks what it does with the motion a *part*
+would have seen, so a cell stops being a bit and becomes a rate over draws. Two things follow,
+and they are the whole of the design: a rate is worth nothing without the seed count written
+beside it, and the model has to be the device's rather than ours — a map of our own noise is a
+map of our own assumptions.
 
-| axis | range | what it does | where the number comes from |
-|---|---|---|---|
-| white acceleration noise, σ | 0 – 0.2 m/s², anchored at 0.13 | changes nothing measurable — the rep still closes and reads the same ROM | the per-sample spread at rest, 13–17 mg |
-| mount tilt | 0 – 90° about any axis | nothing, once the filter has found gravity: a tilt is an attitude, and the vertical is still the world's | a clip is never square to the bar |
-| accelerometer offset | 0 – 0.5 m/s² on any axis | nothing at rest — the filter learns it — and a sideways part is a tilt of `b/g`, which cancels out of the acceleration | the measured rest offsets, 2–11 mg |
-| gyroscope offset | 0 – 5 °/s | a heading drift, and a tilt leak left in the horizontal for as long as the estimate takes to learn it | the gyro's zero-rate spec |
+**Three lifetimes, because the errors do not share one.** A gain error belongs to a part and is
+wrong all session; a temperature ramp belongs to a session; white noise belongs to a sample.
+Drawing them independently per cell would average away exactly the errors that decide an
+outcome — a part four percent high on the accelerometer reads every rep four percent long, it is
+not sometimes high — so the draw is hierarchical: part, then session, then sample.
 
-All four are `Impairments` in `sim/src/motion.rs`, and they are the sensor's faults rather
-than the filter's: a wrong *attitude* is no longer something that can be injected, because
-there is no estimate here to bias — the mount is real and so are the offsets.
+| tier | drawn once per | what it carries |
+|---|---|---|
+| part | part | both sensors' offsets and gains, cross-axis coupling, nonlinearity, the mount's tilt |
+| session | session | white noise per sensor, the platform's vibration, both offsets' temperature ramp, the mount's roll through the motion, sampler stalls, the rest before the first rep |
+| sample | sample | the white and platform terms, quantised at the part's range setting |
+
+**A chain, in the part's own order.** The model is not a bag of terms added to a generated
+motion: the world goes into the mount's frame, then through cross-axis coupling, gain and
+nonlinearity, then past the offsets, the ramp and the platform, then the noise, and only then
+through the quantiser — because each is a stage the signal really passes through, and a term
+applied in another order is a different sensor. The gyro is added to rather than replaced, since
+a mount rolling through a stroke is the signal the attitude is carried by, and the generators
+hand over motion in floating point so the quantiser is passed exactly once.
+
+**What the part allows, and what it does to this pipeline.** Every number below is the BNO055's,
+from the datasheet's electrical characteristics and register scales — not one of ours. The third
+column is the point: each spec converted into the quantity this pipeline actually gates on.
+
+| quantity | the part | what it costs here |
+|---|---|---|
+| accelerometer noise density | 150 µg/√Hz typ, 190 max | at the firmware's 63 Hz second-order filter — noise bandwidth about twice its corner — **1.8 mg a sample, 2.25 at the maximum** |
+| one 400 ms window of that | the expected range of forty normal samples is ~4.3σ | 7.7 mg, 9.7 at the maximum, against the 15.3 mg `STILL_SPREAD` allows: **the boot gate has 2.0× of margin at a typical part and 1.6× at a maximum one** |
+| the die's LSB at ±8 g | 3.9 mg, against the 1 mg of the output register | the quantiser adds 1.1 mg of its own and the margin becomes **1.7× and 1.4×**: the accelerometer's range setting is a visible share of the gate |
+| zero-g offset | ±80 mg typ, ±150 max | **absorbed.** Learning runs for the second `READY_S` asks for, leaving 1.8% of the offset: at the maximum that is 2.8 mg, an eighth of what `resting` tolerates. The sideways part tilts the boot attitude by 8.5°, and cancels exactly — the bias is learned against the attitude it tilted |
+| zero-rate offset | ±1 typ, ±3 max dps | learned to 0.05 dps in the boot second, and the boot gate admits 5 dps: 1.7× the part's maximum. What costs is a bias **step** — 1 dps for a second is 1° and 0.17 m/s² of gravity in the horizontal, 2.4× `VEL_MIN` — not its size |
+| gyroscope noise | 0.014 °/s/√Hz, 0.1 dps rms at 32 Hz | 0.01° of angle random walk a second, 0.002 m/s² of gravity leaked: **a null control, not an axis** |
+| temperature drift | 1–3.5 mg/K, 0.015–0.03 °/s/K | 5–35 mg over a session's warm-up, tracked while the reading is quiet — which a ramp does not disturb. A pin |
+| gain | ±1/±4 %, ±1/±3 % | ±4% of ROM is 7.6 mm at a bench's nominal: less than the overshoot the integration already reads, so it measures reported travel rather than reach |
+| cross-axis, nonlinearity | 1–2 %, 0.5–2 %FS | a metre per second squared of sway leaks 0.02 into the vertical; nonlinearity is bracketed at its spec points rather than swept |
+| data-rate tolerance | ±1 % | the chip's rate against the loop's 100 Hz: a sample repeated rather than missed, and a stall duplicates a whole run |
+
+**So the gate is what has to be measured, and it is sized for the part.** The cliff the simulator
+already found sits at about 0.03 m/s² a sample — 1.4× the datasheet's *maximum* density. The gate
+is right for a BNO055 and has nothing left over for a coarser quantiser, a noisier part, or
+anything else in the same window. That is why this section exists.
+
+**And the number it was built on is not the sensor's.** The rest spread the old brief anchored
+on — 13–17 mg — cannot be a per-sample deviation: at that σ the gate never opens, which the
+simulator shows directly, and the part is three to eight times smaller. A 400 ms peak-to-peak
+would fit the arithmetic better, but the part accounts for only 8–10 mg of that, so something
+else is contributing. Another observation says the same thing from the other side: on a still
+board no two consecutive reads were ever identical. With a deviation of a couple of quanta, two
+readings land in the same quantum about one time in seven on a single axis alone, so twelve
+thousand samples of a genuinely still sensor would contain hundreds of repeats. Never repeating
+means the value is crossing quanta between samples, which is motion. **The rest of that spread is
+the platform**, so the boot gate is largely measuring a bar in a rack rather than a sensor — and
+the figure itself has no provenance left, because the capture it came from is gone.
+
+**Two of the four axes are not dimensions.** A mount tilt is an attitude, and once gravity is
+found the vertical is still the world's: sweeping it spends a dimension to rediscover an
+identity, so it stays where it already is, as three pinned angles. The accelerometer's range
+setting is a firmware decision rather than a part's error, so it gets one run of its own — ±4 g
+against the firmware's ±8 g on identical draws — because what ±8 g buys is clip headroom and what
+it costs is a share of the gate's margin: a trade to price once, not a dimension to sweep.
+
+**The axes that remain.** Everything the part allows is either swept, because it can move an
+outcome, or pinned at the datasheet's typical and maximum, because the expected result of a pin
+is the row above and a pin that fails is therefore a change in this pipeline rather than in the
+part.
+
+| axis | swept over | why it is swept |
+|---|---|---|
+| white noise, per sample | 0.010 – 0.030 m/s², anchored at 0.017 and 0.022 | the one term that decides whether the gate opens |
+| platform vibration | 1–10 Hz, to 12 mg amplitude, all three axes | the rest spread's unexplained part, and the only term that is *coloured*: a slow oscillation costs the window twice its amplitude while adding little to a deviation, so it is a different kind of enemy from the row above |
+| offset step at motion onset | 0 – 1 dps, 0 – 0.3 m/s² | the bias a rest cannot learn, because the rep has already begun |
+| offset ramp | to the datasheet's temperature coefficients over a session | whether tracking keeps up once the bar is warm |
+| rest before the first rep | 0.4 – 6 s | the device records from the moment it calls itself ready, and that count is of quiet seconds, not of correct ones |
+| sampler stall | 0–2 events, 10–200 ms | a rep is written to flash inside the sampling loop, and a gap past the integration step is travel that never happened |
+| mount roll | 0 – 180 °/s through the motion | the gyro's whole job, and nothing generates it today |
+| sway, stroke shape, phase | 0–0.5 m/s² at 0.3–2 Hz; a cosine at 0.6–1.6 power; up- or down-first | motion the detector has never been asked about, including the lowering-first rep that pairs with an unrack |
+
+**What is measured — five things, not one.** Whether anything was stored is the product
+question, and the least diagnostic of the five: **how long until the filter called itself
+ready** (never, for a session that records nothing, which today looks exactly like a quiet
+one), the **count** against the reps asked for, the **order**, the **ROM** against the travel
+asked for, and whether the **unrack and re-rack** were stored. A cell is those five counted over
+seeds.
+
+**Seeds and the denominator.** A cell costs what a §1 cell costs, so the count is a choice rather
+than a budget: the slice grid at 64 seeds, the cells on and beside a boundary at 1024, the pins
+at 1024 — and the count printed in the run's header, because a rate without it compares with
+nothing. Intervals are Wilson's: a cell of 64 seeds has no business quoting a proportion as
+though it were exact. A seed derives from the cell and the session, so the worst cells in a
+report can be replayed exactly.
+
+**How a run is shaped.** Three passes, cheapest first. A screen moves one axis at a time to five
+levels against the nominal motion, because most of the table above is expected to do nothing and
+the screen's purpose is to stop paying for it. The map is then the joint draw over whatever
+survived, drawn as a density over each §1 slice, with the boundary stated in the knob's own units
+so two runs compare and the percentages do not have to. The pins are the datasheet's typical and
+maximum parts against every nominal, which is where a regression is caught.
+
+**What it needs first — four numbers off a device.** The model's largest unknown cannot come from
+a datasheet: how much of the rest spread is the platform, and what shape it has. One still
+capture answers that and three more questions: the histogram of distinct values gives the
+quantiser step, which is simultaneously a check that the range setting costs what the table above
+says; peak-to-peak against window length separates noise from drift; the spectrum sizes the
+vibration; and windows minutes apart give the 1/f and the temperature terms. One build records
+exactly that stream and nothing else: `--features record-mode` runs the sampler and the filter
+with no detector and no travel check, so a window is stored whatever it measured, raw samples
+included, and it says in the log when it is recording and when it is waiting for the next one.
+A session with the bar on the rack for a few minutes, `device_log` over the partition image, and
+`sim` needs only a reader that prints the four numbers.
+
+**What it will not answer.** It measures the detector against a model, so it is worth the fit and
+no more: a term left out of the draw is a term the report calls harmless. The archive that could
+have calibrated it is gone, so the first run's model is the datasheet's, and the capture above
+either confirms the rest spread or replaces the platform axis with what it actually is.
 
 ## 3. False positives — done
 
@@ -200,8 +306,12 @@ The fix is in: the integration starts from the bar's velocity at the rep's left 
   and how many reps each set comes back with, in what order, and how far its ROM drifted. The
   cells are `Slice::scan`'s, so the report and the drawing cannot disagree; the maps stay the
   way to see the boundary, and the report is the way to see that it moved.
-- **Noise map: todo.** `Rng` and `Impairments` exist in `sim/src/motion.rs`, but the noise
-  slice of the map and any noise pins are not written yet.
+- **Noise map: todo.** The axes, ranges, statistics and the capture it needs are in §2. What
+  exists is `Rng`, the four-field `Impairments` in `sim/src/motion.rs` — which cannot express a
+  gain, a ramp, a rotation or a platform, overwrites the gyro instead of adding to it, and
+  quantises a value the generators have already quantised — and a device build that records
+  without a detector (`--features record-mode`), so the capture itself is available. The model
+  and the reader are the parts that have to be built before the map means anything.
 - **False positives: done.** `sim/examples/false_positive_map.rs` sweeps `Push` (the
   unrack/re-rack/bump) and `Wobble` (the oscillation). There is no captured non-rep left to pin:
   the one capture's windows carry holes in their own timelines, so a test against them would pin
