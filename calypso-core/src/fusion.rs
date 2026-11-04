@@ -32,13 +32,17 @@ use crate::sampler::Sample;
 pub const GRAVITY: f32 = 9.80665;
 
 /// Samples in the stillness window: 400 ms at the device's 100 Hz.
-const STILL_WINDOW: usize = 40;
+///
+/// Public, like [`STILL_SPREAD`] and [`READY_S`], because the instrument that measures a device's
+/// rest noise has to measure it in the terms the gate is written in: a copy of the number in `sim`
+/// would let the two drift apart and the report would describe a gate nothing uses.
+pub const STILL_WINDOW: usize = 40;
 /// Per-axis spread of the specific force (m/s²) under which the reading has stopped changing.
 ///
 /// A **spread**, not a magnitude, because it is the one test a sensor's own offset cannot fool: an
 /// offset is constant, so it moves the window's centre and not its width. A still bar varies by a
 /// hundredth of a metre per second squared; one being lifted varies by whole ones.
-const STILL_SPREAD: f32 = 0.15;
+pub const STILL_SPREAD: f32 = 0.15;
 /// How far the specific force may sit from 1 g, with the offset taken out, while the bar rests
 /// (m/s²).
 ///
@@ -57,12 +61,15 @@ const STILL_RATE_DPS: f32 = 2.0;
 /// quiet, and would therefore never learn the three degrees per second. Wide enough to admit any
 /// offset a gyroscope ships with, narrow enough that a bar being swung through a stroke is not it.
 const STILL_RATE_BOOT_DPS: f32 = 5.0;
+
 /// How long the reading must be quiet before the attitude is taken to know which way is down.
 ///
 /// A second, because that is what it takes for the accelerometer's offset to come out of the same
 /// window: an offset left half-learned is a metre per second squared of phantom acceleration
-/// waiting at the first rep.
-const READY_S: f32 = 1.0;
+/// waiting at the first rep. Public with [`STILL_WINDOW`] and [`STILL_SPREAD`]; a capture's longest
+/// quiet run means nothing without the count it was judged against.
+pub const READY_S: f32 = 1.0;
+
 /// How long the reading must hold at 1 g before the bar counts as **at rest**.
 ///
 /// Not the same question as quiet. A slow stroke spends a third of a second crossing zero
@@ -71,6 +78,7 @@ const READY_S: f32 = 1.0;
 /// to see past that shoulder, short enough that a bar set down is at rest before the lifter has
 /// gripped it again.
 const SETTLE_S: f32 = 0.4;
+
 /// Time constant of the attitude's pull toward measured gravity, once it knows which way is down.
 const ATT_TAU_S: f32 = 1.0;
 /// Time constant of both offsets while the filter is still booting.

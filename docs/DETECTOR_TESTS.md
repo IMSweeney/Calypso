@@ -130,12 +130,12 @@ column is the point: each spec converted into the quantity this pipeline actuall
 |---|---|---|
 | accelerometer noise density | 150 µg/√Hz typ, 190 max | at the firmware's 63 Hz second-order filter — noise bandwidth about twice its corner — **1.8 mg a sample, 2.25 at the maximum** |
 | one 400 ms window of that | the expected range of forty normal samples is ~4.3σ | 7.7 mg, 9.7 at the maximum, against the 15.3 mg `STILL_SPREAD` allows: **the boot gate has 2.0× of margin at a typical part and 1.6× at a maximum one** |
-| the die's LSB at ±8 g | 3.9 mg, against the 1 mg of the output register | the quantiser adds 1.1 mg of its own and the margin becomes **1.7× and 1.4×**: the accelerometer's range setting is a visible share of the gate |
+| the die's LSB at ±8 g | 3.9 mg in the interrupt thresholds, against the 1 mg of the output register | **nothing, measured.** Consecutive readings off a device move one LSB, so the ±8 g range does not coarsen what this pipeline sees and the quantiser costs the gate none of its margin. The 3.9 mg figure belongs to the die's threshold units, not to this output |
 | zero-g offset | ±80 mg typ, ±150 max | **absorbed.** Learning runs for the second `READY_S` asks for, leaving 1.8% of the offset: at the maximum that is 2.8 mg, an eighth of what `resting` tolerates. The sideways part tilts the boot attitude by 8.5°, and cancels exactly — the bias is learned against the attitude it tilted |
 | zero-rate offset | ±1 typ, ±3 max dps | learned to 0.05 dps in the boot second, and the boot gate admits 5 dps: 1.7× the part's maximum. What costs is a bias **step** — 1 dps for a second is 1° and 0.17 m/s² of gravity in the horizontal, 2.4× `VEL_MIN` — not its size |
 | gyroscope noise | 0.014 °/s/√Hz, 0.1 dps rms at 32 Hz | 0.01° of angle random walk a second, 0.002 m/s² of gravity leaked: **a null control, not an axis** |
 | temperature drift | 1–3.5 mg/K, 0.015–0.03 °/s/K | 5–35 mg over a session's warm-up, tracked while the reading is quiet — which a ramp does not disturb. A pin |
-| gain | ±1/±4 %, ±1/±3 % | ±4% of ROM is 7.6 mm at a bench's nominal: less than the overshoot the integration already reads, so it measures reported travel rather than reach |
+| gain | ±1/±4 %, ±1/±3 % | ±4% of ROM is 7.6 mm at a bench's nominal: less than the overshoot the integration already reads, so it measures reported travel rather than reach. **A device was measured at 3.3% on one axis** — gravity read 967 mg on that axis and 1001 mg split across the other two — which is inside the ±4% maximum and invisible to the bias learning |
 | cross-axis, nonlinearity | 1–2 %, 0.5–2 %FS | a metre per second squared of sway leaks 0.02 into the vertical; nonlinearity is bracketed at its spec points rather than swept |
 | data-rate tolerance | ±1 % | the chip's rate against the loop's 100 Hz: a sample repeated rather than missed, and a stall duplicates a whole run |
 
@@ -211,6 +211,15 @@ with no detector and no travel check, so a window is stored whatever it measured
 included, and it says in the log when it is recording and when it is waiting for the next one.
 A session with the bar on the rack for a few minutes, `device_log` over the partition image, and
 `sim` needs only a reader that prints the four numbers.
+
+**What the first capture said.** Four stationary windows off one device, two orientations, nine
+seconds each. The part is quieter than its datasheet: the 400 ms range off the quiet axis sits at
+4–5 mg p50 and 11 mg at its worst, against the 7.7 mg a typical part would predict, and the whole
+window's peak-to-peak is 7–12 mg. In the other orientation the same device reads 13–17 mg p50 and
+31–48 mg p-p, and there only a third of the 400 ms windows pass the gate at all while the longest
+unbroken quiet run is 1.1 s against the 1 s `READY_S` asks for. So the rest spread the old brief anchored on is
+reproduced exactly — as a *window's p50*, in one mounting, on one bar — and the part's own share of
+it is smaller than the datasheet allows. The gate's margin is the mount's, not the sensor's.
 
 **What it will not answer.** It measures the detector against a model, so it is worth the fit and
 no more: a term left out of the draw is a term the report calls harmless. The archive that could
