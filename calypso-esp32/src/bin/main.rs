@@ -784,6 +784,8 @@ async fn main(spawner: Spawner) -> ! {
             // The earliest moment the next recorded window may open, set past each append because an append stops
             // the sampler for its duration.
             let mut next_record_ms: u32 = 0;
+            // How long the last append took end to end, taken by the hole the tick after it reports: a hole with a flash in it and one with a sync arm in it read the same otherwise.
+            let mut append_ms: Option<u32> = None;
             loop {
                 ticker.next().await;
                 let t_ms = boot.elapsed().as_millis() as u32;
@@ -791,13 +793,21 @@ async fn main(spawner: Spawner) -> ! {
                 // Logged where it is made, on the same clock as the flash and link lines, because the cause is whichever of them was running.
                 if let Some(last) = last_t_ms {
                     let gap = t_ms.saturating_sub(last);
+                    // Cleared whether or not this tick is a hole, so a stale append is never blamed for one.
+                    let of_append = append_ms.take().unwrap_or(0);
                     if gap > SAMPLER_HOLE_MS {
                         // A recorded window is written between windows, so the pause is a hole by construction —
                         // and only a gap with a window open is something a client should be told about.
                         if RECORD_MODE && recording.is_none() {
-                            info!("record: {} ms of append between windows", gap);
+                            info!(
+                                "record: {} ms of append between windows, {} ms of it a rep's store",
+                                gap, of_append
+                            );
                         } else {
-                            error!("sampler hole: {} ms without a sample", gap);
+                            error!(
+                                "sampler hole: {} ms without a sample, {} ms of it a rep's store",
+                                gap, of_append
+                            );
                             report(msg::ReportKind::SamplerHole);
                         }
                     }
@@ -915,6 +925,10 @@ async fn main(spawner: Spawner) -> ! {
                     None
                 };
                 if let Some((span, edge)) = window {
+                    // Marks either side of each step between a rep closing and the sampler coming back, because the
+                    // log's own timestamps are taken at the host end of the serial link and subtracting two of them
+                    // is a range rather than a measurement.
+                    let closed_at = Instant::now();
                     // Where the window begins and where the filter stood: the detector's answer for a rep it closed,
                     // the snapshot taken when the window opened for one that was recorded. A detected rep's is not
                     // always `MARGIN_MS` before it, because one close behind the boot has no history that far back.
@@ -922,6 +936,7 @@ async fn main(spawner: Spawner) -> ! {
                     let copied = samples
                         .borrow()
                         .copy_window(from_ms, span.end_ms, 0, MARGIN_MS, rep_window);
+                    let copied_at = Instant::now();
                     // Logged at the moment the detector closes one, before anything can reject it: without this line a session that stores nothing cannot tell "the detector never fired" from "every rep was thrown away", and the two have different fixes. A recorded window logs its own open and close, so this would only repeat half of it.
                     if !RECORD_MODE {
                         info!(
@@ -943,6 +958,7 @@ async fn main(spawner: Spawner) -> ! {
                             state
                         };
                         let mut sum = compute_rep(&rep_window[..copied], &state, &mut rep_trace);
+                        let computed_at = Instant::now();
                         // A recorded window is kept whatever it measured: a session in which nothing was a rep is
                         // exactly the case it exists to leave evidence of.
                         if !RECORD_MODE && !sum.is_a_rep() {
@@ -976,12 +992,17 @@ async fn main(spawner: Spawner) -> ! {
                                 .load(Ordering::Relaxed)
                                 .then_some(&rep_window[..copied]);
                             // Persist the rep (summary + trace chunks). This happens right after the rest debounce, i.e. while the sensor is at rest, so the tens of ms an erase takes here can't land in the middle of a rep.
-                            let stored = {
+                            let (stored, locked_at) = {
                                 let mut guard = store.lock().await;
-                                flash_window("rep append", || {
+                                // After the lock, so the mark before it to here is the wait for a sync arm walking the
+                                // log: the one hole in this path with no flash in it.
+                                let locked_at = Instant::now();
+                                let out = flash_window("rep append", || {
                                     store_rep(&mut guard, rec_buf, &mut sum, &rep_trace, raw)
-                                })
+                                });
+                                (out, locked_at)
                             };
+                            let stored_at = Instant::now();
                             match stored {
                                 Ok(n) => {
                                     // A new summary for the stream to read, and a walk it can now skip.
@@ -1017,6 +1038,19 @@ async fn main(spawner: Spawner) -> ! {
                                 sum.roll_max_deg,
                                 sum.pitch_min_deg,
                                 sum.pitch_max_deg,
+                            );
+                            // Where the sampler's ~half second went, in the order it is spent. Only the part in the flash
+                            // is unavoidable for a NOR write; the rest is the size of the solution.
+                            let total_ms = closed_at.elapsed().as_millis() as u32;
+                            append_ms = Some(total_ms);
+                            info!(
+                                "rep timing: copy {} ms, compute {} ms, wait {} ms, flash {} ms, tail {} ms ({} total)",
+                                copied_at.duration_since(closed_at).as_millis() as u32,
+                                computed_at.duration_since(copied_at).as_millis() as u32,
+                                locked_at.duration_since(computed_at).as_millis() as u32,
+                                stored_at.duration_since(locked_at).as_millis() as u32,
+                                stored_at.elapsed().as_millis() as u32,
+                                total_ms
                             );
                         }
                     }
@@ -1867,17 +1901,125 @@ fn trace_kind(kind: msg::TraceKind) -> &'static str {
     }
 }
 
+/// What one kind of flash operation cost, as a count and a total.
+#[derive(Clone, Copy)]
+struct Ops {
+    n: u32,
+    ms: u32,
+}
+
+/// The time the last [`flash_window`] spent inside the driver, split by operation, each as `(count, microseconds)`.
+///
+/// Split because the three have different fixes: an erase cannot be made shorter, only rarer, while the writes are
+/// however many pages there are and can be spread across ticks.
+struct FlashTime {
+    erase: (AtomicU32, AtomicU32),
+    write: (AtomicU32, AtomicU32),
+    read: (AtomicU32, AtomicU32),
+}
+
+static FLASH_TIME: FlashTime = FlashTime {
+    erase: (AtomicU32::new(0), AtomicU32::new(0)),
+    write: (AtomicU32::new(0), AtomicU32::new(0)),
+    read: (AtomicU32::new(0), AtomicU32::new(0)),
+};
+
+impl FlashTime {
+    fn clear(&self) {
+        for (n, us) in [&self.erase, &self.write, &self.read] {
+            n.store(0, Ordering::Relaxed);
+            us.store(0, Ordering::Relaxed);
+        }
+    }
+
+    fn note(&self, which: &(AtomicU32, AtomicU32), started: Instant) {
+        which.0.fetch_add(1, Ordering::Relaxed);
+        which
+            .1
+            .fetch_add(started.elapsed().as_micros() as u32, Ordering::Relaxed);
+    }
+
+    fn ops(which: &(AtomicU32, AtomicU32)) -> Ops {
+        Ops {
+            n: which.0.load(Ordering::Relaxed),
+            ms: which.1.load(Ordering::Relaxed) / 1000,
+        }
+    }
+}
+
+/// A flash region whose every operation is counted, which is what turns "the append took 385 ms" into what inside it
+/// did.
+///
+/// Nothing else observes the region: the counters are cleared as a [`flash_window`] opens and read as it closes, and
+/// one append runs at a time behind the store lock.
+struct TimedFlash<N>(N);
+
+// Named by path rather than imported: the read and capacity names collide with the `ReadStorage` traits this file already has in scope.
+impl<N: embedded_storage::nor_flash::ErrorType> embedded_storage::nor_flash::ErrorType
+    for TimedFlash<N>
+{
+    type Error = N::Error;
+}
+
+impl<N: embedded_storage::nor_flash::ReadNorFlash> embedded_storage::nor_flash::ReadNorFlash
+    for TimedFlash<N>
+{
+    const READ_SIZE: usize = N::READ_SIZE;
+
+    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+        let started = Instant::now();
+        let out = self.0.read(offset, bytes);
+        FLASH_TIME.note(&FLASH_TIME.read, started);
+        out
+    }
+
+    fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
+}
+
+impl<N: NorFlash> NorFlash for TimedFlash<N> {
+    const WRITE_SIZE: usize = N::WRITE_SIZE;
+    const ERASE_SIZE: usize = N::ERASE_SIZE;
+
+    fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
+        let started = Instant::now();
+        let out = self.0.erase(from, to);
+        FLASH_TIME.note(&FLASH_TIME.erase, started);
+        out
+    }
+
+    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+        let started = Instant::now();
+        let out = self.0.write(offset, bytes);
+        FLASH_TIME.note(&FLASH_TIME.write, started);
+        out
+    }
+}
+
 /// Run one flash erase or write with both ends of it on the log, and how long it took.
 ///
 /// Flash and the radio share the chip, and an erase or write parks the other core and runs with the cache off: a window the controller can miss a connection event in, and a dropped link is that window plus the supervision timeout it takes to give up. Both ends on the clock is what makes the two readable against each other.
+///
+/// The split by operation is what the time went on: an append that is mostly erase cannot be made faster, only rarer or smaller, and one that is mostly writes of pages can be handed out across ticks.
 fn flash_window<T>(what: &'static str, op: impl FnOnce() -> T) -> T {
+    FLASH_TIME.clear();
     let started = Instant::now();
     info!("flash {}: starting", what);
     let out = op();
+    let erase = FlashTime::ops(&FLASH_TIME.erase);
+    let write = FlashTime::ops(&FLASH_TIME.write);
+    let read = FlashTime::ops(&FLASH_TIME.read);
     info!(
-        "flash {}: done after {} ms",
+        "flash {}: done after {} ms (erase {} in {} ms, write {} in {} ms, read {} in {} ms)",
         what,
-        started.elapsed().as_millis() as u32
+        started.elapsed().as_millis() as u32,
+        erase.n,
+        erase.ms,
+        write.n,
+        write.ms,
+        read.n,
+        read.ms
     );
     out
 }
@@ -1969,7 +2111,7 @@ fn store_rep(
     let offset = log_partition.offset();
     // Scoped so the region's borrow of `flash` ends before the probe below.
     let appended = {
-        let mut region = log_partition.as_embedded_storage(flash);
+        let mut region = TimedFlash(log_partition.as_embedded_storage(flash));
         FlashLog::mount(&mut region)
             .map_err(store::Error::Log)
             .and_then(|mut log| {
