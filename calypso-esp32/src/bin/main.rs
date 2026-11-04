@@ -849,16 +849,15 @@ async fn main(spawner: Spawner) -> ! {
                     // opens one or ends one; the close is logged with the moment the next is due, so the log says
                     // plainly which of recording and waiting the device is doing, and when.
                     match recording {
-                        None if t_ms >= next_record_ms => {
+                        // Not before the filter knows which way is down: a window that opens first has no
+                        // vertical for `compute_rep` to replay in, and its trace reads hundreds of metres.
+                        // The price is that a device whose gate never opens records nothing — which the
+                        // sampler's own line says, rather than leaving silence to be interpreted.
+                        None if t_ms >= next_record_ms && fusion.ready() => {
                             recording = Some((t_ms, filtered.state));
-                            // Whether the filter had found gravity when the window opened is the difference
-                            // between a measurement and a window whose trace is fiction, and it is not in the
-                            // records: the first window after a boot always opens before it is ready.
                             info!(
-                                "record: window opened at {} ms, {} ms of samples to go, filter {}",
-                                t_ms,
-                                RECORD_WINDOW_MS,
-                                if fusion.ready() { "ready" } else { "not ready yet" }
+                                "record: window opened at {} ms, {} ms of samples to go",
+                                t_ms, RECORD_WINDOW_MS
                             );
                             None
                         }

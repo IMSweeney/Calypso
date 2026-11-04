@@ -209,6 +209,8 @@ vibration; and windows minutes apart give the 1/f and the temperature terms. One
 exactly that stream and nothing else: `--features record-mode` runs the sampler and the filter
 with no detector and no travel check, so a window is stored whatever it measured, raw samples
 included, and it says in the log when it is recording and when it is waiting for the next one.
+It does wait for the filter to find gravity before the first window: a window that opens first
+has no vertical to replay in, and reads hundreds of metres of travel that never happened.
 A session with the bar on the rack for a few minutes, `device_log` over the partition image, and
 `sim` needs only a reader that prints the four numbers.
 

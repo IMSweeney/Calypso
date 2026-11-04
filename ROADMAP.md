@@ -88,6 +88,22 @@ Where Calypso is and what is left. Feature documentation lives in
 
 ### The raw IMU
 
+- [ ] **A recorded window costs the sampler half a second, and a fifth of it is unexplained.**
+      The append itself is 330–390 ms, which is the erase and the write, but the device's own log
+      shows another 130–240 ms between the window closing and the flash starting — the copy, the
+      trace, the log line and the store's lock, before any flash work. It sits between windows so
+      no window loses samples to it, but the same path is on the sampler's critical path in a
+      build that runs the detector, and the interval is not attributed to anything yet.
+- [ ] **Whether the offsets should re-converge faster after the device is moved.** A bias step of
+      about 330 mg — what moving a sensor with a three-percent scale error looks like — settles
+      through `TRACK_TAU_S` in roughly ten seconds, and a window recorded in that stretch carries
+      centimetres of travel on a still bar. Measured against the maps: shortening the time
+      constant fourfold costs the slow end of every long-travel class (a deadlift's one-rep run
+      starts at 0.48 m/s instead of 0.29), and learning at `BOOT_TAU_S` whenever the bar is `still`
+      improves typical ROM but turns the slowest cells from 75% long into 50% short, because a very
+      gradual stroke can satisfy `resting` and be eaten as an offset. What would separate them is a
+      gate that also asks whether the *velocity* has stayed near zero, which the filter has and
+      nothing consults.
 - [ ] **Whether the filter's stillness gates survive the sensor's noise.** The boot gate is
       one unbroken second of a 400 ms window whose per-axis range stays under `STILL_SPREAD`,
       and `resting` is decided one sample at a time; both were written and measured against
