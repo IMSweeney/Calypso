@@ -771,6 +771,8 @@ async fn main(spawner: Spawner) -> ! {
             let mut reps: u32 = 0;
             let mut n: u32 = 0;
             let mut last_t_ms: Option<u32> = None;
+            // The first poll of the sensor can land before it has written its registers.
+            let mut first_sample = true;
             // Said once, in bench mode, so a session cannot be mistaken for a real one.
             let mut logged_fake_reps = false;
             // Whether the filter had settled, logged only when it changes, so "paused until the filter knows which way is down" is printed when it becomes true rather than 3,600 times an hour.
@@ -813,6 +815,18 @@ async fn main(spawner: Spawner) -> ! {
                     accel: [accel.x, accel.y, accel.z],
                     gyro: [gyro.x, gyro.y, gyro.z],
                 };
+                // The chip's acceleration registers are still empty when the first poll lands: that sample
+                // reads no specific force at all while the rate beside it is plausible. It is a whole g of
+                // step at the head of the first window — enough to integrate metres of travel that never
+                // happened — so it is dropped rather than recorded. A still sensor never reads zero, so the
+                // test cannot throw away a reading that was real.
+                if first_sample {
+                    first_sample = false;
+                    if sample.accel == [0, 0, 0] {
+                        warn!("first sample read no acceleration, so it was not a reading: discarded");
+                        continue;
+                    }
+                }
                 samples.borrow_mut().push(sample);
                 let filtered = fusion.update(&sample);
                 // The attitude the app reads is the filter's: the chip no longer reports one.

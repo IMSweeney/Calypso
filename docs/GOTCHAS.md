@@ -308,6 +308,21 @@ scale a trace decodes with — the data registers are fixed at 1 m/s² = 100 LSB
 1 dps = 16 LSB (§3.6.5.1, §3.6.5.3) — so the range is about clipping and internal noise
 and nothing else.
 
+### The first acceleration read after the mode switch is all zeros
+
+**Symptom.** A record-mode window that opens at boot reports a hundred metres of travel in nine
+seconds, and its first sample reads `0, 0, 0 m/s²` while the gyroscope beside it reads a plausible
+rate. Every window after it is ordinary.
+
+**Cause.** The chip's acceleration registers have not been written when the loop's first poll lands,
+so that sample is a reading nobody took — and it arrives as a whole g of step at the head of the
+first window, which the integration carries for the rest of the window.
+
+**Fix.** The first sample is dropped when it reads no specific force at all, and the log says so. A
+still sensor never reads zero, so a real first reading cannot be lost to it. The window that starts
+at boot is still not a still window — the filter has not been still long enough to know which way is
+down — but it is now the motion that is missing from it rather than the sensor's.
+
 ### A reset in the middle of a read leaves the bus locked
 
 **Symptom.** One boot in about eight halts at 0.2 s with `I2c(Timeout)` unwrapped out of the
