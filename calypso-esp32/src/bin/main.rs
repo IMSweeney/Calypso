@@ -792,8 +792,14 @@ async fn main(spawner: Spawner) -> ! {
                 if let Some(last) = last_t_ms {
                     let gap = t_ms.saturating_sub(last);
                     if gap > SAMPLER_HOLE_MS {
-                        error!("sampler hole: {} ms without a sample", gap);
-                        report(msg::ReportKind::SamplerHole);
+                        // A recorded window is written between windows, so the pause is a hole by construction —
+                        // and only a gap with a window open is something a client should be told about.
+                        if RECORD_MODE && recording.is_none() {
+                            info!("record: {} ms of append between windows", gap);
+                        } else {
+                            error!("sampler hole: {} ms without a sample", gap);
+                            report(msg::ReportKind::SamplerHole);
+                        }
                     }
                 }
                 last_t_ms = Some(t_ms);
@@ -845,9 +851,14 @@ async fn main(spawner: Spawner) -> ! {
                     match recording {
                         None if t_ms >= next_record_ms => {
                             recording = Some((t_ms, filtered.state));
+                            // Whether the filter had found gravity when the window opened is the difference
+                            // between a measurement and a window whose trace is fiction, and it is not in the
+                            // records: the first window after a boot always opens before it is ready.
                             info!(
-                                "record: window opened at {} ms, {} ms of samples to go",
-                                t_ms, RECORD_WINDOW_MS
+                                "record: window opened at {} ms, {} ms of samples to go, filter {}",
+                                t_ms,
+                                RECORD_WINDOW_MS,
+                                if fusion.ready() { "ready" } else { "not ready yet" }
                             );
                             None
                         }
