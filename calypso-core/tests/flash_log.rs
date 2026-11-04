@@ -1,7 +1,9 @@
 mod common;
 
 use calypso_core::flashlog::{Error, FlashLog};
-use common::{mount, reads, reset_reads, BigFlash, MockError, MockFlash, SECTOR};
+use common::{
+    erases, mount, reads, reset_erases, reset_reads, BigFlash, MockError, MockFlash, SECTOR,
+};
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 
 #[test]
@@ -102,6 +104,115 @@ fn corrupt_record_is_skipped_on_remount() {
     let id = log.append(b"new").unwrap();
     let n = log.read(id, &mut buf).unwrap().unwrap();
     assert_eq!(&buf[..n], b"new");
+}
+
+/// A reserve is what keeps an erase out of an append, and this is that property stated as the flash sees it.
+///
+/// The ring is eight sectors and a hundred-byte record is two to a sector, so forty records leave sixteen live
+/// across all eight — the ring has wrapped and every sector the ring can drop next holds records.
+#[test]
+fn the_ring_advances_into_a_prepared_sector_without_erasing() {
+    let mut flash = MockFlash::new();
+    let mut log = mount(&mut flash);
+    let payload = [0x5Au8; 100];
+    for _ in 0..40 {
+        log.append(&payload).unwrap();
+    }
+    // Nothing is erased ahead, so the next advance would pay for one.
+    assert_eq!(log.prepared_ahead(1).unwrap(), 0);
+
+    assert!(log.prepare_one(7).unwrap());
+    assert_eq!(log.prepared_ahead(1).unwrap(), 1);
+
+    reset_erases();
+    log.append(&payload).unwrap();
+    assert_eq!(erases(), 0, "the advance into a prepared sector erased");
+
+    // The prepared sector was the oldest one, and its two records are what the reserve spent.
+    let mut buf = [0u8; 128];
+    assert!(log.read(25, &mut buf).unwrap().is_none());
+    assert!(log.read(26, &mut buf).unwrap().is_none());
+    assert_eq!(log.read(27, &mut buf).unwrap(), Some(100));
+}
+
+/// Each prepare has to land on the next sector rather than on the same one again, or a reserve stays one deep however
+/// many ticks it is given.
+#[test]
+fn each_prepare_deepens_the_reserve_by_one() {
+    let mut flash = MockFlash::new();
+    let mut log = mount(&mut flash);
+    let payload = [0x66u8; 100];
+    for _ in 0..40 {
+        log.append(&payload).unwrap();
+    }
+    for depth in 1..=3 {
+        assert!(log.prepare_one(3).unwrap());
+        assert_eq!(log.prepared_ahead(3).unwrap(), depth);
+    }
+    assert!(
+        !log.prepare_one(3).unwrap(),
+        "a reserve that is deep enough is left alone"
+    );
+}
+
+#[test]
+fn a_reserve_survives_a_remount() {
+    let mut flash = MockFlash::new();
+    let payload = [0x33u8; 100];
+    {
+        let mut log = mount(&mut flash);
+        for _ in 0..40 {
+            log.append(&payload).unwrap();
+        }
+        log.prepare_one(7).unwrap();
+    }
+
+    let mut log = FlashLog::mount(&mut flash).unwrap();
+    assert_eq!(log.prepared_ahead(2).unwrap(), 1);
+    reset_erases();
+    log.append(&payload).unwrap();
+    assert_eq!(erases(), 0, "the remount forgot the reserve");
+}
+
+/// A flash that has never been written is erased, so the first pass through the ring costs nothing: fourteen records
+/// are seven sectors of an eight-sector ring, and it has not been round yet.
+#[test]
+fn a_ring_that_has_never_wrapped_erases_nothing() {
+    let mut flash = MockFlash::new();
+    let mut log = mount(&mut flash);
+    reset_erases();
+    let payload = [0x77u8; 100];
+    for _ in 0..14 {
+        log.append(&payload).unwrap();
+    }
+    assert_eq!(erases(), 0);
+}
+
+/// The check the reserve rests on is a check of the bytes, not of the header that claims them: a write that failed
+/// between the two leaves a sector whose header reads erased and whose records are still there, and an append must not
+/// write over them.
+#[test]
+fn a_sector_that_only_looks_erased_is_still_erased() {
+    let mut flash = MockFlash::new();
+    let payload = [0x11u8; 100];
+    {
+        let mut log = mount(&mut flash);
+        for _ in 0..40 {
+            log.append(&payload).unwrap();
+        }
+    }
+    let prepared = 4 * SECTOR;
+    flash.inner.data[prepared..prepared + 8].fill(0xFF);
+
+    let mut log = FlashLog::mount(&mut flash).unwrap();
+    assert_eq!(log.prepared_ahead(1).unwrap(), 1, "the header erases too");
+    reset_erases();
+    log.append(&payload).unwrap();
+    assert_eq!(
+        erases(),
+        1,
+        "a sector with records still in it was written over"
+    );
 }
 
 /// A record is found, not walked to.

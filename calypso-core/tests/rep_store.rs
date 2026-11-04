@@ -1,12 +1,13 @@
 mod common;
 
+use calypso_core::flashlog::FlashLog;
 use calypso_core::pb::msg;
 use calypso_core::rep::{TraceBuf, TracePoint};
 use calypso_core::sampler::{Sample, QUAT_SCALE};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::uuid::{fixture_uuid, RepUuid};
 use calypso_sim::fixtures::{detect_and_trace, squat_set};
-use common::{mount, reads, reset_reads, BigFlash, MockFlash, WideFlash};
+use common::{erases, mount, reads, reset_erases, reset_reads, BigFlash, MockFlash, WideFlash};
 
 fn pipeline(samples: &[Sample]) -> (Vec<Vec<TracePoint>>, Vec<msg::RepSummary>) {
     let reps = detect_and_trace(samples, 512);
@@ -14,6 +15,55 @@ fn pipeline(samples: &[Sample]) -> (Vec<Vec<TracePoint>>, Vec<msg::RepSummary>) 
         reps.iter().map(|(_, trace)| trace.clone()).collect(),
         reps.iter().map(|(summary, _)| summary.clone()).collect(),
     )
+}
+
+fn append_set(
+    log: &mut FlashLog<'_, WideFlash>,
+    buf: &mut [u8],
+    summary: &msg::RepSummary,
+    traces: &[Vec<TracePoint>],
+    set: u32,
+) {
+    for (i, trace) in traces.iter().enumerate() {
+        let mut summary = summary.clone();
+        summary.rep_uuid = calypso_core::pb::uuid_to_field(&fixture_uuid(set * 10 + i as u32));
+        store::append_rep(log, buf, &mut summary, trace, None).unwrap();
+    }
+}
+
+/// A set costs the sampler nothing but the write when the ring is erased ahead of it, and this is that said as the
+/// flash sees it: the same three reps, into the same wrapped ring, with and without a reserve.
+#[test]
+fn a_set_appended_into_a_reserve_erases_nothing() {
+    let (samples, _) = squat_set(3, 1500, 800, 0.4);
+    let (traces, summaries) = pipeline(&samples);
+    let mut flash = WideFlash::new();
+    let mut buf = [0u8; RECORD_BUF_BYTES];
+
+    // Round the ring, so that the sector it drops next holds a rep and a set landing in it has to erase. How many
+    // sets that takes is the record sizes' business, so the loop asks the ring rather than guessing: one sector ahead
+    // that reads erased means the ring has not been round yet.
+    let mut log = mount(&mut flash);
+    let mut set = 0;
+    while log.prepared_ahead(1).unwrap() > 0 {
+        append_set(&mut log, &mut buf, &summaries[0], &traces, set);
+        set += 1;
+        assert!(set < 500, "the ring never came round");
+    }
+
+    reset_erases();
+    append_set(&mut log, &mut buf, &summaries[0], &traces, 100);
+    assert!(
+        erases() >= 1,
+        "a wrapped ring should have to erase to make room"
+    );
+
+    for _ in 0..16 {
+        log.prepare_one(16).unwrap();
+    }
+    reset_erases();
+    append_set(&mut log, &mut buf, &summaries[0], &traces, 200);
+    assert_eq!(erases(), 0, "a set appended into the reserve erased");
 }
 
 #[test]

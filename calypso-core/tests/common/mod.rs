@@ -29,6 +29,22 @@ pub fn reads() -> usize {
     READS.with(|r| r.get())
 }
 
+// Sectors erased, counted for the same reason as the reads: on the device an erase stops the whole chip for tens of
+// milliseconds, so "this append did not erase" is the property worth asserting, rather than how it was arranged.
+std::thread_local! {
+    static ERASES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Forget the erases so far.
+pub fn reset_erases() {
+    ERASES.with(|e| e.set(0));
+}
+
+/// Sectors erased since the last [`reset_erases`].
+pub fn erases() -> usize {
+    ERASES.with(|e| e.get())
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct MockError;
 
@@ -73,6 +89,7 @@ impl MockData {
     }
 
     fn erase(&mut self, from: u32, to: u32) -> Result<(), MockError> {
+        ERASES.with(|e| e.set(e.get() + 1));
         assert_eq!(from as usize % self.sector, 0, "unaligned erase");
         assert_eq!(to as usize % self.sector, 0, "unaligned erase");
         for b in &mut self.data[from as usize..to as usize] {

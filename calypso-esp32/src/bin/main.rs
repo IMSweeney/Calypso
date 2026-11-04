@@ -185,6 +185,20 @@ type SampleWindow = RefCell<SampleRing<'static>>;
 /// Longest gap between two samples that is still this loop being busy rather than stopped: ten times the tick, and well past the tens of ms a flash write in this loop costs.
 const SAMPLER_HOLE_MS: u32 = 500;
 
+/// How many already-erased sectors to keep ahead of the ring, so an append finds the space it needs already blank
+/// and never stops the sampler to make some.
+///
+/// A sample is 21 bytes on the wire, so 100 Hz is 2.1 kB/s and a minute — one set — is 31 sectors of 4 kB. The price
+/// is that many sectors of history: the reserve is erased from the oldest end of the ring, so a device holding this
+/// much ahead remembers that many sectors less than it has room for.
+const RESERVE_SECTORS: u32 = 32;
+
+/// How long the bar has to have been still before the reserve may take its 45 ms erase.
+///
+/// Longer than the detector's own rest debounce: the erase is a hole, and the one place a hole is harmless is a bar
+/// that has stopped moving.
+const RESERVE_STILL_S: f32 = 0.5;
+
 /// The flash peripheral, and the scratch a partition lookup needs.
 ///
 /// The partition table is 3 KB, and reading one into a local is the largest stack frame this firmware would have — which is why the crate denies `clippy::large_stack_frames`.
@@ -786,6 +800,10 @@ async fn main(spawner: Spawner) -> ! {
             let mut next_record_ms: u32 = 0;
             // How long the last append took end to end, taken by the hole the tick after it reports: a hole with a flash in it and one with a sync arm in it read the same otherwise.
             let mut append_ms: Option<u32> = None;
+            // Whether the reserve needs nothing more done to it, so a device with nothing left to erase does not spend
+            // the 9 ms a log mount costs asking, a hundred times a second, for the rest of the session: true when it is
+            // full, and true when it could not be filled — a log that will not mount will not mount next tick either.
+            let mut reserve_done = false;
             loop {
                 ticker.next().await;
                 let t_ms = boot.elapsed().as_millis() as u32;
@@ -1043,6 +1061,9 @@ async fn main(spawner: Spawner) -> ! {
                             // is unavoidable for a NOR write; the rest is the size of the solution.
                             let total_ms = closed_at.elapsed().as_millis() as u32;
                             append_ms = Some(total_ms);
+                            // The append spent as many of the erased sectors as it wrote, and nothing here counts them:
+                            // the next idle tick asks the log how deep the reserve still is.
+                            reserve_done = false;
                             info!(
                                 "rep timing: copy {} ms, compute {} ms, wait {} ms, flash {} ms, tail {} ms ({} total)",
                                 copied_at.duration_since(closed_at).as_millis() as u32,
@@ -1052,6 +1073,41 @@ async fn main(spawner: Spawner) -> ! {
                                 stored_at.elapsed().as_millis() as u32,
                                 total_ms
                             );
+                        }
+                    }
+                }
+
+                // Refill the erased reserve while nothing is being stroked or recorded: the erase parks the chip for
+                // ~45 ms, and this is the one moment in the session where that costs no samples.
+                //
+                // One sector a tick, because a tick's worth of the sampler is all this loop is willing to hand over, and
+                // the try lock because a sync walk holds the store for seconds and the sampler will not wait for it.
+                if !reserve_done
+                    && append_ms.is_none()
+                    && recording.is_none()
+                    && !detector.leg_open()
+                    && fusion.still_for_s() >= RESERVE_STILL_S
+                    && let Ok(mut guard) = store.try_lock()
+                {
+                    match prepare_log(&mut guard, RESERVE_SECTORS) {
+                        Ok(reserve) if reserve.depth >= reserve.want => {
+                            reserve_done = true;
+                            info!(
+                                "flash reserve: {} sectors erased ahead of the ring, appends no longer erase",
+                                reserve.depth
+                            );
+                        }
+                        Ok(reserve) => {
+                            if let Some(ms) = reserve.erased_ms {
+                                info!(
+                                    "flash reserve: {}/{} ahead, erased in {} ms",
+                                    reserve.depth, reserve.want, ms
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            reserve_done = true;
+                            warn!("flash reserve: {}", e);
                         }
                     }
                 }
@@ -2062,6 +2118,51 @@ async fn set_clock(
             report(msg::ReportKind::ClockNotPersisted);
         }
     }
+}
+
+/// One step of the erased reserve: how deep it is now, how deep it is meant to be, and how long an erase took when one
+/// ran — the erases are silent otherwise, and a 45 ms erase the log does not mention is a hole with no cause in it.
+struct Reserve {
+    depth: u32,
+    want: u32,
+    erased_ms: Option<u32>,
+}
+
+/// Erase the next sector the ring will drop, so the append that reaches it does not carry the erase.
+///
+/// One sector a call, mounted afresh like every other use of the log: the caller runs it once a tick in the idle
+/// stretch, and the mount's scan is a tenth of what the erase it precedes costs.
+fn prepare_log(store: &mut FlashStore, want: u32) -> Result<Reserve, LogError> {
+    let (flash, pt_mem) = store.split();
+    let pt = partitions::read_partition_table(flash, pt_mem).map_err(LogError::Table)?;
+    let Some(log_partition) = pt
+        .find_partition(partitions::PartitionType::Data(
+            partitions::DataPartitionSubType::Undefined,
+        ))
+        .map_err(LogError::Table)?
+    else {
+        return Err(LogError::NoPartition);
+    };
+    let mut region = log_partition.as_embedded_storage(flash);
+    let mut log = FlashLog::mount(&mut region).map_err(map_log_error)?;
+    // The head itself is the one sector the reserve may not take.
+    let want = want.min(log.sectors() - 1);
+    let depth = log.prepared_ahead(want).map_err(map_log_error)?;
+    let erased_ms = if depth < want {
+        let started = Instant::now();
+        log.prepare_one(want)
+            .map_err(map_log_error)?
+            .then(|| started.elapsed().as_millis() as u32)
+    } else {
+        None
+    };
+    Ok(Reserve {
+        // Whatever `prepare_one` found, the sector it was pointed at is erased now: either it erased it, or it was
+        // already blank.
+        depth: if depth < want { depth + 1 } else { depth },
+        want,
+        erased_ms,
+    })
 }
 
 /// Write a clock record into the log. Sync, for the same reason as [`collect_summaries`].

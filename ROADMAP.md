@@ -88,12 +88,15 @@ Where Calypso is and what is left. Feature documentation lives in
 
 ### The raw IMU
 
-- [ ] **A recorded window costs the sampler half a second, and a fifth of it is unexplained.**
-      The append itself is 330–390 ms, which is the erase and the write, but the device's own log
-      shows another 130–240 ms between the window closing and the flash starting — the copy, the
-      trace, the log line and the store's lock, before any flash work. It sits between windows so
-      no window loses samples to it, but the same path is on the sampler's critical path in a
-      build that runs the detector, and the interval is not attributed to anything yet.
+- [ ] **What is left of a recorded window's stall is the writes and `compute_rep`.**
+      Measured on one clock: of the 385 ms the sampler loses per window, 268 was six sector erases,
+      50 the writes, 38 `compute_rep` and 21 the log mount and the encode. The "130–240 ms before the
+      flash" was the host's serial timestamps, not the device. The erases are gone — the ring keeps
+      `RESERVE_SECTORS` already-erased sectors ahead of itself, refilled one per tick while the bar
+      is still, and `advance_sector` checks the bytes rather than erasing again. What is still on the
+      sampler's path is the page writes (~50 ms for 23 records) and `compute_rep` (38 ms, fifteen
+      times what the simulator's per-update timing scaled to). Both leave it by writing one record a
+      tick and by moving the replay to the second core.
 - [ ] **Whether the offsets should re-converge faster after the device is moved.** A bias step of
       about 330 mg — what moving a sensor with a three-percent scale error looks like — settles
       through `TRACK_TAU_S` in roughly ten seconds, and a window recorded in that stretch carries

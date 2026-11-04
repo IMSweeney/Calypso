@@ -201,6 +201,10 @@ written when the boot mounts and replaced by the client's write when it connects
 - Records live in the `log` data partition (0x190000, 2.4 MB), a ring of 4 KB sectors
   that erases the oldest sectors on wrap. At a few KB per rep that is a few hundred
   reps before the oldest fall off.
+- A sector erase stops the whole chip for ~45 ms, so the ring is kept a set's worth of
+  sectors ahead: already-erased sectors are made during a rest, one per tick, and an
+  append reaching them writes and nothing else. `RESERVE_SECTORS` is a minute of samples
+  and is also a minute's worth of history given up — those sectors are the oldest.
 - Records never span sectors; see `calypso-core/src/flashlog.rs` for the layout, CRC
   and power-loss behaviour.
 

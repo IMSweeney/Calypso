@@ -42,6 +42,26 @@ the log has not changed since is not collected again (`SummaryBatch::stale`, fed
 written together under the log's lock, so the chunks follow the summary, but a request
 for a rep the cache has no place for must fall back to the walk rather than be refused.
 
+### An erased sector header is not an erased sector
+
+**Symptom.** Two ways to get this wrong. A ring that skips an erase because the sector's header
+reads `0xFF` writes over bytes that survived underneath: the CRC fails, the sector reads as
+corrupt, and the record is gone with nothing reporting it. And a reserve that erases ahead of the
+ring takes history with it — the log holds that many sectors fewer, silently.
+
+**Cause.** The sector header is written *before* any record is, so a sector with an erased header
+holds nothing a reader is owed. It does **not** follow that the data below is erased: a write that
+failed between the header and the records, or the power loss in that same window, leaves programmed
+bytes under a blank header. A NOR write only clears bits, so writing over them produces a record
+that reads back as garbage rather than as an error.
+
+**Fix.** `advance_sector` checks the bytes rather than a claim about them: `is_erased` walks the
+whole sector and the erase is skipped only when every byte reads `0xFF` — a millisecond against the
+forty the erase costs, and it stops at the header for a sector that obviously holds records. The
+reserve's *planning* may go on headers alone, because a mistaken plan can only cause an erase that
+was not needed, never a missing one. The reserve's other cost is stated where it is chosen: the
+sectors it erases are the oldest, so a reserve `n` deep is `n` sectors less history.
+
 ### `Rep log unusable` in the boot log
 
 The line carries the reason, and the reason decides what to do:
@@ -1012,6 +1032,21 @@ value pushed once a second does not notify when nothing changed. They cannot be 
 though, so a test that wants a fixed message builds it in a `final`, not a `const`.
 
 ## Tests and tooling
+
+### A log line's timestamp is the host's, not the device's
+
+**Symptom.** The device's log showed 130–240 ms between `record: window … closed` and `flash rep
+append: starting`, it was larger on one mounting than on another — and the marks the firmware then
+put around the same code measured 38 ms, with nothing about the motion changing anything.
+
+**Cause.** The `0.000 [INFO ]` prefix is stamped at the host end of the serial link, after the line
+has been through the UART and `defmt`'s decoder. Subtracting two of them gives a range whose width
+depends on what else was in flight, not a duration — which is why an interval that looked like a
+mystery looked like a property of the mount instead.
+
+**Fix.** Put both ends of an interval on the device's clock (`Instant::now()` in the sampler loop)
+and log the difference as one number: `rep timing:`. The host timestamps are good for the order of
+events and for nothing else.
 
 ### `cargo test` does not work in `calypso-esp32`
 
