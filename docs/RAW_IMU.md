@@ -305,6 +305,13 @@ Verified by: a release build, fake reps through the whole path, then a real sess
   see — a sensor that repeats gives the same bytes back, and the sensor's own noise is what
   changes them — so it says nothing yet about how the rate behaves through a stroke.
 
+  **The test does not survive raw data.** A still window off the ACCGYRO path repeats its
+  previous reading 13–41% of the time per axis, which is what a one-milligram quantiser does to a
+  noise of one or two of them; the count was taken while the sample still came from the fused
+  output, whose own filtering leaves nothing to quantise. So a repeated reading cannot tell "the
+  chip did not update" from "the value landed in the same milligram", and the question is open
+  again for this path.
+
 ### 4. Reality — todo
 
 One session with its rep counts known before it starts, annotated, turned into fixtures, then
