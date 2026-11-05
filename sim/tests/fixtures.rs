@@ -127,7 +127,7 @@ fn decimation_keeps_the_last_point() {
 
     let mut storage = vec![TracePoint::ZERO; TRACE_POINTS];
     let mut trace = TraceBuf::new(&mut storage);
-    let summary = compute_rep(window, &FusionState::LEVEL, &mut trace);
+    let summary = compute_rep(window, &FusionState::LEVEL, None, &mut trace);
     assert!(summary.computed_len as usize <= TRACE_POINTS);
     assert_eq!(summary.computed_len as usize, trace.len());
     assert_eq!(

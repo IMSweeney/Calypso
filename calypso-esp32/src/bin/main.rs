@@ -976,7 +976,15 @@ async fn main(spawner: Spawner) -> ! {
                         } else {
                             state
                         };
-                        let mut sum = compute_rep(&rep_window[..copied], &state, &mut rep_trace);
+                        // A recorded window and a synthetic one were cut out of the stream, not found in it, so
+                        // there are no turns in either to anchor the replay at. Everything else was closed by the
+                        // detector, which kept the turns it measured the rep between.
+                        let turns = if RECORD_MODE || FAKE_REPS {
+                            None
+                        } else {
+                            Some(detector.rep_turns())
+                        };
+                        let mut sum = compute_rep(&rep_window[..copied], &state, turns, &mut rep_trace);
                         let computed_at = Instant::now();
                         // A recorded window is kept whatever it measured: a session in which nothing was a rep is
                         // exactly the case it exists to leave evidence of.

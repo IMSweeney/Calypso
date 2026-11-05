@@ -47,7 +47,12 @@ fn reps(w: &Window, from: FusionState) -> Vec<msg::RepSummary> {
                 continue;
             }
             let mut trace = TraceBuf::new(&mut storage);
-            out.push(compute_rep(&window[..n], &state, &mut trace));
+            out.push(compute_rep(
+                &window[..n],
+                &state,
+                Some(det.rep_turns()),
+                &mut trace,
+            ));
         }
     }
     out
@@ -86,11 +91,25 @@ fn a_hand_held_set_comes_back_as_the_reps_it_was() {
 
         let mut from_rest = w.state;
         from_rest.velocity = [0.0; 3];
-        assert_eq!(
-            reps(w, from_rest).len(),
-            4,
-            "{prefix}: the same window from rest"
-        );
+        let from_rest = reps(w, from_rest);
+        assert_eq!(from_rest.len(), 4, "{prefix}: the same window from rest");
+
+        // **The travel a rep reports no longer depends on the speed the window carried.** Both
+        // replays anchor at the same turns, and the turn is the one instant in a stroke where the
+        // bar's own speed is zero, so the two can only differ where a cue could not name that
+        // instant and the carried velocity ran on. Before the anchoring these read 9× and 24× the
+        // from-rest travel for the two windows' worst reps; the pin is that neither column can be
+        // more than twice the other.
+        for (k, (stored, rest)) in as_stored.iter().zip(&from_rest).enumerate() {
+            let ratio = stored.rom / rest.rom;
+            assert!(
+                (0.5..=2.0).contains(&ratio),
+                "{prefix} rep {}: {:.2} m from the state the window carried, {:.2} m from rest",
+                k + 1,
+                stored.rom,
+                rest.rom
+            );
+        }
     }
 }
 

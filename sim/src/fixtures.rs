@@ -126,7 +126,7 @@ pub fn detect_and_trace(
                 continue;
             }
             let mut trace = TraceBuf::new(&mut storage);
-            let mut summary = compute_rep(&window[..n], &state, &mut trace);
+            let mut summary = compute_rep(&window[..n], &state, Some(det.rep_turns()), &mut trace);
             summary.set_config(calypso_core::pb::config_message(
                 &calypso_core::sampler::RepConfig::of(
                     calypso_core::sampler::SAMPLE_RATE_HZ,

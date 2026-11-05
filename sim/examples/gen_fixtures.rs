@@ -72,7 +72,7 @@ fn main() -> std::io::Result<()> {
 
         let mut storage = vec![TracePoint::ZERO; TRACE_POINTS];
         let mut trace = TraceBuf::new(&mut storage);
-        let mut summary = compute_rep(window, &FusionState::LEVEL, &mut trace);
+        let mut summary = compute_rep(window, &FusionState::LEVEL, None, &mut trace);
         assert!(
             summary.computed_len as usize <= TRACE_POINTS
                 && summary.computed_len as usize > TRACE_POINTS / 2,

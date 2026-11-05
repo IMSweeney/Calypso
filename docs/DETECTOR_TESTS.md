@@ -253,6 +253,31 @@ alone cannot separate the two ways a window reads long: a tilt and a window that
 already in it both report travel the bar never did, and only the horizontal share of the velocity
 says which one a cell met.
 
+**What anchoring the replay at the turns changed.** The travel these two windows report was traced
+to two additive terms: the velocity the window arrived carrying (`rom ≈ v_z at the window's edge ×
+window length`) and, on top of it, an attitude residue integrating downhill for the length of the
+rep. The replay now puts its velocity back to zero at every turn a cue names the instant of
+(`docs/REP_TRACKING.md`), and ROM is measured over the rep's own span rather than the plot window.
+On this capture that is the whole difference: the two sets read 10.57 / 3.89 / 4.12 / 3.84 m and
+5.86 / 7.05 / 9.15 / 4.53 m for reps whose bars travelled a few tenths, and now read 0.44 / 2.35 /
+1.93 / 1.29 and 0.55 / 1.72 / 3.94 / 0.60. Replayed from rest they read the same, rep for rep,
+except where a turn was named by the speed and could not be anchored — which is the property worth
+having: the travel no longer depends on the drift the window carried in. What is left is the
+residue integrating *inside* one leg, which is the filter's and is where the remaining 1–4 m lives.
+
+**What it cost on the maps.** Detection did not move: the same 5,292 cells store the same reps,
+the non-rep sweep is identical, and `set_probe` reads the same spans. ROM fidelity against the
+travel asked for moved with it, and not all one way: the bench's slices came in a point or two
+closer (+10.9 % → +10.4 % on `travel × speed_in`, +5.3 % → +5.1 % on `travel × pause_top`), while
+the deadlift and the squat went out (deadlift `travel × pause_top` +3.6 % → +5.4 %, squat
++3.2 % → +6.5 %), and the worst cell in a slice went from +75 % to +135 %. The drift in the mean is
+the trade and it is expected: these reps come off a perfect sensor, so they arrive with no drift
+for an anchor to remove and an anchor can only add its own one-sample timing error. The worst cells
+are a different fault, and they were already wrong — they are the slow strokes whose shoulder the
+*filter's* stillness gate mistakes for a rest (`still` firing mid-stroke), where an onset the
+replay treats as a start from rest is really the middle of a stroke in progress: that cell read
++24 % long before this change and +135 % after. The filter is where that one goes, not the anchor.
+
 **What it will not answer.** It measures the detector against a model, so it is worth the fit and
 no more: a term left out of the draw is a term the report calls harmless. The archive that could
 have calibrated it is gone, so the first run's model is the datasheet's, and the capture above

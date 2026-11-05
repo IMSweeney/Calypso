@@ -69,6 +69,44 @@ impl RepSpan {
     }
 }
 
+/// What a replay needs to know about the turns the rep that just closed was measured between.
+///
+/// A turn is the one moment inside a stroke where the bar's vertical speed is genuinely zero — it is
+/// reversing — so it is where a replay can put its velocity back to zero without lying about the
+/// motion. Three of them delimit one rep: the two ends, and the turn between the legs.
+///
+/// **Only where a cue names that instant exactly.** The acceleration does: its extreme is where the
+/// bar stopped decelerating and started back. The speed does not: it knows the bar is under
+/// [`VEL_MIN`], which is a whole crowd of speed the bar still has, and zeroing there swaps a
+/// bounded drift for an error of the same size as the drift it was meant to bound. A turn with no
+/// instant is a turn the replay leaves alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepTurns {
+    /// The rep's own span: where its first leg began to move.
+    pub start_ms: u32,
+    /// Where its second leg turned — the rep's own end.
+    pub end_ms: u32,
+    /// Where the speed reached zero at each of the three instants that delimit the rep, oldest
+    /// first, where a cue could say.
+    pub zeros: [Option<Zero>; 3],
+}
+
+/// An instant a replay may put its velocity back to zero, and which side of its sample the step
+/// belongs to.
+///
+/// The distinction is one sample wide and it is not bookkeeping: the sample at an instant carries
+/// the acceleration of the step that *led* to it, so a bar that was already at rest as that step
+/// began has not been moved by it, and a bar that reached zero at it has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Zero {
+    /// The bar was already at rest when this sample's step began — an onset, or a hold. The step is
+    /// the motion that follows the instant, so the zero goes in before it is integrated.
+    Rest(u32),
+    /// The bar's speed reached zero at this sample: it turned. The step carries the deceleration
+    /// that led to the turn, so the zero goes in after it is integrated.
+    Turn(u32),
+}
+
 /// Which way the bar turns next.
 ///
 /// The vertical acceleration peaks where the bar stops falling and troughs where it stops rising,
@@ -97,7 +135,16 @@ impl Turn {
 #[derive(Debug, Clone, Copy)]
 struct Leg {
     start_ms: u32,
+    /// Where the bar's vertical speed reached zero at the turn that began it, where the cue that
+    /// named that turn could say.
+    ///
+    /// Not always [`Leg::start_ms`], because a cue names a turn as well as it can rather than
+    /// exactly: the edge is where the motion was cut, and this is the instant a replay may put its
+    /// velocity back to zero without throwing away speed the bar still had.
+    start_zero: Option<Zero>,
     end_ms: u32,
+    /// The same at the turn that ended it.
+    end_zero: Option<Zero>,
     /// Signed vertical displacement over the leg.
     disp_z: f32,
     /// Whether the bar was rising over the leg.
@@ -154,6 +201,9 @@ pub struct Detector {
     pos_z: f32,
     /// The open leg: where it began, the height it began at, and the state the bar carried into it.
     leg_start: Option<u32>,
+    /// Where the bar's vertical speed reached zero at the turn the open leg began at, where the
+    /// cue that named it could say.
+    leg_zero: Option<Zero>,
     leg_pos0_z: f32,
     leg_state: (u32, FusionState),
     leg_had_rest: bool,
@@ -181,6 +231,8 @@ pub struct Detector {
     hist_len: usize,
     /// The filter state at the left edge of the rep that just closed, and the moment it was taken.
     state: (u32, FusionState),
+    /// The turns the rep that just closed was measured between.
+    turns: RepTurns,
     /// The first sample the detector was ever fed, which is as far back as its history goes.
     first_t_ms: Option<u32>,
     /// Legs completed since the detector started. A leg is one stroke between two turns, and a rep is two of them, so this is the count that says whether detection got past its first stage.
@@ -195,6 +247,7 @@ impl Detector {
             prev_vz: 0.0,
             pos_z: 0.0,
             leg_start: None,
+            leg_zero: None,
             leg_pos0_z: 0.0,
             leg_state: (0, FusionState::LEVEL),
             leg_had_rest: false,
@@ -212,6 +265,11 @@ impl Detector {
             hist_head: 0,
             hist_len: 0,
             state: (0, FusionState::LEVEL),
+            turns: RepTurns {
+                start_ms: 0,
+                end_ms: 0,
+                zeros: [None; 3],
+            },
             first_t_ms: None,
             legs: 0,
         }
@@ -225,6 +283,15 @@ impl Detector {
     /// from a frame that does not exist.
     pub fn rep_state(&self) -> (u32, FusionState) {
         self.state
+    }
+
+    /// The turns the rep that just closed was measured between.
+    ///
+    /// Taken with [`Detector::rep_state`]: the state is where the replay starts, and these are where
+    /// it is told the bar stopped, so the two together are everything [`compute_rep`] needs to not
+    /// carry an integral across a rep the bar turned inside.
+    pub fn rep_turns(&self) -> RepTurns {
+        self.turns
     }
 
     /// Legs completed since the detector started.
@@ -299,7 +366,14 @@ impl Detector {
                     let disp_z = self.pos_at_z(f.t_ms) - self.leg_pos0_z;
                     let leg = Leg {
                         start_ms: start,
+                        start_zero: self.leg_zero,
                         end_ms: f.t_ms,
+                        // No anchor: a rest is the one place the filter stops the velocity itself,
+                        // and it has been pulling at it since long before this sample. An anchor
+                        // here would add its own timing error to a zero the filter already has —
+                        // and it lands on the first sample of the patch, where a stroke slow enough
+                        // to look still for 400 ms is still genuinely moving.
+                        end_zero: None,
                         disp_z,
                         up: disp_z > 0.0,
                         had_rest: self.leg_had_rest,
@@ -337,7 +411,10 @@ impl Detector {
             if mag > ACCEL_ON_THRESHOLD {
                 let since = *self.above_since.get_or_insert(f.t_ms);
                 if f.t_ms.saturating_sub(since) >= T_ON_MS {
-                    self.open_leg(since);
+                    // An onset is where the bar started, not where it reversed, so the bar is
+                    // still at rest as that sample's step begins — a different side of the sample
+                    // from a turn, and the whole reason [`Zero`] has two of them.
+                    self.open_leg(since, Some(Zero::Rest(since)));
                     self.leg_had_rest = self.gap_rest;
                     self.gap_rest = false;
                     self.above_since = None;
@@ -358,7 +435,10 @@ impl Detector {
         if turned {
             let (at, ended) = (self.ext_t, self.next_turn);
             self.take_turn(a[2], f.t_ms);
-            return self.close_leg(at, Some(ended == Turn::Top));
+            // The extreme of the vertical acceleration is where the bar stopped decelerating and
+            // started back, which is the instant its speed was zero: the cue that names that
+            // instant exactly, and the reason a replay is anchored here.
+            return self.close_leg(at, Some(Zero::Turn(at)), Some(ended == Turn::Top));
         }
 
         // A leg also ends when the velocity has sat under VEL_MIN for T_TURN_MS, which is the only
@@ -370,7 +450,13 @@ impl Detector {
             let since = *self.still_since.get_or_insert(f.t_ms);
             if f.t_ms.saturating_sub(since) >= T_TURN_MS {
                 self.take_turn(a[2], f.t_ms);
-                return self.close_leg(since, None);
+                // **This cue cannot say where the speed reached zero.** `since` is where it fell
+                // under [`VEL_MIN`] and the confirmation is `T_TURN_MS` later, and the stop is
+                // somewhere between: the bar still has a seventh of a metre per second at one end
+                // and may have turned at the other. Zeroing a replay's velocity anywhere in there
+                // would trade a bounded drift for an error of the same size, so it is not recorded
+                // and the replay is left unanchored across this turn.
+                return self.close_leg(since, None, None);
             }
         }
         None
@@ -397,27 +483,30 @@ impl Detector {
     ///
     /// `up` is the direction when the cue that found the turn knew it, and `None` when the travel is
     /// the only thing that can say.
-    fn close_leg(&mut self, t_ms: u32, up: Option<bool>) -> Option<RepSpan> {
+    fn close_leg(&mut self, t_ms: u32, zero: Option<Zero>, up: Option<bool>) -> Option<RepSpan> {
         let start = self.leg_start.expect("a leg ends at a turn");
         let disp_z = self.pos_at_z(t_ms) - self.leg_pos0_z;
         let leg = Leg {
             start_ms: start,
+            start_zero: self.leg_zero,
             end_ms: t_ms,
+            end_zero: zero,
             disp_z,
             up: up.unwrap_or(disp_z > 0.0),
             had_rest: self.leg_had_rest,
             state: self.leg_state,
         };
         // The bar turns, it does not restart: the next leg begins where this one ended, so a turnaround with no pause either side is still two legs.
-        self.open_leg(t_ms);
+        self.open_leg(t_ms, zero);
         self.leg_had_rest = false;
         self.legs += 1;
         self.pair(leg)
     }
 
     /// Start a leg at `t_ms`, with the height and the filter state the bar had there.
-    fn open_leg(&mut self, t_ms: u32) {
+    fn open_leg(&mut self, t_ms: u32, zero: Option<Zero>) {
         self.leg_start = Some(t_ms);
+        self.leg_zero = zero;
         self.leg_pos0_z = self.pos_at_z(t_ms);
         self.leg_state = self.state_at(t_ms.saturating_sub(MARGIN_MS));
         self.moved = false;
@@ -445,7 +534,9 @@ impl Detector {
         if !opposite && !leg.had_rest {
             self.pending = Some(Leg {
                 start_ms: p.start_ms,
+                start_zero: p.start_zero,
                 end_ms: leg.end_ms,
+                end_zero: leg.end_zero,
                 disp_z: p.disp_z + leg.disp_z,
                 up: p.up,
                 had_rest: p.had_rest,
@@ -471,6 +562,13 @@ impl Detector {
             self.pending = None;
             self.state = p.state;
             if span.duration_ms() >= MIN_REP_MS && span.duration_ms() <= MAX_REP_MS {
+                // The pending leg ended at the turn the second one began at, so its end is the
+                // turnaround — which is the instant a replay can put its velocity back to zero.
+                self.turns = RepTurns {
+                    start_ms: p.start_ms,
+                    end_ms: leg.end_ms,
+                    zeros: [p.start_zero, p.end_zero, leg.end_zero],
+                };
                 return Some(span);
             }
             return None;
@@ -609,7 +707,7 @@ impl<'a> TraceBuf<'a> {
 /// Bumped when a change makes a stored summary mean something else — a threshold that moves is a
 /// different measurement wearing the same name, and two numbers from two versions are then not
 /// comparable as if they were one.
-pub const DETECTOR_VERSION: u32 = 3;
+pub const DETECTOR_VERSION: u32 = 4;
 
 impl msg::RepSummary {
     /// Whether this is a rep at all: the bar has to have gone up or down [`MIN_ROM_M`].
@@ -627,14 +725,20 @@ impl msg::RepSummary {
 /// deterministic from that state, so the same window and the same state always give the same
 /// summary — which is what makes a stored trace re-derivable.
 ///
-/// The trace's position is the filter's velocity integrated; the filter sets that velocity to zero
-/// whenever the bar is still, and a lift guarantees stillness at both ends of every stroke, so the
-/// window is anchored at both of them and the drift is bounded to within the rep. Any number of
-/// samples is accepted; if more than `N` are supplied the plotted trace is decimated uniformly to fit
-/// (`TRACE_POINTS`, the plot's budget — the raw trace is never decimated and does not come from here).
+/// The trace's position is the filter's velocity integrated, and that integral is put back to zero
+/// twice over: wherever the filter sees the bar still, and at every turn `turns` names. Stillness
+/// alone is not enough on a real set — the window starts from a state that already carries the
+/// draft of the last one, and a stroke with no pause in it gives the filter nothing to anchor to
+/// between reps. A turn is the one instant the bar's vertical speed is genuinely zero whatever the
+/// estimate says, which is what bounds the drift to the inside of one leg.
+///
+/// Any number of samples is accepted; if more than `N` are supplied the plotted trace is decimated
+/// uniformly to fit (`TRACE_POINTS`, the plot's budget — the raw trace is never decimated and does
+/// not come from here).
 pub fn compute_rep(
     samples: &[Sample],
     from: &FusionState,
+    turns: Option<RepTurns>,
     out: &mut TraceBuf<'_>,
 ) -> msg::RepSummary {
     out.clear();
@@ -666,6 +770,34 @@ pub fn compute_rep(
     let mut fusion = Fusion::from_state(*from);
     let mut p = [0.0f32; 3];
     let mut v_prev = from.velocity;
+    // The instants the replay is told the bar was not moving, split by which side of their sample
+    // the step belongs to: see [`Zero`]. Both are in the order they happen.
+    let mut before = [0u32; 3];
+    let mut before_len = 0usize;
+    let mut after = [0u32; 3];
+    let mut after_len = 0usize;
+    if let Some(t) = turns {
+        for zero in t.zeros.into_iter().flatten() {
+            match zero {
+                Zero::Rest(ms) => {
+                    before[before_len] = ms;
+                    before_len += 1;
+                }
+                Zero::Turn(ms) => {
+                    after[after_len] = ms;
+                    after_len += 1;
+                }
+            }
+        }
+    }
+    let before = &before[..before_len];
+    let after = &after[..after_len];
+    let mut next_before = 0usize;
+    let mut next_after = 0usize;
+    // The range of motion is the rep's own travel, so the rest the window keeps either side of it
+    // — which the plot draws and the filter needs, and which is not motion the rep made — is not
+    // measured. Without a rep's span to measure, everything in the window is.
+    let (span_start, span_end) = turns.map_or((u32::MIN, u32::MAX), |t| (t.start_ms, t.end_ms));
     let mut a_max = 0.0f32;
     let mut v_max = 0.0f32;
     let mut v_sum = 0.0f32;
@@ -676,8 +808,20 @@ pub fn compute_rep(
     let mut roll_seen = false;
 
     for i in 0..n {
+        // A bar that was already at rest as this step began is not moved by it, so the zero goes in
+        // ahead of the integration: the step is the motion that follows the instant.
+        while next_before < before.len() && samples[i].t_ms >= before[next_before] {
+            fusion.zero_velocity();
+            next_before += 1;
+        }
         let filtered = fusion.update(&samples[i]);
-        let v = filtered.state.velocity;
+        // A turn is the other way round: the step carries the deceleration that led to it, and the
+        // bar's speed is zero at the end of that step rather than the start.
+        while next_after < after.len() && samples[i].t_ms >= after[next_after] {
+            fusion.zero_velocity();
+            next_after += 1;
+        }
+        let v = fusion.state().velocity;
         if i > 0 {
             let dt = (samples[i].t_ms - samples[i - 1].t_ms) as f32 / 1000.0;
             for k in 0..3 {
@@ -695,12 +839,14 @@ pub fn compute_rep(
             v_max = speed;
         }
         v_sum += speed;
-        for k in 0..3 {
-            if p[k] < lo[k] {
-                lo[k] = p[k];
-            }
-            if p[k] > hi[k] {
-                hi[k] = p[k];
+        if samples[i].t_ms >= span_start && samples[i].t_ms <= span_end {
+            for k in 0..3 {
+                if p[k] < lo[k] {
+                    lo[k] = p[k];
+                }
+                if p[k] > hi[k] {
+                    hi[k] = p[k];
+                }
             }
         }
 
@@ -743,7 +889,7 @@ pub fn compute_rep(
     // Range of motion is the vertical travel, and Z is the only axis that can say what vertical is: the filter pins it
     // to gravity, while X and Y are the mount's heading and drift with yaw. Whichever axis moved furthest is not the
     // same question — on the horizontal axes it is as often the estimate's error as the bar.
-    summary.rom = hi[2] - lo[2];
+    summary.rom = if hi[2] >= lo[2] { hi[2] - lo[2] } else { 0.0 };
     summary.t_start_ms = samples[0].t_ms;
     summary.t_end_ms = samples[n - 1].t_ms;
     summary.duration_ms = summary.t_end_ms - summary.t_start_ms;

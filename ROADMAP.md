@@ -92,6 +92,18 @@ Where Calypso is and what is left. Feature documentation lives in
   carrying 15 m/s of the filter's own drift, where the previous rule stored none — with the
   detectability maps unchanged and 95.4% of 5,292 cells storing one rep, from 95.2%. See
   [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
+- **A stored rep is measured from its own turns** — the replay puts its velocity back to zero at
+  every instant a cue names the bar's speed zero at (an onset, and a turn the acceleration
+  named), and ROM is measured over the rep's span rather than the plot window. That is what the
+  travel a rep reports is bounded by: the drift the window arrived carrying no longer reaches it,
+  so the two hand-held windows in the capture that read 3.8–9.2 m for bars that travelled a few
+  tenths now read 0.4–3.9 m, and they read the same replayed from their own state as from rest.
+  Detection is untouched — the same 5,292 cells store the same reps and the non-rep sweep is
+  identical — while ROM against the travel asked for on synthetic motion moved: closer on the
+  bench's slices, a point or two further out on the deadlift's and the squat's, because a synthetic
+  rep arrives with no drift and an anchor can only add its own timing error. What is left of the
+  1–4 m is the attitude residue integrating inside one leg, which is the filter's. See
+  [docs/REP_TRACKING.md](docs/REP_TRACKING.md) and [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
 
 ## Open
 
@@ -116,6 +128,15 @@ Where Calypso is and what is left. Feature documentation lives in
       gradual stroke can satisfy `resting` and be eaten as an offset. What would separate them is a
       gate that also asks whether the *velocity* has stayed near zero, which the filter has and
       nothing consults.
+- [ ] **An anchor at an onset assumes the label is honest, and on a slow stroke it is not.** The
+      replay zeroes the velocity where a leg opened from rest, which is what keeps a window's
+      carried drift out of its first rep. But `still` is the filter's judgement, and on a stroke
+      slow enough that its own shoulder reads under `STILL_GRAVITY` for 400 ms the filter calls
+      the middle of it a rest. The detector then opens a leg where the bar is genuinely moving at
+      a third of a metre per second, and the replay zeroes that. On the maps that is the single
+      worst ROM cell in a class — +24 % long before the anchoring, +135 % after — and it is the
+      stillness gate's to fix, not the anchor's: a gate that also consulted the velocity it is
+      integrating would separate them.
 - [ ] **Whether the filter's stillness gates survive the sensor's noise.** The boot gate is
       one unbroken second of a 400 ms window whose per-axis range stays under `STILL_SPREAD`,
       and `resting` is decided one sample at a time; both were written and measured against

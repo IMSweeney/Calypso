@@ -125,13 +125,28 @@ ring and calls `rep::compute_rep`, which:
 1. Runs the filter ([`fusion.rs`]) over the window from the state the detector recorded
    where the window begins, so the rotation, the offsets and the anchoring are the ones
    the device had, and the replay reproduces the summary rather than approximating it.
-2. Integrates it, **anchored at both ends by ZUPT**: velocity is forced to zero at
-   rest, so double-integration drift is bounded within one rep rather than
-   accumulating over a set. The result is displacement relative to the rep start, in
-   metres — which is what a bar-path plot needs. Absolute position is not available
-   from a MEMS IMU and is not attempted.
-3. Computes the summary stats: duration, ROM (peak-to-peak **vertical** travel), peak
-   and mean velocity, peak acceleration, and roll/pitch min/max in degrees.
+2. Integrates it, **anchored at the rep's turns and wherever the filter sees the bar
+   still**: velocity is put back to zero there, so double-integration drift is bounded
+   to the inside of one leg rather than running across the rep or in from the window
+   that preceded it. The result is displacement relative to the rep start, in metres —
+   which is what a bar-path plot needs. Absolute position is not available from a MEMS
+   IMU and is not attempted.
+3. Computes the summary stats over the rep's own span — the rest the window keeps
+   either side of it is plot and filter margin, not travel the rep made: duration, ROM
+   (peak-to-peak **vertical** travel), peak and mean velocity, peak acceleration, and
+   roll/pitch min/max in degrees.
+
+**A turn is where the velocity can be put back to zero for free, and only there.** A
+rep's legs meet at instants where the bar reversed, so its own speed is zero whatever
+the estimate says; everywhere else in a stroke the bar is moving and the estimate's
+error cannot be told from the motion. That makes the anchor as good as the instant is:
+the acceleration names it exactly (its extreme is where the bar stopped decelerating),
+a rest names it everywhere in the patch (the filter has already stopped the velocity
+there), and the vertical *speed* names it only to within `VEL_MIN` — so a turn the speed
+named is not anchored, because zeroing on it would trade a bounded drift for an error of
+the same size. The same holds of the rep's start: an onset is a start from rest, so the
+velocity is zeroed ahead of that sample's step, while a turn's step is the deceleration
+that led to it and the zero goes in after.
 
 **ROM is measured on Z, not on whichever axis moved furthest.** A barbell lift is the
 bar going up and down, and Z is the only axis that knows which way up is — it is pinned

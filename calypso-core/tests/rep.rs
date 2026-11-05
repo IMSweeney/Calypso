@@ -73,7 +73,7 @@ fn compute_rep_recovers_known_displacement() {
     let samples = known_motion(a, 1500, MARGIN_MS);
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, &FusionState::LEVEL, &mut buf);
+    let sum = compute_rep(&samples, &FusionState::LEVEL, None, &mut buf);
 
     assert_eq!(sum.computed_len, samples.len() as u32);
     assert_eq!(sum.duration_ms, 1500 + 2 * MARGIN_MS);
@@ -129,7 +129,7 @@ fn a_still_window_seeded_with_its_offset_integrates_nothing() {
 
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples[300..], &boot.state(), &mut buf);
+    let sum = compute_rep(&samples[300..], &boot.state(), None, &mut buf);
     assert!(sum.rom < 0.01, "rom {}", sum.rom);
     assert!(peak_to_peak_z(&buf) < 0.02);
     assert!(sum.peak_velocity < 0.02);
@@ -148,7 +148,7 @@ fn rom_is_the_vertical_travel_not_the_biggest_excursion() {
     }
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, &FusionState::LEVEL, &mut buf);
+    let sum = compute_rep(&samples, &FusionState::LEVEL, None, &mut buf);
 
     let range = |f: &dyn Fn(&TracePoint) -> f32| {
         let values: Vec<f32> = buf.as_slice().iter().map(f).collect();
@@ -172,7 +172,7 @@ fn trace_is_decimated_when_it_does_not_fit() {
     let samples = known_motion(0.4, 3000, MARGIN_MS);
     let mut storage = [TracePoint::ZERO; 64];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, &FusionState::LEVEL, &mut buf);
+    let sum = compute_rep(&samples, &FusionState::LEVEL, None, &mut buf);
     assert!(sum.computed_len <= 64);
     assert!(sum.computed_len >= 50, "computed_len {}", sum.computed_len);
     // Anchored at the last sample, so a stored rep always ends where the motion did.
@@ -195,7 +195,7 @@ fn roll_range_is_reported_in_summary() {
     }
     let mut storage = [TracePoint::ZERO; TRACE_CAP];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&samples, &FusionState::LEVEL, &mut buf);
+    let sum = compute_rep(&samples, &FusionState::LEVEL, None, &mut buf);
     assert!(
         sum.roll_min_deg.abs() < 1.0,
         "roll min {}",
@@ -217,7 +217,7 @@ fn roll_range_is_reported_in_summary() {
 fn empty_input_is_handled() {
     let mut storage = [TracePoint::ZERO; 64];
     let mut buf = TraceBuf::new(&mut storage);
-    let sum = compute_rep(&[], &FusionState::LEVEL, &mut buf);
+    let sum = compute_rep(&[], &FusionState::LEVEL, None, &mut buf);
     assert_eq!(sum.computed_len, 0);
     assert!(buf.is_empty());
     assert_eq!(sum.duration_ms, 0);

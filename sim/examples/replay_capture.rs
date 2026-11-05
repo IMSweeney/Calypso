@@ -166,7 +166,7 @@ fn replay(w: &Window, from: FusionState, spans: bool) -> Replay {
                 continue;
             }
             let mut trace = TraceBuf::new(&mut storage);
-            let summary = compute_rep(&window[..n], &state, &mut trace);
+            let summary = compute_rep(&window[..n], &state, Some(det.rep_turns()), &mut trace);
             if spans {
                 println!(
                     "  span {}..{}  rom {:.2} m  v_z {:+.2} m/s at the window's edge",

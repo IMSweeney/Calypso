@@ -205,6 +205,15 @@ impl Fusion {
         self.state
     }
 
+    /// Put the velocity back to zero, which is what a replay does at every turn it is told about.
+    ///
+    /// The velocity is an integral, so it is whatever the acceleration's error made of it, and the
+    /// bar's own speed at a turn is zero by the definition of a turn: it is reversing. Everywhere
+    /// else in a stroke the bar is moving and the error cannot be told from the motion.
+    pub fn zero_velocity(&mut self) {
+        self.state.velocity = [0.0; 3];
+    }
+
     /// How long the bar has held still, in seconds: the number readiness is counted toward.
     ///
     /// For the log, so a device that never becomes ready can say whether it is being held or whether the sensor is
