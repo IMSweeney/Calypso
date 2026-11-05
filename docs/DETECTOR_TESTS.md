@@ -111,7 +111,7 @@ not sometimes high — so the draw is hierarchical: part, then session, then sam
 | tier | drawn once per | what it carries |
 |---|---|---|
 | part | part | both sensors' offsets and gains, cross-axis coupling, nonlinearity, the mount's tilt |
-| session | session | white noise per sensor, the platform's vibration, both offsets' temperature ramp, the mount's roll through the motion, sampler stalls, the rest before the first rep |
+| session | session | white noise per sensor, the platform's vibration, both offsets' temperature ramp, the mount's roll through the motion, how long the motion runs without a still to correct the attitude in, sampler stalls, the rest before the first rep |
 | sample | sample | the white and platform terms, quantised at the part's range setting |
 
 **A chain, in the part's own order.** The model is not a bag of terms added to a generated
@@ -132,7 +132,7 @@ column is the point: each spec converted into the quantity this pipeline actuall
 | one 400 ms window of that | the expected range of forty normal samples is ~4.3σ | 7.7 mg, 9.7 at the maximum, against the 15.3 mg `STILL_SPREAD` allows: **the boot gate has 2.0× of margin at a typical part and 1.6× at a maximum one** |
 | the die's LSB at ±8 g | 3.9 mg in the interrupt thresholds, against the 1 mg of the output register | **nothing, measured.** Consecutive readings off a device move one LSB, so the ±8 g range does not coarsen what this pipeline sees and the quantiser costs the gate none of its margin. The 3.9 mg figure belongs to the die's threshold units, not to this output |
 | zero-g offset | ±80 mg typ, ±150 max | **absorbed.** Learning runs for the second `READY_S` asks for, leaving 1.8% of the offset: at the maximum that is 2.8 mg, an eighth of what `resting` tolerates. The sideways part tilts the boot attitude by 8.5°, and cancels exactly — the bias is learned against the attitude it tilted |
-| zero-rate offset | ±1 typ, ±3 max dps | learned to 0.05 dps in the boot second, and the boot gate admits 5 dps: 1.7× the part's maximum. What costs is a bias **step** — 1 dps for a second is 1° and 0.17 m/s² of gravity in the horizontal, 2.4× `VEL_MIN` — not its size |
+| zero-rate offset | ±1 typ, ±3 max dps | learned to 0.05 dps in the boot second, and the boot gate admits 5 dps: 1.7× the part's maximum. What costs is a bias **step** — 1 dps for a second is 1° and 0.17 m/s² of gravity in the horizontal, 2.4× `VEL_MIN` — not its size, and the same sum run for nine seconds uncorrected is 6.6° and 1.1 m/s², which is what a set with nothing still in it does |
 | gyroscope noise | 0.014 °/s/√Hz, 0.1 dps rms at 32 Hz | 0.01° of angle random walk a second, 0.002 m/s² of gravity leaked: **a null control, not an axis** |
 | temperature drift | 1–3.5 mg/K, 0.015–0.03 °/s/K | 5–35 mg over a session's warm-up, tracked while the reading is quiet — which a ramp does not disturb. A pin |
 | gain | ±1/±4 %, ±1/±3 % | ±4% of ROM is 7.6 mm at a bench's nominal: less than the overshoot the integration already reads, so it measures reported travel rather than reach. **A device was measured at 3.3% on one axis** — gravity read 967 mg on that axis and 1001 mg split across the other two — which is inside the ±4% maximum and invisible to the bias learning |
@@ -176,15 +176,18 @@ part.
 | offset ramp | to the datasheet's temperature coefficients over a session | whether tracking keeps up once the bar is warm |
 | rest before the first rep | 0.4 – 6 s | the device records from the moment it calls itself ready, and that count is of quiet seconds, not of correct ones |
 | sampler stall | 0–2 events, 10–200 ms | a rep is written to flash inside the sampling loop, and a gap past the integration step is travel that never happened |
-| mount roll | 0 – 180 °/s through the motion | the gyro's whole job, and nothing generates it today |
+| mount roll | 0 – 350 °/s through the motion, which a hand-held set measured 220–330 °/s of | the gyro's whole job, and nothing generates it today |
+| attitude, uncorrected | 0 – 30 s of motion without a 400 ms still, at 0.2 – 0.7 dps | `still` is the only thing that pulls the attitude back onto gravity, and a set is exactly the motion that never reaches it: 0.7 dps for nine seconds is 6.6° of tilt and 1.1 m/s² of leak, sixteen times `VEL_MIN` before a velocity has even been integrated |
 | sway, stroke shape, phase | 0–0.5 m/s² at 0.3–2 Hz; a cosine at 0.6–1.6 power; up- or down-first | motion the detector has never been asked about, including the lowering-first rep that pairs with an unrack |
 
-**What is measured — five things, not one.** Whether anything was stored is the product
-question, and the least diagnostic of the five: **how long until the filter called itself
+**What is measured — six things, not one.** Whether anything was stored is the product
+question, and the least diagnostic of the six: **how long until the filter called itself
 ready** (never, for a session that records nothing, which today looks exactly like a quiet
 one), the **count** against the reps asked for, the **order**, the **ROM** against the travel
-asked for, and whether the **unrack and re-rack** were stored. A cell is those five counted over
-seeds.
+asked for, whether the **unrack and re-rack** were stored, and the **horizontal share of the peak
+velocity** — because a bar in a rack puts nothing in the horizontal plane, so speed there is a
+tilt and not a motion, and it is the one number that tells a ROM read long from a tilt from a
+window that began with speed already in it. A cell is those six counted over seeds.
 
 **Seeds and the denominator.** A cell costs what a §1 cell costs, so the count is a choice rather
 than a budget: the slice grid at 64 seeds, the cells on and beside a boundary at 1024, the pins
@@ -200,7 +203,7 @@ survived, drawn as a density over each §1 slice, with the boundary stated in th
 so two runs compare and the percentages do not have to. The pins are the datasheet's typical and
 maximum parts against every nominal, which is where a regression is caught.
 
-**What it needs first — four numbers off a device.** The model's largest unknown cannot come from
+**What it needs first — the numbers off a device.** The model's largest unknown cannot come from
 a datasheet: how much of the rest spread is the platform, and what shape it has. One still
 capture answers that and three more questions: the histogram of distinct values gives the
 quantiser step, which is simultaneously a check that the range setting costs what the table above
@@ -214,6 +217,11 @@ has no vertical to replay in, and reads hundreds of metres of travel that never 
 A session with the bar on the rack for a few minutes, `device_log` over the partition image, and
 `sim` needs only a reader that prints the four numbers.
 
+**Motion is the other half of it**, and it has to be recorded the same way: a set is the one
+motion in which nothing ever asks the accelerometer to correct the attitude, so it is the only
+draw in which the largest term in this table can show itself at all. A still session alone would
+have gone on calling the gyroscope a null control.
+
 **What the first capture said.** Four stationary windows off one device, two orientations, nine
 seconds each. The part is quieter than its datasheet: the 400 ms range off the quiet axis sits at
 4–5 mg p50 and 11 mg at its worst, against the 7.7 mg a typical part would predict, and the whole
@@ -222,6 +230,28 @@ window's peak-to-peak is 7–12 mg. In the other orientation the same device rea
 unbroken quiet run is 1.1 s against the 1 s `READY_S` asks for. So the rest spread the old brief anchored on is
 reproduced exactly — as a *window's p50*, in one mounting, on one bar — and the part's own share of
 it is smaller than the datasheet allows. The gate's margin is the mount's, not the sensor's.
+
+**What the moving capture said.** The same device, five windows in one session
+(`captures/sets-2026-11-04.pblog`): three at rest in three mountings, then two hand-held sets.
+The still windows are what this section expected — 0.00–0.01 m of reported travel, no speed above
+0.03 m/s, and every sample under the gate, so the sensor's own noise is not in question. The two
+moving ones report 21.41 m and 28.68 m of travel for a stroke whose own accelerometer peaks at
+1.6 g on a 1.1 Hz rhythm — about 0.3 m of range.
+Replayed from the state each window was stored with, they are integrating a velocity the filter
+already carried: 8.1 m/s and 15.0 m/s at the window's first sample. Replayed from rest the same
+samples still reach 2.3 and 10.2 m/s, and the peak *horizontal* speed is 10.10 of that 10.20,
+which is the shape of a tilt and not of a bar. Over those nine seconds `still` is true for 17
+samples of 901: the accelerometer is only allowed to correct the attitude when the bar is still,
+and a set never is, so 0.7 dps of residual gyro error runs uncorrected into 6.6° and 1.1 m/s² of
+gravity in the horizontal. The set of four reps closes two legs and stores nothing; the other
+set's five legs store one, at 0.63 m of the 0.3 m it travelled.
+
+Two things follow, and they are why this section grew an axis and a measurement. The term that
+costs is not the bias — that is learned to 0.05 dps — but **how long it runs uncorrected**, which
+only the motion decides, so the still-free stretch is drawn in seconds and not in dps. And ROM
+alone cannot separate the two ways a window reads long: a tilt and a window that began with speed
+already in it both report travel the bar never did, and only the horizontal share of the velocity
+says which one a cell met.
 
 **What it will not answer.** It measures the detector against a model, so it is worth the fit and
 no more: a term left out of the draw is a term the report calls harmless. The archive that could
