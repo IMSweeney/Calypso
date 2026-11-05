@@ -14,7 +14,7 @@ use std::env;
 use std::fs;
 
 use calypso_core::flashlog::FlashLog;
-use calypso_core::fusion::roll_pitch_deg;
+use calypso_core::fusion::{magnitude, roll_pitch_deg};
 use calypso_core::pb::msg;
 use calypso_core::pb::summary_uuid;
 use calypso_core::rep::{TraceBuf, TracePoint};
@@ -200,12 +200,16 @@ fn main() {
                 } else {
                     utc(u64::from(epoch_s) * 1000 + u64::from(s.t_start_ms))
                 };
+                // The velocity the window is replayed from: `compute_rep` integrates it forward, so a
+                // window whose state already carries speed reads travel that the bar never did.
+                let v0 = magnitude([s.state.vx, s.state.vy, s.state.vz]);
                 println!(
-                    "  {id:<6} {:<8} {} {} ms  rom {:.2} m  {} pts{}  {stamp}",
+                    "  {id:<6} {:<8} {} {} ms  rom {:.2} m  v0 {:.1} m/s  {} pts{}  {stamp}",
                     "rep",
                     hex(&s.rep_uuid),
                     s.duration_ms,
                     s.rom,
+                    v0,
                     s.computed_len,
                     if s.raw_len == 0 {
                         String::new()
