@@ -87,6 +87,15 @@ record-mode = []
 [profile.dev.package.esp-storage]
 opt-level = 3
 
+# The one crate whose hot loop the sampler pays for directly: `compute_rep` replays
+# ~900 samples with `sin`/`cos` in it, and both profiles build it `-Os`. Speed for this
+# crate alone is how we tell "70 ms of work" from "70 ms of the optimiser".
+[profile.dev.package.calypso-core]
+opt-level = 3
+
+[profile.release.package.calypso-core]
+opt-level = 3
+
 [profile.dev]
 # Rust debug is too slow.
 # For debug builds always builds with some optimization
