@@ -268,6 +268,13 @@ no size threshold can reject.
 Same five knobs, different classes, and the same measurement inverted: how often is
 something stored that is not a rep. With the noise map on top it becomes a rate.
 
+**The wobble is where a turn rule shows up.** Reading the turn off the vertical acceleration
+reaches farther into this sweep than reading it off the speed: an oscillation of 0.08 m or more at
+0.7–2.5 Hz is stored for 38% of the class's cells, where the velocity rule stored 16% of them. A
+half-cycle that long and that wide is an out-and-back by every rule the detector has, so the
+change did not create the hole — it removed the arithmetic accident that was hiding part of it,
+and the class now measures the hole's real size.
+
 **What the sweep found.** The generator is `sim/src/false_positive.rs`, two slices over
 `Motion::Push` and `Motion::Wobble`.
 

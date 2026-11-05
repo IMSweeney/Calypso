@@ -83,6 +83,15 @@ Where Calypso is and what is left. Feature documentation lives in
   ([docs/GOTCHAS.md](docs/GOTCHAS.md)). It costs one thing, accepted knowingly: a return
   too gentle to reach `VEL_MIN` never turns, so it is not detected (below). See
   [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
+- **A turn is the acceleration's, not the integral's** — the bar reverses where its vertical
+  acceleration does, and that is a reading: it swings ten metres per second squared either
+  side of a turn however far the integrated velocity has drifted. Which way a leg went comes
+  from the turn that ended it, not from the travel, for the same reason. The vertical speed
+  keeps its say for a stroke too gentle to move the acceleration. Measured on the first
+  hand-held set this project has recorded: four reps out of four from a window that arrived
+  carrying 15 m/s of the filter's own drift, where the previous rule stored none — with the
+  detectability maps unchanged and 95.4% of 5,292 cells storing one rep, from 95.2%. See
+  [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
 
 ## Open
 
@@ -330,10 +339,18 @@ Where Calypso is and what is left. Feature documentation lives in
       [docs/GOTCHAS.md](docs/GOTCHAS.md).
 - [ ] **Tune the detector against real reps.** A rep now ends where the bar turns
       around rather than at a pause, which is what a set nobody pauses through needed
-      (`docs/GOTCHAS.md`), and a synthetic five-rep set with no rest in it is the test
-      for that. What is still fitted to generated motion is the rest: the on and rest
-      thresholds, their debounces, and the speed a turn must reach. Nothing here has
-      been checked against a set whose rep count is known on the day.
+      (`docs/GOTCHAS.md`). Two hand-held sets whose count is known — four reps each — are
+      pinned in `sim/tests/real_capture.rs` and both come back whole; what is still fitted
+      to generated motion is everything else: the on and rest thresholds, their debounces,
+      `TURN_ACCEL`/`TURN_BACK`, and `VEL_MIN`. One capture cannot tune them, and the maps
+      say what a change would cost.
+- [ ] **A wobble is a rep, where it was not one before.** The acceleration cue reaches
+      farther into the non-rep sweep than the velocity did: an oscillation of 0.08 m or more
+      at 0.7–2.5 Hz is stored, 168 of 441 cells against 69. A half-cycle that long and that
+      wide is an out-and-back by every rule the detector has, so telling it from a lift needs
+      something the detector does not have — a net-travel or a starts-and-ends-at-rest gate.
+      The cheap knob is `MIN_REP_MS`, and what it would cost is fast real reps. See
+      [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
 - [ ] **Trim the static heap region if the deepest stack figure ever asks for it.**
       The 64 KB `heap_allocator!` region is what the linker stack competes with
       most, and its surplus is stack the linker cannot use. Each byte trimmed moves

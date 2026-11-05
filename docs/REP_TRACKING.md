@@ -61,8 +61,10 @@ travel rather than momentum. **A rep is an out-and-back**: the bar goes more tha
 `MIN_ROM_M` one way, turns, and comes more than `MIN_ROM_M` back.
 
 ```
-turn: the bar's vertical speed falls below VEL_MIN for T_TURN_MS
-leg:  the signed vertical travel between two turns
+turn: the bar's vertical acceleration has turned around — a trough where it stopped rising, a
+      peak where it stopped falling — and has come back TURN_BACK from it; or, for a stroke
+      too gentle to move the acceleration, the vertical speed falls below VEL_MIN for T_TURN_MS
+leg:  the bar's travel between two turns, and which way it went
 rep:  two consecutive legs, opposite directions, each past MIN_ROM_M
 ```
 
@@ -72,6 +74,16 @@ attitude, which is what an accelerometer offset leaves behind — integrates to 
 `VEL_MIN` inside one stroke, and a turn read off the whole speed would then never happen.
 The bar turns along Z; where the estimate thinks it is heading in X and Y is not part of
 the rep.
+
+**And it is read on the acceleration, not on the velocity**, because the velocity is an
+integral and the attitude is only corrected while the bar is still. Over one stroke that
+residue is a few tenths of a metre per second and the vertical speed still crosses zero; over
+a set with no rest in it the same residue accumulates, and the speed passes the whole set
+without ever coming near zero. A reading cannot do that: the acceleration swings ten metres
+per second squared either side of a turn whatever the integral has drifted to, so its extreme
+is the turn, and the turn says which way the leg went. The velocity keeps its say for the one
+case the acceleration cannot see — a deliberate negative whose acceleration barely moves —
+which is what `VEL_MIN` is still for.
 
 The detector integrates each sample's acceleration (rotated into the world frame) into a
 velocity, which is zero wherever the bar stops — at the bottom and at the top of every
