@@ -186,11 +186,14 @@ fn trace_is_decimated_when_it_does_not_fit() {
 /// own answer: a rep during which the clip rolls reports that roll.
 #[test]
 fn roll_range_is_reported_in_summary() {
-    // 25° over four seconds, about the sensor's x axis.
+    // 25° over four seconds, about the sensor's x axis. Gravity turns in the sensor's frame as
+    // the sensor turns, which is what a real roll at rest looks like.
     let mut samples = Vec::new();
     let mut t = 0;
-    for _ in 0..400 {
-        samples.push(sample(t, [0.0, 0.0, 0.0], [6.25, 0.0, 0.0]));
+    for i in 0..400 {
+        let roll = 6.25f32.to_radians() * (i as f32 * DT_MS as f32 / 1000.0);
+        let body = [0.0, GRAVITY * libm::sinf(roll), GRAVITY * libm::cosf(roll)];
+        samples.push(Sample::from_f32(t, body, [6.25, 0.0, 0.0]));
         t += DT_MS;
     }
     let mut storage = [TracePoint::ZERO; TRACE_CAP];

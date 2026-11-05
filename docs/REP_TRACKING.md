@@ -44,7 +44,7 @@ Flash log (ring of 4 KB sectors) ──► BLE sync to the app
   axis` — how the device gets levelled). The chip has no gravity vector to read in a
   non-fusion mode, so that is the world's up axis carried into the sensor's frame by
   the filter's attitude: the same number the fusion used to report, from an estimate
-  corrected only while the bar is still.
+  pulled onto gravity continuously and hard at rest.
 
 **Nothing is recorded until the filter has settled.** It seeds gravity and both
 sensor offsets from a still window, so before that there is no vertical for a rep to
@@ -76,14 +76,14 @@ The bar turns along Z; where the estimate thinks it is heading in X and Y is not
 the rep.
 
 **And it is read on the acceleration, not on the velocity**, because the velocity is an
-integral and the attitude is only corrected while the bar is still. Over one stroke that
+integral and any attitude residue it carries accumulates over a set. Over one stroke that
 residue is a few tenths of a metre per second and the vertical speed still crosses zero; over
-a set with no rest in it the same residue accumulates, and the speed passes the whole set
-without ever coming near zero. A reading cannot do that: the acceleration swings ten metres
-per second squared either side of a turn whatever the integral has drifted to, so its extreme
-is the turn, and the turn says which way the leg went. The velocity keeps its say for the one
-case the acceleration cannot see — a deliberate negative whose acceleration barely moves —
-which is what `VEL_MIN` is still for.
+a set with no rest in it the speed can pass the whole set without ever coming near zero. A
+reading cannot do that: the acceleration swings ten metres per second squared either side of
+a turn whatever the integral has drifted to, so its extreme is the turn, and the turn says
+which way the leg went. The velocity keeps its say for the one case the acceleration cannot
+see — a deliberate negative whose acceleration barely moves — which is what `VEL_MIN` is still
+for.
 
 The detector integrates each sample's acceleration (rotated into the world frame) into a
 velocity, which is zero wherever the bar stops — at the bottom and at the top of every
@@ -111,11 +111,14 @@ is a *speed*: a return that never reaches 0.07 m/s at its peak never turns, so i
 closes a rep. For a bench that boundary sits between 0.12 and 0.14 m/s, and it is accepted
 for now (`ROADMAP.md`, and the test that pins it is the one to delete when it is fixed).
 
-**The velocity is integrated in the world frame.** The offset is learned, and the velocity
-anchored to zero, only while the bar is still: a bias learned from motion is the rep taken
-out of itself, and a velocity damped mid-rep is the same mistake one step later. The
-detector keeps its own integrator rather than taking the filter's, deliberately, so that a
-change in what the device stores can be attributed to the detection or to the filter.
+**The velocity is integrated in the world frame.** The accelerometer's offset is learned,
+and the velocity anchored to zero, only while the bar is still: an offset learned from
+motion is the rep taken out of itself, and a velocity damped mid-rep is the same mistake one
+step later. The gyroscope's offset is not in that category — a bar moving vertically does not
+move gravity in the sensor's frame — so it is learned during a set, which is what keeps the
+vertical from drifting between rests. The detector keeps its own integrator rather than
+taking the filter's, deliberately, so that a change in what the device stores can be
+attributed to the detection or to the filter.
 
 ## Computing a rep
 

@@ -23,8 +23,8 @@ off by however many degrees `a/g` is worth. In one capture pitch swings 47–82�
 rep and roll crosses ±180°, and five of fourteen reps had less vertical travel than sideways —
 so ROM is measured on Z alone, because Z is the only axis that can be wrong about a
 real quantity rather than accidentally right about an imaginary one. With a gyro, tilt comes
-from rotation, and the accelerometer only has to be trusted while the bar is still — which is
-when it is trustworthy.
+from rotation, and the accelerometer only has to supply gravity's direction — which a vertical
+stroke does not tilt, so trusting it mid-stroke is safe.
 
 **The chip's calibration is not applied in raw mode, and it was never worth much.** See below.
 
@@ -79,11 +79,15 @@ Three statements from the datasheet, and one from the kernel driver:
 So in ACCGYRO there is no autocalibration, `CALIB_STAT` cannot advance, and the offsets are not
 applied for us. The offset registers still exist and a saved profile can still be written and
 subtracted by firmware — but a full calibration left a residue big enough to keep the detector
-from bootstrapping its own bias, so the offsets are not carried over. We estimate them at rest
-instead, which costs nothing and is measured in the conditions the bar is actually in.
+from bootstrapping its own bias, so the offsets are not carried over. We estimate them from the
+sensor's own stillness instead, which costs nothing and is measured in the conditions the bar is
+actually in.
 
 What replaces it is better than a routine: at rest the accelerometer reads 1 g on the up axis,
-so gravity's direction and both biases arrive from a still window with no user participation.
+so gravity's direction and the accelerometer's offset arrive from a still window with no user
+participation, and the gyroscope's bias arrives from the direction of gravity, which stays still
+whether the bar does or not.
+
 The class of bug that ate a session — a gravity vector the fusion failed to subtract — cannot
 be represented, because the subtraction is ours and the direction is known.
 
@@ -103,35 +107,44 @@ Fusion::update(&Sample) -> Filtered {
 State: a quaternion, an accelerometer offset, a gyroscope offset, a velocity, and whether the
 bar was at rest when the state was taken.
 
-- **Attitude** integrates the gyro every sample. While the bar is at rest it is pulled toward the
-  direction the accelerometer measures, with a time constant around a second: the gyro carries
-  tilt through a stroke, and the accelerometer is only believed when it cannot be wrong. At a
-  boot there is no attitude worth protecting, so it is **set** rather than filtered — one exact
-  rotation onto the measured gravity — because a filter leaves degrees of error and a degree of
-  tilt is a sixth of a metre per second squared of gravity left in the horizontal.
-- **Velocity** integrates the linear acceleration, and is set to zero whenever the bar is at rest
-  (ZUPT). That is what bounds drift to within one rep, and a lift guarantees the conditions at
-  both ends of every stroke.
-- **Offsets** are learned from a window that has stopped changing, with both time constants set
-  by whether the filter has finished booting.
+- **Attitude** integrates the gyro every sample, and is pulled toward the direction the
+  accelerometer measures: hard while the bar is at rest, gently while it moves. A vertical
+  stroke's acceleration is along gravity and does not tilt the measured direction, so the
+  accelerometer is still a gravity reference mid-stroke; a bench's bar path and a swing are the
+  only error, and a slow pull averages them. Correcting only while still lets a degree per
+  second of gyro bias walk the vertical several degrees across a set, which is metres per second
+  of horizontal velocity that the bar never had. At a boot there is no attitude worth
+  protecting, so it is **set** rather than filtered — one exact rotation onto the measured
+  gravity — because a filter leaves degrees of error and a degree of tilt is a sixth of a metre
+  per second squared of gravity left in the horizontal.
+- **Velocity** integrates the linear acceleration, and is pulled back to zero whenever the bar is
+  at rest (ZUPT). That is what bounds drift to within one rep, and a lift guarantees the
+  conditions at both ends of every stroke.
+- **Offsets** are learned from stillness, but stillness is a different question for each. The
+  accelerometer's is a window where the reading has stopped changing; the gyroscope's is a
+  window where gravity's direction in the sensor's frame has not moved, since a bias leaves it
+  there and a real rotation does not. A bar moving up and down is still for the gyro's purpose
+  even when it is not for the accelerometer's, so a set with no rest in it still learns its
+  bias.
 
-**Three predicates, not one**, and the difference between them is the design. Landing on one
-question is what a first attempt at this does, and it fails in both directions at once —
-recorded here because the map is what found it.
+**Four predicates, and the difference between them is the design.** Landing on one question is
+what a first attempt at this does, and it fails in both directions at once — recorded here
+because the map is what found it.
 
 | predicate | what it asks | what it is for |
 |---|---|---|
-| quiet | the reading has not changed across 400 ms, and nothing is turning | learning, while the offset is unknown |
+| quiet | the reading has not changed across 400 ms, and nothing is turning | the accelerometer's offset, and a boot |
+| direction quiet | gravity's direction in the sensor's frame has not moved across 400 ms | the gyroscope's offset |
 | resting | the reading, with the offset taken out, is 1 g, and nothing is turning | the bar is not accelerating |
 | still | resting for 400 ms | the bar is at rest |
 
-Asking "is it 1 g" to decide whether the offset may be learned is circular — an unknown offset
-makes a still sensor read something else — so the learning uses the spread instead. Asking
-"has it stopped changing" to decide whether the bar is at rest is wrong the other way: a slow
-stroke spends a third of a second crossing zero acceleration at its fastest point, where it
-reads 1 g and barely moves, and calling that a rest caps the stroke in half. Only the wait tells
-them apart, and everything downstream — the trace's anchoring, a leg's close, the detector's
-idea of a hold — hangs off the third.
+Asking "is it 1 g" to decide whether the accelerometer's offset may be learned is circular — an
+unknown offset makes a still sensor read something else — so the learning uses the spread
+instead. Asking "has it stopped changing" to decide whether the bar is at rest is wrong the
+other way: a slow stroke spends a third of a second crossing zero acceleration at its fastest
+point, where it reads 1 g and barely moves, and calling that a rest caps the stroke in half.
+Only the wait tells them apart, and everything downstream — the trace's anchoring, a leg's
+close, the detector's idea of a hold — hangs off `still`.
 
 Nothing here consults the chip's calibration or a config register. It also deletes the
 body-frame/world-frame split in `Detector`: bias was learned in the world frame and subtracted
@@ -290,7 +303,7 @@ Verified by: a release build, fake reps through the whole path, then a real sess
 - **The level verdict moved onto the filter.** A non-fusion mode has no gravity vector to
   read (`GRV_DATA` is a fusion output), so `Sensor is level on the X axis` is now the world's
   up axis carried into the sensor's frame by the estimated attitude. Same number, same
-  threshold, from an estimate corrected only while the bar is still.
+  threshold, from an estimate pulled onto gravity continuously and hard at rest.
 - **`CALIBRATION.md` stops being a document**, and its one surviving fact — nothing is
   recorded until the filter has settled, which takes a second of stillness — is in
   [`REP_TRACKING.md`](REP_TRACKING.md) where the sampling path is described.

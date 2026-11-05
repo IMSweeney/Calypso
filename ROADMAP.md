@@ -118,16 +118,18 @@ Where Calypso is and what is left. Feature documentation lives in
       sampler's path is the page writes (~50 ms for 23 records) and `compute_rep` (38 ms, fifteen
       times what the simulator's per-update timing scaled to). Both leave it by writing one record a
       tick and by moving the replay to the second core.
-- [ ] **Whether the offsets should re-converge faster after the device is moved.** A bias step of
-      about 330 mg — what moving a sensor with a three-percent scale error looks like — settles
-      through `TRACK_TAU_S` in roughly ten seconds, and a window recorded in that stretch carries
-      centimetres of travel on a still bar. Measured against the maps: shortening the time
-      constant fourfold costs the slow end of every long-travel class (a deadlift's one-rep run
-      starts at 0.48 m/s instead of 0.29), and learning at `BOOT_TAU_S` whenever the bar is `still`
-      improves typical ROM but turns the slowest cells from 75% long into 50% short, because a very
-      gradual stroke can satisfy `resting` and be eaten as an offset. What would separate them is a
-      gate that also asks whether the *velocity* has stayed near zero, which the filter has and
-      nothing consults.
+- [ ] **Whether the accelerometer's offset should re-converge faster after the device is
+      moved.** A bias step of about 330 mg — what moving a sensor with a three-percent scale error
+      looks like — settles through `TRACK_TAU_S` in roughly ten seconds, and a window recorded in
+      that stretch carries centimetres of travel on a still bar. Measured against the maps:
+      shortening the time constant fourfold costs the slow end of every long-travel class (a
+      deadlift's one-rep run starts at 0.48 m/s instead of 0.29), and learning at `BOOT_TAU_S`
+      whenever the bar is `still` improves typical ROM but turns the slowest cells from 75% long into
+      50% short, because a very gradual stroke can satisfy `resting` and be eaten as an offset. What
+      would separate them is a gate that also asks whether the *velocity* has stayed near zero,
+      which the filter has and nothing consults. The gyroscope's offset is no longer in this
+      category: it is learned whenever gravity's direction is not moving in the sensor's frame, so
+      a set teaches it between reps (`docs/GOTCHAS.md`).
 - [ ] **An anchor at an onset assumes the label is honest, and on a slow stroke it is not.** The
       replay zeroes the velocity where a leg opened from rest, which is what keeps a window's
       carried drift out of its first rep. But `still` is the filter's judgement, and on a stroke

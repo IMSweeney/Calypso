@@ -34,8 +34,8 @@ fn impaired(samples: &[Sample], i: Impairments) -> Vec<Sample> {
 /// A fusion in IMU mode got this wrong in the direction that costs the most: roll and pitch came
 /// partly from the accelerometer, so a stroke's own acceleration pulled the estimate off, and five
 /// of fourteen captured reps had less vertical travel than sideways. Here the gyro carries the tilt
-/// and the accelerometer is believed only while the bar is still, so a mount at 90° costs nothing:
-/// it is one constant attitude the filter learns at boot and integrates from.
+/// and the accelerometer only supplies gravity's direction, so a mount at 90° costs nothing: it is
+/// one constant attitude the filter learns at boot and integrates from.
 #[test]
 fn a_mount_tilt_does_not_change_the_travel() {
     let travel = Rep::bench().travel;
@@ -137,8 +137,8 @@ fn an_accelerometer_bias_is_the_sensor_zero_not_motion() {
 ///
 /// The sensor's offsets move with temperature, so a value learned at boot is wrong an hour later.
 /// What makes this testable is that nothing announces the change: the reading simply sits somewhere
-/// else, which is exactly what a bar being held at an angle looks like too — so the filter learns it
-/// only while the bar is still, and only from stillness.
+/// else, which is exactly what a bar being held at an angle looks like too — so the filter learns
+/// the accelerometer's offset only while the bar is still, and only from stillness.
 #[test]
 fn an_offset_that_arrives_after_boot_is_absorbed() {
     for settle_ms in [3000u32, 5000, 10000] {

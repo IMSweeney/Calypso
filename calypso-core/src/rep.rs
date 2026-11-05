@@ -184,9 +184,9 @@ struct Leg {
 /// like any other: nothing here can tell a bar being lifted from a hand moving one on the rack.
 ///
 /// **Everything here is in the world frame**, because the filter supplies one worth the name: tilt
-/// comes from the gyro, and the accelerometer is believed only while the bar is still. The
-/// detector still integrates the acceleration into its own velocity rather than taking the
-/// filter's, so that the two can be compared on a real session before either is trusted.
+/// comes from the gyro and is pulled onto gravity continuously. The detector still integrates the
+/// acceleration into its own velocity rather than taking the filter's, so that the two can be
+/// compared on a real session before either is trusted.
 ///
 /// [`Detector::rep_state`] is the filter's state where the stored window begins, which is what
 /// [`compute_rep`] replays from.

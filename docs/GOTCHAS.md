@@ -308,9 +308,30 @@ without touching the bus.
 
 **Fix.** The filter estimates the attitude, and the level verdict carries the world's up
 axis back into the sensor's frame with it — the same number the fusion reported, from an
-estimate corrected only while the bar is still. The app's `ImuState` quaternion is the
-filter's for the same reason. If an orientation is ever read off a chip again, ask first
-whether it is a measurement or an inference.
+estimate of the filter's own. The app's `ImuState` quaternion is the filter's for the same
+reason. If an orientation is ever read off a chip again, ask first whether it is a
+measurement or an inference.
+
+### A gyro bias learned only at rest is not learned during a set
+
+**Symptom.** A hand-held set recorded windows that opened carrying 8 and 15 m/s of velocity,
+and replayed from rest still reached 10 m/s horizontally on a bar that never went sideways.
+The attitude looked plausible, and every still window in the same capture read nothing.
+
+**Cause.** Both offsets were learned from one predicate: the accelerometer's reading had
+stopped changing. That is the right question for the accelerometer's offset and the wrong one
+for the gyro's — “at 1 g” is not true of a bar moving up and down — so a set with no 400 ms
+rest in it never learned the gyro's bias at all. A degree per second then tilted the vertical
+by six degrees across thirty seconds, which is a metre per second squared of gravity in the
+horizontal and metres per second of velocity a window later. Correcting the attitude only
+while still made it worse in the same direction: the one signal that could have pulled it back
+was switched off exactly while the set was moving.
+
+**Fix.** Learn the gyro's bias from the accelerometer's *direction*, which is gravity whether
+the bar is moving or not: a bias turns the attitude while gravity stays put in the sensor's
+frame, and a real rotation moves it through. A set now teaches the gyro between reps without
+ever being called at rest, and the attitude is pulled onto gravity gently while moving as well
+as hard at rest. The regression is `a_gyro_bias_that_arrives_during_a_set_does_not_walk_the_ground`.
 
 ### The IMU driver configures the accelerometer and not the gyroscope
 

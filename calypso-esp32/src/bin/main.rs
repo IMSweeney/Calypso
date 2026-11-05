@@ -2503,7 +2503,7 @@ impl defmt::Format for Stack {
 ///
 /// A non-fusion mode has no gravity vector to read, so this is the world's up axis carried back into the sensor's frame
 /// by the attitude the filter estimated — the same quantity the fusion used to report, from an estimate that is
-/// corrected only while the bar is still. Logged by the caller, and only when the verdict changes: this used to print
+/// pulled onto gravity continuously and hard at rest. Logged by the caller, and only when the verdict changes: this used to print
 /// `Sensor is not level` every second and bury everything else.
 fn level_sense(attitude: [f32; 4]) -> (f32, bool) {
     let up = rotate_by_quat(conjugate(attitude), [0.0, 0.0, 1.0]);

@@ -132,9 +132,9 @@ column is the point: each spec converted into the quantity this pipeline actuall
 | one 400 ms window of that | the expected range of forty normal samples is ~4.3σ | 7.7 mg, 9.7 at the maximum, against the 15.3 mg `STILL_SPREAD` allows: **the boot gate has 2.0× of margin at a typical part and 1.6× at a maximum one** |
 | the die's LSB at ±8 g | 3.9 mg in the interrupt thresholds, against the 1 mg of the output register | **nothing, measured.** Consecutive readings off a device move one LSB, so the ±8 g range does not coarsen what this pipeline sees and the quantiser costs the gate none of its margin. The 3.9 mg figure belongs to the die's threshold units, not to this output |
 | zero-g offset | ±80 mg typ, ±150 max | **absorbed.** Learning runs for the second `READY_S` asks for, leaving 1.8% of the offset: at the maximum that is 2.8 mg, an eighth of what `resting` tolerates. The sideways part tilts the boot attitude by 8.5°, and cancels exactly — the bias is learned against the attitude it tilted |
-| zero-rate offset | ±1 typ, ±3 max dps | learned to 0.05 dps in the boot second, and the boot gate admits 5 dps: 1.7× the part's maximum. What costs is a bias **step** — 1 dps for a second is 1° and 0.17 m/s² of gravity in the horizontal, 2.4× `VEL_MIN` — not its size, and the same sum run for nine seconds uncorrected is 6.6° and 1.1 m/s², which is what a set with nothing still in it does |
+| zero-rate offset | ±1 typ, ±3 max dps | learned to 0.05 dps in the boot second, and the boot gate admits 5 dps: 1.7× the part's maximum. What costs is a bias **step** — 1 dps for a second is 1° and 0.17 m/s² of gravity in the horizontal, 2.4× `VEL_MIN` — not its size. It is learned during a set as well, so the cost is the second before that: the nine-second uncorrected figure, 6.6° and 1.1 m/s², is the measurement from before the direction gate existed |
 | gyroscope noise | 0.014 °/s/√Hz, 0.1 dps rms at 32 Hz | 0.01° of angle random walk a second, 0.002 m/s² of gravity leaked: **a null control, not an axis** |
-| temperature drift | 1–3.5 mg/K, 0.015–0.03 °/s/K | 5–35 mg over a session's warm-up, tracked while the reading is quiet — which a ramp does not disturb. A pin |
+| temperature drift | 1–3.5 mg/K, 0.015–0.03 °/s/K | 5–35 mg over a session's warm-up, tracked whenever gravity's direction in the sensor's frame is not moving — which a ramp does not disturb. A pin |
 | gain | ±1/±4 %, ±1/±3 % | ±4% of ROM is 7.6 mm at a bench's nominal: less than the overshoot the integration already reads, so it measures reported travel rather than reach. **A device was measured at 3.3% on one axis** — gravity read 967 mg on that axis and 1001 mg split across the other two — which is inside the ±4% maximum and invisible to the bias learning |
 | cross-axis, nonlinearity | 1–2 %, 0.5–2 %FS | a metre per second squared of sway leaks 0.02 into the vertical; nonlinearity is bracketed at its spec points rather than swept |
 | data-rate tolerance | ±1 % | the chip's rate against the loop's 100 Hz: a sample repeated rather than missed, and a stall duplicates a whole run |
@@ -177,7 +177,7 @@ part.
 | rest before the first rep | 0.4 – 6 s | the device records from the moment it calls itself ready, and that count is of quiet seconds, not of correct ones |
 | sampler stall | 0–2 events, 10–200 ms | a rep is written to flash inside the sampling loop, and a gap past the integration step is travel that never happened |
 | mount roll | 0 – 350 °/s through the motion, which a hand-held set measured 220–330 °/s of | the gyro's whole job, and nothing generates it today |
-| attitude, uncorrected | 0 – 30 s of motion without a 400 ms still, at 0.2 – 0.7 dps | `still` is the only thing that pulls the attitude back onto gravity, and a set is exactly the motion that never reaches it: 0.7 dps for nine seconds is 6.6° of tilt and 1.1 m/s² of leak, sixteen times `VEL_MIN` before a velocity has even been integrated |
+| attitude, uncorrected | 0 – 30 s of motion without a 400 ms still, at 0.2 – 0.7 dps | the pull onto gravity is slow while the bar moves, so a bias learned slowly still runs uncorrected for the length of a set: 0.7 dps for nine seconds is 6.6° of tilt and 1.1 m/s² of leak, sixteen times `VEL_MIN` before a velocity has even been integrated |
 | sway, stroke shape, phase | 0–0.5 m/s² at 0.3–2 Hz; a cosine at 0.6–1.6 power; up- or down-first | motion the detector has never been asked about, including the lowering-first rep that pairs with an unrack |
 
 **What is measured — six things, not one.** Whether anything was stored is the product
@@ -252,6 +252,12 @@ only the motion decides, so the still-free stretch is drawn in seconds and not i
 alone cannot separate the two ways a window reads long: a tilt and a window that began with speed
 already in it both report travel the bar never did, and only the horizontal share of the velocity
 says which one a cell met.
+
+**Since then** the filter learns the gyro's bias from the direction of gravity rather than from a
+rest, and pulls the attitude onto gravity while the bar moves as well as at rest. The same two
+windows, replayed from rest, peak at 0.8 and 5.5 m/s horizontally instead of 2.3 and 10.2, with
+the same four reps. The figures above are the measurement that motivated it; the axis remains,
+because a bias learned slowly still runs uncorrected for as long as it is wrong.
 
 **What anchoring the replay at the turns changed.** The travel these two windows report was traced
 to two additive terms: the velocity the window arrived carrying (`rom ≈ v_z at the window's edge ×

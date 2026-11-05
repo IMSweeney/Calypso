@@ -121,6 +121,76 @@ fn a_gyro_offset_does_not_rotate_gravity() {
     }
 }
 
+/// A gyro bias that arrives after boot is learned during the set, not only at its rests.
+///
+/// A bar moving up and down has no angular rate and leaves gravity pointing the same way in the
+/// sensor's frame, so a set teaches the gyro even between reps. Without that, a degree per second
+/// left in the attitude walks the vertical over a set, and the horizontal velocity that leaks from
+/// it is metres per second the bar never had.
+#[test]
+fn a_gyro_bias_that_arrives_during_a_set_does_not_walk_the_ground() {
+    let mut fusion = Fusion::new();
+    let mut t = 0u32;
+    let mut max_h = 0.0f32;
+    let mut max_tilt = 0.0f32;
+
+    // 1.6 s of lead-in rest, then twelve vertical reps with the pauses a bench has.
+    for _ in 0..160 {
+        feed(&mut fusion, t, 0.0, 0.0, &mut max_h, &mut max_tilt);
+        t += DT_MS;
+    }
+    for _ in 0..12 {
+        let bias = if t < 5000 { 0.0 } else { 1.0 };
+        let travel = 0.19f32;
+        let speed = 0.55f32;
+        let duration = core::f32::consts::PI * travel / (2.0 * speed);
+        let steps = (duration / (DT_MS as f32 / 1000.0)).round() as u32;
+        let peak = 2.0 * speed * speed / travel;
+        for dir in [1.0f32, -1.0] {
+            for i in 0..=steps {
+                let accel =
+                    dir * peak * libm::cosf(core::f32::consts::PI * i as f32 / steps as f32);
+                feed(&mut fusion, t, accel, bias, &mut max_h, &mut max_tilt);
+                t += DT_MS;
+            }
+            let pause = if dir > 0.0 { 150 } else { 300 };
+            for _ in 0..(pause / DT_MS) {
+                let bias = if t < 5000 { 0.0 } else { 1.0 };
+                feed(&mut fusion, t, 0.0, bias, &mut max_h, &mut max_tilt);
+                t += DT_MS;
+            }
+        }
+    }
+
+    assert!(
+        max_h < 1.0,
+        "a vertical set with a 1 dps bias carried {max_h:.2} m/s sideways"
+    );
+    assert!(max_tilt < 2.0, "the ground tilted {max_tilt:.1}°");
+    let learned = fusion.state().gyro_bias[0].to_degrees();
+    assert!(
+        (learned - 1.0).abs() < 0.2,
+        "the bias was learned as {learned:.2} dps, not 1"
+    );
+}
+
+/// Feed one vertical sample and record the sideways speed and the tilt it left.
+fn feed(
+    fusion: &mut Fusion,
+    t_ms: u32,
+    accel: f32,
+    gyro_dps: f32,
+    max_h: &mut f32,
+    max_tilt: &mut f32,
+) {
+    let s = Sample::from_f32(t_ms, [0.0, 0.0, GRAVITY + accel], [gyro_dps, 0.0, 0.0]);
+    let f = fusion.update(&s);
+    let v = f.state.velocity;
+    *max_h = max_h.max((v[0] * v[0] + v[1] * v[1]).sqrt());
+    let (roll, pitch) = roll_pitch_deg(f.state.attitude);
+    *max_tilt = max_tilt.max((roll * roll + pitch * pitch).sqrt());
+}
+
 /// A boot in the middle of a rep is not ready, and becomes ready at the first rest — never before.
 ///
 /// There is nothing to integrate before the filter has seen gravity, so a bar that starts moving at
