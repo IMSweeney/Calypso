@@ -131,10 +131,11 @@ const _: () = assert!(!(FAKE_REPS && RECORD_MODE));
 /// How much of the ring a recorded window holds, and how long after one closes the next opens.
 ///
 /// Nine seconds rather than ten: the window is copied into `REP_WINDOW_SAMPLES`, and ten seconds at 100 Hz is one
-/// sample more than that buffer holds. The period leaves the gap the append needs — a flash write stops the sampler
-/// for its duration, so it belongs between windows rather than inside one.
+/// sample more than that buffer holds. The period is the window's own length, so windows tile and a set runs across as
+/// many as it needs: a set takes longer than nine seconds, and the alternative — one window in three — captures the
+/// middle of it. The append is what sits between two windows, which is where a flash write has to be.
 const RECORD_WINDOW_MS: u32 = 9_000;
-const RECORD_PERIOD_MS: u32 = 30_000;
+const RECORD_PERIOD_MS: u32 = RECORD_WINDOW_MS;
 
 /// What a stored rep's summary says about the sensor that recorded it.
 ///
