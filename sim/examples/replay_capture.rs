@@ -10,16 +10,17 @@
 //! Nothing here changes what the device stores; it is the instrument that says whether a stored
 //! window is real motion or an estimate's error.
 //!
-//! Usage: `cargo run --release --example replay_capture -- <dump.pblog> [window-prefix] [--series]`,
+//! Usage: `cargo run --release --example replay_capture -- <dump.pblog> [window-prefix] [--series|--spans]`,
 //! where the dump came from `cargo run --example device_log -- <image.bin> --dump <dump.pblog>`.
 
 use std::env;
 use std::fs;
 
-use calypso_core::fusion::{magnitude, Fusion, FusionState};
+use calypso_core::fusion::{magnitude, Fusion, FusionState, GRAVITY};
 use calypso_core::rep::{compute_rep, Detector, RepSpan, TraceBuf, TracePoint, MARGIN_MS};
 use calypso_core::sampler::{Sample, SampleRing};
 use calypso_sim::fixtures::{capture_windows, Window};
+use libm::atan2f;
 
 /// Long enough for any window the device stores, with the margins the ring has to hold.
 const RING: usize = 2048;
@@ -42,10 +43,11 @@ struct Replay {
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let Some(path) = args.first() else {
-        eprintln!("usage: replay_capture <dump.pblog> [window-prefix] [--series]");
+        eprintln!("usage: replay_capture <dump.pblog> [window-prefix] [--series|--spans]");
         std::process::exit(2);
     };
     let series = args.iter().any(|a| a == "--series");
+    let spans = args.iter().any(|a| a == "--spans");
     let only = args
         .iter()
         .skip(1)
@@ -79,10 +81,10 @@ fn main() {
             w.rom,
             v0
         );
-        report("as stored  ", replay(w, w.state));
+        report("as stored  ", replay(w, w.state, spans));
         let mut from_rest = w.state;
         from_rest.velocity = [0.0; 3];
-        report("from rest  ", replay(w, from_rest));
+        report("from rest  ", replay(w, from_rest, spans));
     }
 }
 
@@ -92,17 +94,24 @@ fn main() {
 /// gates on, so whether a turnaround shows up in them is a question with an answer.
 fn print_series(w: &Window) {
     let mut fusion = Fusion::from_state(w.state);
-    println!("{}\tt_ms\ta_z\tv_z\tv_h\tstill", w.uuid);
+    println!("{}\tt_ms\ta_z\tv_z\tv_h\ta_x\ta_y\ttilt\tstill", w.uuid);
     for s in &w.samples {
         let f = fusion.update(s);
         let v = f.state.velocity;
+        // Where the world frame thinks gravity is, in degrees off vertical: zero if the attitude is
+        // right, and at a moment the bar is not accelerating, the attitude's own error.
+        let a = f.linear_accel;
+        let tilt = atan2f((a[0] * a[0] + a[1] * a[1]).sqrt(), a[2] + GRAVITY).to_degrees();
         println!(
-            "{}\t{}\t{:+.2}\t{:+.2}\t{:.2}\t{}",
+            "{}\t{}\t{:+.2}\t{:+.2}\t{:.2}\t{:+.2}\t{:+.2}\t{:+.1}\t{}",
             w.uuid,
             s.t_ms - w.samples[0].t_ms,
             f.linear_accel[2],
             v[2],
             (v[0] * v[0] + v[1] * v[1]).sqrt(),
+            a[0],
+            a[1],
+            tilt,
             if f.still { 1 } else { 0 }
         );
     }
@@ -122,7 +131,11 @@ fn report(label: &str, r: Replay) {
 }
 
 /// Feed one window through a filter seeded at `from`, and close the reps the detector finds.
-fn replay(w: &Window, from: FusionState) -> Replay {
+///
+/// `spans` prints where each rep's travel came from: the trace's vertical range, the velocity the
+/// replay started on, and the trace itself, coarse. A `rom` that grows between two ends sitting at
+/// zero metres was paid for inside the window; one that starts high was the state's.
+fn replay(w: &Window, from: FusionState, spans: bool) -> Replay {
     let mut ring_buf = vec![Sample::ZERO; RING];
     let mut ring = SampleRing::new(&mut ring_buf);
     let mut fusion = Fusion::from_state(from);
@@ -154,6 +167,19 @@ fn replay(w: &Window, from: FusionState) -> Replay {
             }
             let mut trace = TraceBuf::new(&mut storage);
             let summary = compute_rep(&window[..n], &state, &mut trace);
+            if spans {
+                println!(
+                    "  span {}..{}  rom {:.2} m  v_z {:+.2} m/s at the window's edge",
+                    span.start_ms, span.end_ms, summary.rom, state.velocity[2]
+                );
+                let every = trace.len().div_ceil(16).max(1);
+                let z: Vec<String> = trace
+                    .iter()
+                    .step_by(every)
+                    .map(|p| format!("{:+.2}", p.pos[2]))
+                    .collect();
+                println!("    z {}", z.join(" "));
+            }
             out.spans.push((span, summary.rom));
         }
     }
