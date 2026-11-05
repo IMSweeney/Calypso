@@ -10,31 +10,21 @@
 //! Nothing here changes what the device stores; it is the instrument that says whether a stored
 //! window is real motion or an estimate's error.
 //!
-//! Usage: `cargo run --release --example replay_capture -- <dump.pblog> [window-prefix]`, where the
-//! dump came from `cargo run --example device_log -- <image.bin> --dump <dump.pblog>`.
+//! Usage: `cargo run --release --example replay_capture -- <dump.pblog> [window-prefix] [--series]`,
+//! where the dump came from `cargo run --example device_log -- <image.bin> --dump <dump.pblog>`.
 
 use std::env;
 use std::fs;
 
 use calypso_core::fusion::{magnitude, Fusion, FusionState};
-use calypso_core::pb::{self, decode_record, Record};
 use calypso_core::rep::{compute_rep, Detector, RepSpan, TraceBuf, TracePoint, MARGIN_MS};
 use calypso_core::sampler::{Sample, SampleRing};
-use calypso_sim::fixtures::read_dump;
+use calypso_sim::fixtures::{capture_windows, Window};
 
 /// Long enough for any window the device stores, with the margins the ring has to hold.
 const RING: usize = 2048;
 const WINDOW_SAMPLES: usize = 1200;
 const TRACE_POINTS: usize = 256;
-
-/// One stored window, as the log holds it.
-struct Window {
-    uuid: String,
-    t_start_ms: u32,
-    rom: f32,
-    state: FusionState,
-    samples: Vec<Sample>,
-}
 
 /// What one replay produced.
 struct Replay {
@@ -52,43 +42,19 @@ struct Replay {
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let Some(path) = args.first() else {
-        eprintln!("usage: replay_capture <dump.pblog> [window-prefix]");
+        eprintln!("usage: replay_capture <dump.pblog> [window-prefix] [--series]");
         std::process::exit(2);
     };
-    let only = args.get(1).map(|p| p.to_lowercase());
+    let series = args.iter().any(|a| a == "--series");
+    let only = args
+        .iter()
+        .skip(1)
+        .find(|a| !a.starts_with("--"))
+        .map(|p| p.to_lowercase());
     let bytes = fs::read(path).expect("the dump reads");
-    let (records, truncated) = read_dump(&bytes);
+    let (windows, truncated) = capture_windows(&bytes);
     if truncated {
         eprintln!("{path}: torn at the end, the last record is dropped");
-    }
-
-    let mut windows: Vec<Window> = Vec::new();
-    for record in &records {
-        match decode_record(record).expect("a record in the dump decodes") {
-            Record::Summary(s) => {
-                if s.raw_len == 0 {
-                    continue;
-                }
-                windows.push(Window {
-                    uuid: hex(&s.rep_uuid),
-                    t_start_ms: s.t_start_ms,
-                    rom: s.rom,
-                    state: pb::state_from_message(&s.state),
-                    samples: Vec::with_capacity(s.raw_len as usize),
-                });
-            }
-            Record::Raw(r) => {
-                let Some(w) = windows.last_mut() else {
-                    panic!("a raw chunk before any summary")
-                };
-                for p in &r.samples {
-                    let mut s = pb::raw_point_from_message(p);
-                    s.t_ms = s.t_ms.saturating_add(w.t_start_ms);
-                    w.samples.push(s);
-                }
-            }
-            _ => {}
-        }
     }
 
     println!("{path}: {} windows with a raw trace", windows.len());
@@ -98,6 +64,10 @@ fn main() {
             None => true,
         };
         if !wanted {
+            continue;
+        }
+        if series {
+            print_series(w);
             continue;
         }
         let v0 = magnitude(w.state.velocity);
@@ -113,6 +83,28 @@ fn main() {
         let mut from_rest = w.state;
         from_rest.velocity = [0.0; 3];
         report("from rest  ", replay(w, from_rest));
+    }
+}
+
+/// The vertical acceleration and velocity the detector would see, one line a sample.
+///
+/// This is the instrument a turn rule is designed against: it prints the two signals the detector
+/// gates on, so whether a turnaround shows up in them is a question with an answer.
+fn print_series(w: &Window) {
+    let mut fusion = Fusion::from_state(w.state);
+    println!("{}\tt_ms\ta_z\tv_z\tv_h\tstill", w.uuid);
+    for s in &w.samples {
+        let f = fusion.update(s);
+        let v = f.state.velocity;
+        println!(
+            "{}\t{}\t{:+.2}\t{:+.2}\t{:.2}\t{}",
+            w.uuid,
+            s.t_ms - w.samples[0].t_ms,
+            f.linear_accel[2],
+            v[2],
+            (v[0] * v[0] + v[1] * v[1]).sqrt(),
+            if f.still { 1 } else { 0 }
+        );
     }
 }
 
@@ -167,9 +159,4 @@ fn replay(w: &Window, from: FusionState) -> Replay {
     }
     out.legs = det.legs();
     out
-}
-
-/// Lowercase hex, which is how a UUID is written everywhere else.
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

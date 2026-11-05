@@ -5,7 +5,7 @@
 //!
 //! The firmware never calls any of this: the generators live outside `calypso-core` so that the device's library carries nothing it does not use.
 
-use calypso_core::fusion::{Fusion, GRAVITY};
+use calypso_core::fusion::{Fusion, FusionState, GRAVITY};
 use calypso_core::pb::{self, msg};
 use calypso_core::rep::{compute_rep, Detector, RepSpan, TraceBuf, TracePoint, MARGIN_MS};
 use calypso_core::sampler::{quantize, Sample, SampleRing, ACCEL_SCALE};
@@ -214,6 +214,54 @@ pub fn read_dump(dump: &[u8]) -> (Vec<&[u8]>, bool) {
     }
     let truncated = pos != dump.len();
     (records, truncated)
+}
+
+/// One stored window out of a `.pblog`, with the samples the device recorded and the filter state
+/// the stored summary says its replay starts from.
+pub struct Window {
+    /// The rep's uuid, lower-case hex, so a run can name one.
+    pub uuid: String,
+    pub t_start_ms: u32,
+    /// The travel the device's own summary reports, for comparison with what a replay makes of it.
+    pub rom: f32,
+    pub state: FusionState,
+    pub samples: Vec<Sample>,
+}
+
+/// Every window in a `.pblog` that carries a raw trace, in log order.
+pub fn capture_windows(dump: &[u8]) -> (Vec<Window>, bool) {
+    let (records, truncated) = read_dump(dump);
+    let mut windows: Vec<Window> = Vec::new();
+    for record in &records {
+        match pb::decode_record(record).expect("a record in the dump decodes") {
+            pb::Record::Summary(s) => {
+                if s.raw_len == 0 {
+                    continue;
+                }
+                windows.push(Window {
+                    uuid: s.rep_uuid.iter().map(|b| format!("{b:02x}")).collect(),
+                    t_start_ms: s.t_start_ms,
+                    rom: s.rom,
+                    state: pb::state_from_message(&s.state),
+                    samples: Vec::with_capacity(s.raw_len as usize),
+                });
+            }
+            pb::Record::Raw(r) => {
+                let Some(w) = windows.last_mut() else {
+                    panic!("a raw chunk before any summary")
+                };
+                // A point's time is an offset from the rep's first sample, which is the summary's
+                // `t_start_ms` — the same origin the plotted trace counts from.
+                for p in &r.samples {
+                    let mut s = pb::raw_point_from_message(p);
+                    s.t_ms = s.t_ms.saturating_add(w.t_start_ms);
+                    w.samples.push(s);
+                }
+            }
+            _ => {}
+        }
+    }
+    (windows, truncated)
 }
 
 /// A squat set where the bar drifts to one side on the way down — the case the 3D plot exists to show.
