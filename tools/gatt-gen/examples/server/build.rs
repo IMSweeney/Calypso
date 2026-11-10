@@ -24,8 +24,7 @@ fn main() {
     let out = Path::new(&out);
 
     // The GATT vocabulary ships with `gatt-gen` rather than with this project.
-    // `gatt-gen` puts its own copy on protoc's path for its own run; `micropb-gen`
-    // has to be told where it is.
+    // `gatt-gen` puts its own copy on protoc's path for its own run; `micropb-gen` has to be told where it is.
     let vocabulary = out.join("vocabulary");
     gatt_gen::write_options_proto(&vocabulary).expect("the vocabulary is writable");
 

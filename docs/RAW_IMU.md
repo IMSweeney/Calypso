@@ -252,8 +252,8 @@ nothing waits on it).
 `TraceOrigin`, which carried only `v0`; `RepConfig` says what the sensor was set to and which
 detection logic closed the rep. `flags` is gone: its one live bit was "the trace was decimated",
 which at a fixed budget is true of every rep worth plotting and is derivable from the counts
-anyway. `ImuState` gains the angular rate. The `Calibration` characteristic is deleted, with
-`CalibrationStatus` and the app's hint, model and state.
+anyway. The `Calibration` characteristic is deleted, with `CalibrationStatus` and the app's
+hint, model and state.
 
 The archive's last fixture goes with the archive: a fused-format trace cannot become a raw one, so
 `real-deadlift.pblog` and the tests that read it are deleted rather than converted, and the other
@@ -300,16 +300,15 @@ Verified by: a release build, fake reps through the whole path, then a real sess
   a summary that claims a setting is a summary that should not be describing a default
   someone could change. ±8 g is set above it, for the clip headroom the plan argues for, and
   read back before the mode switch — the write reports only that the bus took it.
-- **The level verdict moved onto the filter.** A non-fusion mode has no gravity vector to
-  read (`GRV_DATA` is a fusion output), so `Sensor is level on the X axis` is now the world's
-  up axis carried into the sensor's frame by the estimated attitude. Same number, same
-  threshold, from an estimate pulled onto gravity continuously and hard at rest.
+- **The level verdict went with the fusion it was there for.** A non-fusion mode has no gravity
+  vector to read (`GRV_DATA` is a fusion output), and nothing acts on the verdict: the recording
+  gate is the filter's own readiness, so a level line in the boot log was telling nobody
+  anything. It is deleted, with the core helper and its tests.
 - **`CALIBRATION.md` stops being a document**, and its one surviving fact — nothing is
   recorded until the filter has settled, which takes a second of stillness — is in
   [`REP_TRACKING.md`](REP_TRACKING.md) where the sampling path is described.
 - **The app needed no change at all.** Its half of the calibration surface went in stage 2,
-  and nothing else it reads moved: `ImuState`'s quaternion is the filter's now rather than
-  the chip's, at the same scale and in the same frame.
+  and nothing else it reads moved.
 - **The chip hands over a new reading on every poll.** It was open whether a non-fusion mode
   runs at the rate it is polled at, since the datasheet's table pins the rate for fusion modes
   only and a poll that outran the sensor would read the same register twice. Counted on a still

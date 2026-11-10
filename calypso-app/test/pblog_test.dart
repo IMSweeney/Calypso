@@ -145,8 +145,7 @@ void main() {
   });
 
   test('a dump dates a rep from the newest clock record before it', () {
-    // The rule the device applies by record id, which a dump can only apply by order: the epoch in force when the
-    // summary was read dates it, and a boot that never had a clock cannot borrow the one before it.
+    // The rule the device applies by record id, which a dump can only apply by order: the epoch in force when the summary was read dates it, and a boot that never had a clock cannot borrow the one before it.
     const epochS = 1_767_225_600;
     Uint8List dump(List<pb.RepRecord> records) =>
         Uint8List.fromList([for (final record in records) ..._framed(record)]);

@@ -1,7 +1,6 @@
 //! The sync path: what the device says, and the rules it applies to what the app asks for.
 //!
 //! Messages go out through the codec the pipe carries them with (`gatt::pipe_sync`), so "this fits a transfer" is checked here by the same code the device runs rather than by a number repeated in the test.
-//! The calibration status is the one characteristic that carries a value rather than a message, and its ceiling is checked here for the same reason.
 //! How a message travels — chunks, acknowledgements, retries — belongs to `tests/pipe.rs`.
 
 use calypso_core::gatt::pipe_sync;
@@ -56,8 +55,6 @@ fn worst_case_summary_fits_a_transfer() {
         duration_ms: u32::MAX,
         rom: f32::MAX,
         peak_velocity: f32::MIN,
-        mean_velocity: f32::MAX,
-        peak_accel: f32::MIN,
         roll_min_deg: f32::MIN,
         pitch_min_deg: f32::MIN,
         pitch_max_deg: f32::MAX,
@@ -131,13 +128,11 @@ fn the_cursor_clamps_to_the_log_it_is_reading() {
 #[test]
 fn trace_requests_are_validated() {
     let mut buf = [0u8; 64];
-    let mut encode = |rep_uuid, all_chunks, chunk_index, kind| {
+    let mut encode = |rep_uuid, kind| {
         let n = pb::encode_trace_request(
             &msg::TraceRequest {
                 kind,
                 rep_uuid: pb::uuid_to_field(&rep_uuid),
-                all_chunks,
-                chunk_index,
             },
             &mut buf,
         )
@@ -146,22 +141,12 @@ fn trace_requests_are_validated() {
     };
 
     let want = fixture_uuid(12);
-    let ok = trace_request_of(&encode(want, true, 0, msg::TraceKind::Computed)).unwrap();
+    let ok = trace_request_of(&encode(want, msg::TraceKind::Computed)).unwrap();
     assert_eq!(pb::uuid_from_field(&ok.rep_uuid), Some(want));
-    assert!(ok.all_chunks);
 
     // Both kinds are served: which traces a rep has is its summary's business, and one it does not have reads back empty.
-    let raw = trace_request_of(&encode(want, true, 0, msg::TraceKind::Raw)).unwrap();
+    let raw = trace_request_of(&encode(want, msg::TraceKind::Raw)).unwrap();
     assert_eq!(raw.kind, msg::TraceKind::Raw);
-
-    let one = trace_request_of(&encode(
-        fixture_uuid(12),
-        false,
-        5,
-        msg::TraceKind::Computed,
-    ))
-    .unwrap();
-    assert_eq!(one.chunk_index, 5);
 
     // Its own buffer: the closure above holds `buf`.
     let mut scratch = [0u8; 64];
@@ -169,21 +154,12 @@ fn trace_requests_are_validated() {
     let n = pb::encode_trace_request(
         &msg::TraceRequest {
             rep_uuid: too_short,
-            all_chunks: true,
-            chunk_index: 0,
             kind: msg::TraceKind::Computed,
         },
         &mut scratch,
     )
     .unwrap();
     assert!(trace_request_of(&scratch[..n]).is_none());
-    assert!(trace_request_of(&encode(
-        fixture_uuid(1),
-        false,
-        9999,
-        msg::TraceKind::Computed
-    ))
-    .is_none());
     assert!(trace_request_of(&[0xFF, 0xFF, 0xFF, 0xFF]).is_none());
 }
 
@@ -202,8 +178,7 @@ fn the_dev_switch_arrives_with_the_way_it_sets_it() {
 
 /// Where a rep's records are, so a trace request is a walk of them rather than of the log.
 ///
-/// The index is a cache and is allowed to forget: the test that matters is that a forgotten rep is a *miss* (which
-/// the device answers by walking the log) rather than a wrong answer, which would send the app another rep's trace.
+/// The index is a cache and is allowed to forget: the test that matters is that a forgotten rep is a *miss* (which the device answers by walking the log) rather than a wrong answer, which would send the app another rep's trace.
 #[test]
 fn the_device_remembers_where_a_reps_records_are() {
     let mut index = RepIndex::new();

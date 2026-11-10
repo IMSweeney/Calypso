@@ -255,13 +255,9 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         self.sectors
     }
 
-    /// How many of the next `want` sectors the ring drops are already erased: how many times it can advance before an
-    /// append has to pay for a sector erase.
+    /// How many of the next `want` sectors the ring drops are already erased: how many times it can advance before an append has to pay for a sector erase.
     ///
-    /// A sector whose header is erased holds no record a reader is owed, because the header is written before any
-    /// record is, so counting these can never count away data that is still live. What it cannot prove is that the
-    /// bytes below the header are erased too — a write that failed between the two leaves a sector that looks
-    /// prepared and is not — so [`FlashLog::advance_sector`] checks the bytes when it gets there.
+    /// A sector whose header is erased holds no record a reader is owed, because the header is written before any record is, so counting these can never count away data that is still live. What it cannot prove is that the bytes below the header are erased too — a write that failed between the two leaves a sector that looks prepared and is not — so [`FlashLog::advance_sector`] checks the bytes when it gets there.
     pub fn prepared_ahead(&mut self, want: u32) -> Result<u32, Error<N::Error>> {
         let cap = self.reserve_cap(want);
         let mut ahead = 0;
@@ -271,14 +267,10 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         Ok(ahead)
     }
 
-    /// Deepen the reserve by one sector, up to `want` deep: erase the nearest sector ahead of the head that still holds
-    /// data, which is the next one the ring will drop.
+    /// Deepen the reserve by one sector, up to `want` deep: erase the nearest sector ahead of the head that still holds data, which is the next one the ring will drop.
     ///
-    /// This is the trade the reserve is made of: that data goes now instead of when the ring reaches it, so a
-    /// reserve `n` deep is `n` sectors less history. It costs an erase almost every time, so the caller runs it where
-    /// nothing is sampling anything worth keeping.
-    /// Returns whether an erase ran — nothing to do means the reserve is already `want` deep, and a sector that reads
-    /// erased down to its header but was written below it is left to [`FlashLog::advance_sector`] to check.
+    /// This is the trade the reserve is made of: that data goes now instead of when the ring reaches it, so a reserve `n` deep is `n` sectors less history. It costs an erase almost every time, so the caller runs it where nothing is sampling anything worth keeping.
+    /// Returns whether an erase ran — nothing to do means the reserve is already `want` deep, and a sector that reads erased down to its header but was written below it is left to [`FlashLog::advance_sector`] to check.
     pub fn prepare_one(&mut self, want: u32) -> Result<bool, Error<N::Error>> {
         let cap = self.reserve_cap(want);
         let mut ahead = 0;
@@ -335,16 +327,11 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
 
     /// Deliver the live records from `first_id` on, oldest first, up to `max` of them.
     ///
-    /// The cheap direction, for a caller that knows which record it wants: a trace's chunks follow its summary, so
-    /// that caller needs a dozen records, not the whole ring. It costs one binary search over the sectors — a
-    /// sector's *first* record id says which side of it an id must be on, and reading that id is one 8-byte
-    /// header — and then the records themselves.
+    /// The cheap direction, for a caller that knows which record it wants: a trace's chunks follow its summary, so that caller needs a dozen records, not the whole ring. It costs one binary search over the sectors — a sector's *first* record id says which side of it an id must be on, and reading that id is one 8-byte header — and then the records themselves.
     ///
-    /// The distinction is not academic: a walk over every record reads every payload through `read_blocks` twice
-    /// (once for the CRC, once to deliver it) and holds the sampler off its tick for seconds (docs/GOTCHAS.md).
+    /// The distinction is not academic: a walk over every record reads every payload through `read_blocks` twice (once for the CRC, once to deliver it) and holds the sampler off its tick for seconds.
     ///
-    /// An id older than anything the ring still holds starts the walk at the oldest live record, so the caller
-    /// still sees whatever of it survived; a corrupted sector's tail ends that sector, not the walk.
+    /// An id older than anything the ring still holds starts the walk at the oldest live record, so the caller still sees whatever of it survived; a corrupted sector's tail ends that sector, not the walk.
     pub fn for_each_from(
         &mut self,
         first_id: u32,
@@ -382,8 +369,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
     /// Read back a single record by id. Returns the payload length written into `buf`, if found.
     pub fn read(&mut self, want_id: u32, buf: &mut [u8]) -> Result<Option<usize>, Error<N::Error>> {
         let mut found = None;
-        // The walk starts at the sector `want_id` must be in or after, so the first record delivered is the record
-        // itself unless the id is not in the log — in which case the caller gets `None`, as the walk over the log would.
+        // The walk starts at the sector `want_id` must be in or after, so the first record delivered is the record itself unless the id is not in the log — in which case the caller gets `None`, as the walk over the log would.
         self.for_each_from(want_id, 1, buf, |id, payload| {
             if id == want_id {
                 found = Some(payload.len());
@@ -421,8 +407,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
 
     /// The oldest sector that could hold `want_id`: the last sector whose first record is at or before it.
     ///
-    /// Ids are handed out in write order and the ring is written in that order, so a sector's first id only
-    /// increases with the sector — which is what makes this a search rather than a scan.
+    /// Ids are handed out in write order and the ring is written in that order, so a sector's first id only increases with the sector — which is what makes this a search rather than a scan.
     fn sector_at_or_after(&mut self, want_id: u32, live: u32) -> Result<u32, Error<N::Error>> {
         let mut lo = 0u32;
         let mut hi = live;
@@ -435,16 +420,14 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
                     best = Some(sector);
                     lo = mid + 1;
                 }
-                // A sector with no readable first record cannot hold a record at or before the id, and neither can
-                // anything after it: step the search back.
+                // A sector with no readable first record cannot hold a record at or before the id, and neither can anything after it: step the search back.
                 _ => hi = mid,
             }
         }
         Ok(best.unwrap_or(self.sector_at(0, live)))
     }
 
-    /// The id of a sector's first record, or `None` if it holds no record this log can read (a sector the ring has
-    /// only just advanced to, or a torn first header).
+    /// The id of a sector's first record, or `None` if it holds no record this log can read (a sector the ring has only just advanced to, or a torn first header).
     fn first_record_id(&mut self, sector: u32) -> Result<Option<u32>, Error<N::Error>> {
         let mut hdr = [0u8; RECORD_HEADER_LEN as usize];
         self.flash
@@ -472,10 +455,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
 
     /// Move to the next sector in the ring, erasing it (this is what drops the oldest data on wrap) and writing a fresh header.
     ///
-    /// The erase is skipped when the sector reads erased all the way down, which is what a reserve built ahead of time
-    /// is worth: a check of the whole sector costs a millisecond where the erase costs forty. It is a check of the
-    /// bytes rather than of a claim about them, so a sector whose header was erased but whose data was not still gets
-    /// its erase.
+    /// The erase is skipped when the sector reads erased all the way down, which is what a reserve built ahead of time is worth: a check of the whole sector costs a millisecond where the erase costs forty. It is a check of the bytes rather than of a claim about them, so a sector whose header was erased but whose data was not still gets its erase.
     fn advance_sector(&mut self) -> Result<(), Error<N::Error>> {
         self.head = (self.head + 1) % self.sectors;
         self.head_epoch = self.head_epoch.wrapping_add(1);
@@ -491,8 +471,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
         Ok(())
     }
 
-    /// How deep a reserve may go: never the head itself, because a reserve that reached it would have erased the newest
-    /// sector in the ring.
+    /// How deep a reserve may go: never the head itself, because a reserve that reached it would have erased the newest sector in the ring.
     fn reserve_cap(&self, want: u32) -> u32 {
         want.min(self.sectors - 1)
     }
@@ -513,8 +492,7 @@ impl<'a, N: NorFlash> FlashLog<'a, N> {
 
     /// Whether a whole sector reads erased.
     ///
-    /// Stops at the first programmed byte, so a sector holding records costs one block read and only a sector that
-    /// looks erased is walked to the end.
+    /// Stops at the first programmed byte, so a sector holding records costs one block read and only a sector that looks erased is walked to the end.
     fn is_erased(&mut self, sector: u32) -> Result<bool, Error<N::Error>> {
         const CHUNK: u32 = 256;
         let base = sector * self.sector_size;

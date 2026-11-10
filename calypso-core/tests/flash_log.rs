@@ -108,8 +108,7 @@ fn corrupt_record_is_skipped_on_remount() {
 
 /// A reserve is what keeps an erase out of an append, and this is that property stated as the flash sees it.
 ///
-/// The ring is eight sectors and a hundred-byte record is two to a sector, so forty records leave sixteen live
-/// across all eight — the ring has wrapped and every sector the ring can drop next holds records.
+/// The ring is eight sectors and a hundred-byte record is two to a sector, so forty records leave sixteen live across all eight — the ring has wrapped and every sector the ring can drop next holds records.
 #[test]
 fn the_ring_advances_into_a_prepared_sector_without_erasing() {
     let mut flash = MockFlash::new();
@@ -135,8 +134,7 @@ fn the_ring_advances_into_a_prepared_sector_without_erasing() {
     assert_eq!(log.read(27, &mut buf).unwrap(), Some(100));
 }
 
-/// Each prepare has to land on the next sector rather than on the same one again, or a reserve stays one deep however
-/// many ticks it is given.
+/// Each prepare has to land on the next sector rather than on the same one again, or a reserve stays one deep however many ticks it is given.
 #[test]
 fn each_prepare_deepens_the_reserve_by_one() {
     let mut flash = MockFlash::new();
@@ -174,8 +172,7 @@ fn a_reserve_survives_a_remount() {
     assert_eq!(erases(), 0, "the remount forgot the reserve");
 }
 
-/// A flash that has never been written is erased, so the first pass through the ring costs nothing: fourteen records
-/// are seven sectors of an eight-sector ring, and it has not been round yet.
+/// A flash that has never been written is erased, so the first pass through the ring costs nothing: fourteen records are seven sectors of an eight-sector ring, and it has not been round yet.
 #[test]
 fn a_ring_that_has_never_wrapped_erases_nothing() {
     let mut flash = MockFlash::new();
@@ -188,9 +185,7 @@ fn a_ring_that_has_never_wrapped_erases_nothing() {
     assert_eq!(erases(), 0);
 }
 
-/// The check the reserve rests on is a check of the bytes, not of the header that claims them: a write that failed
-/// between the two leaves a sector whose header reads erased and whose records are still there, and an append must not
-/// write over them.
+/// The check the reserve rests on is a check of the bytes, not of the header that claims them: a write that failed between the two leaves a sector whose header reads erased and whose records are still there, and an append must not write over them.
 #[test]
 fn a_sector_that_only_looks_erased_is_still_erased() {
     let mut flash = MockFlash::new();
@@ -217,9 +212,7 @@ fn a_sector_that_only_looks_erased_is_still_erased() {
 
 /// A record is found, not walked to.
 ///
-/// Measured in bytes the flash hands out, because that is what the cost is: a walk reads every payload twice (once
-/// for the CRC, once to deliver it), and on the device a walk of a full log is seconds the sampler spends stopped
-/// (docs/GOTCHAS.md). The comparison, not the constant, is what this test is about.
+/// Measured in bytes the flash hands out, because that is what the cost is: a walk reads every payload twice (once for the CRC, once to deliver it), and on the device a walk of a full log is seconds the sampler spends stopped The comparison, not the constant, is what this test is about.
 #[test]
 fn finding_a_record_reads_a_fraction_of_the_log() {
     let mut flash = BigFlash::new();

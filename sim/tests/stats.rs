@@ -1,6 +1,4 @@
-//! Pins for the report's arithmetic: the run and the ROM error are the two numbers it adds up, and
-//! both are read off a grid rather than out of the detector, so they are tested on a grid somebody
-//! wrote down here instead of on motion the detector might change under.
+//! Pins for the report's arithmetic: the run and the ROM error are the two numbers it adds up, and both are read off a grid rather than out of the detector, so they are tested on a grid somebody wrote down here instead of on motion the detector might change under.
 
 use calypso_sim::map::{Cell, Knob, Outcome, Slice};
 use calypso_sim::stats::{error, run_along_x, run_along_y};
@@ -36,8 +34,7 @@ fn row(outcomes: &[Outcome]) -> Slice {
     }
 }
 
-/// The run is the stretch the detector holds, not the whole row it was drawn on: a miss ends it in
-/// both directions, and the ends are reported in the knob's own values.
+/// The run is the stretch the detector holds, not the whole row it was drawn on: a miss ends it in both directions, and the ends are reported in the knob's own values.
 #[test]
 fn a_run_stops_at_the_first_cell_that_is_not_one_rep() {
     let slice = row(&[
@@ -54,8 +51,7 @@ fn a_run_stops_at_the_first_cell_that_is_not_one_rep() {
     assert_eq!(run.label(&slice.x), "(1 .. 3) m");
 }
 
-/// A run that reaches the end of the sweep is a lower bound, and says so: the boundary is somewhere
-/// the grid did not go.
+/// A run that reaches the end of the sweep is a lower bound, and says so: the boundary is somewhere the grid did not go.
 #[test]
 fn a_run_that_reaches_the_sweep_edge_is_open_there() {
     let slice = row(&[Outcome::One; 5]);
@@ -65,8 +61,7 @@ fn a_run_that_reaches_the_sweep_edge_is_open_there() {
     assert_eq!(run.label(&slice.x), "[0 .. 4] m");
 }
 
-/// A single rep with misses either side is still a run, of one point — the nominal inside a
-/// split's neighbourhood is a different reading from the nominal inside a region.
+/// A single rep with misses either side is still a run, of one point — the nominal inside a split's neighbourhood is a different reading from the nominal inside a region.
 #[test]
 fn an_isolated_one_rep_is_a_run_of_one_point() {
     let slice = row(&[
@@ -81,8 +76,7 @@ fn an_isolated_one_rep_is_a_run_of_one_point() {
     assert_eq!((run.lo, run.hi), (2.0, 2.0));
 }
 
-/// A nominal that is not a rep has no run to report: the run is the class's own behaviour, and the
-/// report says so rather than measuring a neighbourhood the class never reaches.
+/// A nominal that is not a rep has no run to report: the run is the class's own behaviour, and the report says so rather than measuring a neighbourhood the class never reaches.
 #[test]
 fn a_nominal_that_is_not_one_rep_has_no_run() {
     let split = row(&[
@@ -134,9 +128,7 @@ fn the_run_along_the_other_knob_reads_the_column() {
     assert!(run.open_lo && !run.open_hi);
 }
 
-/// ROM error is relative to the travel the motion asked for, so the same absolute drift is a bigger
-/// error on a short rep — which is the comparison a reader of the map wants, since short reps are
-/// where the detector has least to measure.
+/// ROM error is relative to the travel the motion asked for, so the same absolute drift is a bigger error on a short rep — which is the comparison a reader of the map wants, since short reps are where the detector has least to measure.
 #[test]
 fn rom_error_is_relative_to_the_travel_asked_for() {
     let shorts = error([(0.12, 0.10)].into_iter()).unwrap();

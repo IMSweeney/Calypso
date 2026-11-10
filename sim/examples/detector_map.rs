@@ -1,7 +1,6 @@
-//! Detectability map — phase 1 of `docs/DETECTOR_TESTS.md`.
+//! Detectability map.
 //!
-//! For one lift class, draw where a synthetic rep is stored and where it is not, as 2-D ASCII
-//! slices. See [`calypso_sim::map`] for the slices and the symbols.
+//! For one lift class, draw where a synthetic rep is stored and where it is not, as 2-D ASCII slices. See [`calypso_sim::map`] for the slices and the symbols.
 //!
 //! Usage: `cargo run -p calypso-sim --example detector_map -- bench|deadlift|squat`
 

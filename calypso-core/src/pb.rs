@@ -151,27 +151,6 @@ pub fn raw_point_message(s: &Sample, t0_ms: u32) -> msg::TraceRawPoint {
     }
 }
 
-/// The last sample the sampler read, as the app's read of the `Imu` characteristic returns it.
-///
-/// The acceleration is **specific force**, at the same fixed point and scale as one point of a
-/// stored trace, so this is the boundary and nothing is converted. The attitude is the one the
-/// filter computed, because the sensor no longer reports one.
-pub fn imu_state_message(sample: &Sample, attitude: [f32; 4]) -> msg::ImuState {
-    msg::ImuState {
-        t_uptime_ms: sample.t_ms,
-        ax: sample.accel[0] as i32,
-        ay: sample.accel[1] as i32,
-        az: sample.accel[2] as i32,
-        qw: quantize(attitude[0], QUAT_SCALE) as i32,
-        qx: quantize(attitude[1], QUAT_SCALE) as i32,
-        qy: quantize(attitude[2], QUAT_SCALE) as i32,
-        qz: quantize(attitude[3], QUAT_SCALE) as i32,
-        gx: sample.gyro[0] as i32,
-        gy: sample.gyro[1] as i32,
-        gz: sample.gyro[2] as i32,
-    }
-}
-
 /// Back-convert one point of the plotted trace. `t_ms` is relative to the rep's first sample (see `TraceChunk::first_t_offset_ms`).
 pub fn computed_point_from_message(s: &msg::TraceComputedPoint) -> TracePoint {
     TracePoint {

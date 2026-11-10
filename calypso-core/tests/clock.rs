@@ -85,9 +85,7 @@ fn a_boot_with_no_clock_does_not_borrow_the_one_before_it() {
 
 #[test]
 fn a_log_that_cannot_say_where_this_boot_started_dates_nothing() {
-    // What a log that could not be written to at mount looks like. Every boot records where it began, and
-    // without that record its reps cannot be told from the boot before it — so none of them is dated, rather
-    // than the previous boot's epoch being borrowed for them.
+    // What a log that could not be written to at mount looks like. Every boot records where it began, and without that record its reps cannot be told from the boot before it — so none of them is dated, rather than the previous boot's epoch being borrowed for them.
     let mut boots = Boots::new(None, EPOCH_S);
     boots.on_clock(&set(EPOCH_S - 1_000));
     assert_eq!(boots.boot_of(EARLIER).rep_time_ms(1_000), None);
@@ -108,8 +106,7 @@ fn the_boot_running_now_is_dated_from_ram() {
         "nothing has set this boot's clock yet"
     );
 
-    // The client connects and writes it. The reps stored earlier in this boot are the point of that write,
-    // and they are dated without the log being read again.
+    // The client connects and writes it. The reps stored earlier in this boot are the point of that write, and they are dated without the log being read again.
     let boots = Boots::new(Some(OUR_FROM), EPOCH_S);
     assert_eq!(
         boots.boot_of(OUR_FROM).rep_time_ms(9_000),

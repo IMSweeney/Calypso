@@ -6,8 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  // The device repeats a fault that is still happening once a second, so a close that the
-  // repeat undid would be a button that does nothing. What it closes is the kind.
+  // The device repeats a fault that is still happening once a second, so a close that the repeat undid would be a button that does nothing. What it closes is the kind.
   testWidgets('a closed fault stays closed until a different one arrives', (
     tester,
   ) async {

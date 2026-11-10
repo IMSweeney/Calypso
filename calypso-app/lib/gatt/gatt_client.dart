@@ -20,9 +20,6 @@ abstract class GattClientLink {
   /// The values arriving on a characteristic, in the order they arrive.
   Stream<Uint8List> values(String characteristicUuid);
 
-  /// Read a characteristic once.
-  Future<Uint8List> read(String serviceUuid, String characteristicUuid);
-
   /// Write a characteristic.
   ///
   /// `withResponse` is the write that reports failure, so it is the default;
@@ -54,9 +51,6 @@ class SyncClient {
   /// `calypso.Sync`.
   static const String serviceUuid = '0000ca20-b0cd-11ec-871f-d45ddf138840';
 
-  /// `calypso.Sync.Imu` -- read, calypso.ImuState.
-  static const String imuUuid = '0000ca26-b0cd-11ec-871f-d45ddf138840';
-
   /// `calypso.Sync.Reports` -- notify, calypso.Report.
   static const String reportsUuid = '0000ca25-b0cd-11ec-871f-d45ddf138840';
 
@@ -68,12 +62,6 @@ class SyncClient {
 
   /// `calypso.Sync.Messages` -- notify, calypso.SyncMessage.
   static const String messagesUuid = '0000ca21-b0cd-11ec-871f-d45ddf138840';
-
-  /// Read `Imu` once.
-  Future<pb.ImuState> readImu() async {
-    final bytes = await _link.read(serviceUuid, imuUuid);
-    return pb.ImuState.fromBuffer(bytes);
-  }
 
   /// Subscribe to `Reports`. Nothing arrives until this completes.
   Future<void> subscribeReports() => _link.subscribe(serviceUuid, reportsUuid);

@@ -1,7 +1,6 @@
 //! The schema vocabulary: `gatt_options.proto`, and making sure the schema being compiled agrees with it.
 //!
-//! An extension is only meaningful if both ends agree on its number, its field numbers and its enum values, and protobuf will happily decode a *different*
-//! `gatt_options.proto` that reuses the names. The vocabulary therefore ships with the tool, is put on the include path automatically, and is checked against the one the schema actually imported.
+//! An extension is only meaningful if both ends agree on its number, its field numbers and its enum values, and protobuf will happily decode a *different* `gatt_options.proto` that reuses the names. The vocabulary therefore ships with the tool, is put on the include path automatically, and is checked against the one the schema actually imported.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

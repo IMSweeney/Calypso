@@ -17,7 +17,7 @@ pub fn parse_canonical(text: &str) -> Option<[u8; 16]> {
 
 /// The 16 bytes in **wire order**: the reverse of the canonical text's byte order.
 ///
-/// That is the order `trouble_host`'s `Uuid::new_long` stores, and the order advertising data carries a 128-bit UUID in, so a client reverses it back into the text the schema quotes. See `docs/GOTCHAS.md` for why this is written down rather than reasoned about.
+/// That is the order `trouble_host`'s `Uuid::new_long` stores, and the order advertising data carries a 128-bit UUID in, so a client reverses it back into the text the schema quotes. It is written down rather than worked out because the two orders are the same digits and getting it backwards fails only on a real radio.
 pub fn to_wire_order(canonical: &[u8; 16]) -> [u8; 16] {
     let mut out = [0u8; 16];
     for (i, byte) in canonical.iter().enumerate() {

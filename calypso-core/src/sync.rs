@@ -3,16 +3,12 @@
 use crate::pb::{self, msg};
 use crate::uuid::RepUuid;
 
-/// How many reps the device remembers the place of. One batch of summaries, which is the order the app asks for
-/// their traces in, so the requests a batch causes are answered from the index rather than by reading the log.
+/// How many reps the device remembers the place of. One batch of summaries, which is the order the app asks for their traces in, so the requests a batch causes are answered from the index rather than by reading the log.
 pub const REP_INDEX_LEN: usize = 16;
 
-/// Where one rep's records sit in the log: the record after its summary, and how many chunk records of each kind
-/// follow it.
+/// Where one rep's records sit in the log: the record after its summary, and how many chunk records of each kind follow it.
 ///
-/// `append_rep` writes a rep's summary, its plotted chunks and then its raw chunks together under the log's lock, so
-/// both runs are the records after the summary with none of anyone else's among them — and the raw run starts
-/// exactly where the plotted one ends.
+/// `append_rep` writes a rep's summary, its plotted chunks and then its raw chunks together under the log's lock, so both runs are the records after the summary with none of anyone else's among them — and the raw run starts exactly where the plotted one ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RepPlace {
     pub rep_uuid: RepUuid,
@@ -31,12 +27,9 @@ impl RepPlace {
 
 /// Where the reps the summary stream has handed out sit in the log.
 ///
-/// A trace request names a rep by uuid, and the log can only answer that by reading records — every record, in the
-/// worst case, which is seconds the device is not sampling. The summary collect has just read the summary and knows
-/// its record id, so it records that here, and the trace read becomes a walk of that rep's own records.
+/// A trace request names a rep by uuid, and the log can only answer that by reading records — every record, in the worst case, which is seconds the device is not sampling. The summary collect has just read the summary and knows its record id, so it records that here, and the trace read becomes a walk of that rep's own records.
 ///
-/// A cache, never the record of what exists: a miss — a rep whose summary this connection never read, or one pushed
-/// out of the ring of entries — falls back to the walk, which is why this can be small and forget things.
+/// A cache, never the record of what exists: a miss — a rep whose summary this connection never read, or one pushed out of the ring of entries — falls back to the walk, which is why this can be small and forget things.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct RepIndex {
     entries: [Option<RepPlace>; REP_INDEX_LEN],
@@ -51,8 +44,7 @@ impl RepIndex {
         }
     }
 
-    /// Record where a rep is, overwriting the oldest entry when full: the entry the app is least likely to ask for
-    /// next is the one it was sent longest ago.
+    /// Record where a rep is, overwriting the oldest entry when full: the entry the app is least likely to ask for next is the one it was sent longest ago.
     pub fn record(
         &mut self,
         rep_uuid: RepUuid,
@@ -118,9 +110,7 @@ pub fn summary_message(summary: msg::RepSummary) -> msg::SyncMessage {
 
 /// The trace request inside a `SyncRequest` the app wrote, or `None` if it is not one this device will serve.
 ///
-/// Both kinds are served: the plotted trace from the chunks every rep has, and the raw one from the chunks a dev
-/// session recorded. Which of them a rep has is its summary's business (`computed_chunks`, `raw_chunks`), not this
-/// end's — a request for a trace a rep does not have reads back empty, and that is the answer either way.
+/// Both kinds are served: the plotted trace from the chunks every rep has, and the raw one from the chunks a dev session recorded. Which of them a rep has is its summary's business (`computed_chunks`, `raw_chunks`), not this end's — a request for a trace a rep does not have reads back empty, and that is the answer either way.
 pub fn trace_request(request: &msg::SyncRequest) -> Option<msg::TraceRequest> {
     let trace = match &request.body {
         Some(msg::SyncRequest_::Body::Trace(trace)) => trace.clone(),
@@ -128,9 +118,6 @@ pub fn trace_request(request: &msg::SyncRequest) -> Option<msg::TraceRequest> {
     };
     // A short uuid is not an identity.
     pb::uuid_from_field(&trace.rep_uuid)?;
-    if !trace.all_chunks && trace.chunk_index >= 64 {
-        return None;
-    }
     Some(trace)
 }
 

@@ -1,17 +1,10 @@
 //! Synthetic motion: a rep, or motion that is not a rep, at the device's sample rate.
 //!
-//! The generators are code, not files: a scenario is built where it is needed, so a tuning
-//! change is measured against the same motion instead of a stale `.pblog`. Everything is
-//! replayed through the real pipeline (`Fusion`, `Detector`, `compute_rep`) inside
-//! [`detect_and_trace`], so a scenario is the summary the device would have produced.
+//! The generators are code, not files: a scenario is built where it is needed, so a tuning change is measured against the same motion instead of a stale `.pblog`. Everything is replayed through the real pipeline (`Fusion`, `Detector`, `compute_rep`) inside [`detect_and_trace`], so a scenario is the summary the device would have produced.
 //!
-//! The one physical fact behind all of it: a stroke is half a cosine at its peak speed, so
-//! its peak acceleration is `2v²/A` and its duration `πA/(2v)`, and its acceleration integral
-//! is zero — the bar starts and ends the stroke at rest, which is what ZUPT anchoring assumes.
+//! The one physical fact behind all of it: a stroke is half a cosine at its peak speed, so its peak acceleration is `2v²/A` and its duration `πA/(2v)`, and its acceleration integral is zero — the bar starts and ends the stroke at rest, which is what ZUPT anchoring assumes.
 //!
-//! A generator states the bar's own acceleration; [`at`] adds gravity and hands back what a
-//! sensor bolted level to the bar would measure. Everything below therefore reads as motion,
-//! and only [`Impairments`] speaks in sensor readings.
+//! A generator states the bar's own acceleration; [`at`] adds gravity and hands back what a sensor bolted level to the bar would measure. Everything below therefore reads as motion, and only [`Impairments`] speaks in sensor readings.
 
 use calypso_core::fusion::{conjugate, quat_from_rotvec, rotate_by_quat};
 use calypso_core::pb::msg;
@@ -34,10 +27,7 @@ fn push_rest(out: &mut Vec<Sample>, from_ms: u32, ms: u32) -> u32 {
     t_ms
 }
 
-/// One half-cosine stroke moving `travel` metres at a peak `speed`, `dir` being `1` for the
-/// drive and `-1` for the return. The acceleration peaks at `2·speed²/travel` and its integral
-/// over the stroke is zero, so the velocity returns to exactly zero at the far end. Returns
-/// the timestamp after the stroke.
+/// One half-cosine stroke moving `travel` metres at a peak `speed`, `dir` being `1` for the drive and `-1` for the return. The acceleration peaks at `2·speed²/travel` and its integral over the stroke is zero, so the velocity returns to exactly zero at the far end. Returns the timestamp after the stroke.
 fn stroke(out: &mut Vec<Sample>, from_ms: u32, travel: f32, speed: f32, dir: f32) -> u32 {
     let dt = SAMPLE_DT_MS as f32 / 1000.0;
     let duration = PI * travel / (2.0 * speed);
@@ -54,8 +44,7 @@ fn stroke(out: &mut Vec<Sample>, from_ms: u32, travel: f32, speed: f32, dir: f32
     t_ms
 }
 
-/// A press: a drive at `speed_in`, a pause at the top, a return at `speed_out`, a pause at the
-/// bottom. The drive and the return are the same half-cosine, mirrored.
+/// A press: a drive at `speed_in`, a pause at the top, a return at `speed_out`, a pause at the bottom. The drive and the return are the same half-cosine, mirrored.
 #[derive(Debug, Clone, Copy)]
 pub struct Rep {
     pub travel: f32,
@@ -65,8 +54,7 @@ pub struct Rep {
     pub pause_bottom_ms: u32,
     /// How far the bar settles back at the top before the return, and the peak speed it does it at.
     ///
-    /// A bar does not stop where it is caught: at lockout it gives a few centimetres back and comes
-    /// again, which is motion in the opposite direction to the drive and short of half a rep.
+    /// A bar does not stop where it is caught: at lockout it gives a few centimetres back and comes again, which is motion in the opposite direction to the drive and short of half a rep.
     pub settle_m: f32,
     pub settle_speed: f32,
 }
@@ -110,9 +98,7 @@ impl Rep {
         }
     }
 
-    /// The rep's motion only — drive, top pause, return, bottom pause — appended after `from_ms`,
-    /// leaving the lead-in rest to the caller. Returns the timestamp after the rep. A set builds
-    /// several of these end to end with a single lead-in; [`Rep::samples`] is this plus that.
+    /// The rep's motion only — drive, top pause, return, bottom pause — appended after `from_ms`, leaving the lead-in rest to the caller. Returns the timestamp after the rep. A set builds several of these end to end with a single lead-in; [`Rep::samples`] is this plus that.
     pub fn strokes(&self, out: &mut Vec<Sample>, from_ms: u32) -> u32 {
         let mut t = stroke(out, from_ms, self.travel, self.speed_in, 1.0);
         t = push_rest(out, t, self.pause_top_ms);
@@ -156,9 +142,7 @@ impl Push {
     }
 }
 
-/// A rep whose drive stalls partway: `first` out, a hold, `second` more out, then the whole way
-/// back. What a grind looks like to the sensor — the bar stops without coming down, and a
-/// detector that only knows "the bar is moving" sees two strokes where the lifter made one.
+/// A rep whose drive stalls partway: `first` out, a hold, `second` more out, then the whole way back. What a grind looks like to the sensor — the bar stops without coming down, and a detector that only knows "the bar is moving" sees two strokes where the lifter made one.
 #[derive(Debug, Clone, Copy)]
 pub struct Stall {
     pub first: f32,
@@ -224,11 +208,8 @@ impl Motion {
             Motion::Stall(s) => s.samples(),
             Motion::Push(p) => p.samples(),
             Motion::Wobble { travel, hz, ms } => {
-                // z = (travel/2)·(1 − cos(2πft)), so accel = +(travel/2)·(2πf)²·cos(2πft): an
-                // oscillation of full swing `travel` that starts at rest and ends where it began.
-                // The cosine phase is what matters: a sine at phase zero already moves at `amp·ω`
-                // the moment it starts, and integrating that from rest leaves a velocity that never
-                // sits still, so the displacement drifts instead of oscillating about a centre.
+                // z = (travel/2)·(1 − cos(2πft)), so accel = +(travel/2)·(2πf)²·cos(2πft): an oscillation of full swing `travel` that starts at rest and ends where it began.
+                // The cosine phase is what matters: a sine at phase zero already moves at `amp·ω` the moment it starts, and integrating that from rest leaves a velocity that never sits still, so the displacement drifts instead of oscillating about a centre.
                 let amp = travel / 2.0;
                 let peak = amp * (2.0 * PI * hz) * (2.0 * PI * hz);
                 let mut out = Vec::new();
@@ -255,17 +236,14 @@ impl Motion {
     }
 }
 
-/// A set: the unrack, several reps separated by the set's rest, and the re-rack, assembled into
-/// one timestamp-continuous stream. This is the thing the device actually records, so it is the
-/// only place one rep's motion can merge with, or hide, its neighbours.
+/// A set: the unrack, several reps separated by the set's rest, and the re-rack, assembled into one timestamp-continuous stream. This is the thing the device actually records, so it is the only place one rep's motion can merge with, or hide, its neighbours.
 #[derive(Debug, Clone, Copy)]
 pub struct Set {
     /// The per-rep template (travel, speeds, top pause).
     pub rep: Rep,
     /// How many reps in the set.
     pub reps: u32,
-    /// The rest between reps, applied as each rep's bottom pause; it overrides the template's
-    /// `pause_bottom_ms`.
+    /// The rest between reps, applied as each rep's bottom pause; it overrides the template's `pause_bottom_ms`.
     pub inter_rep_rest_ms: u32,
     /// The bar lifted off the rack, before the first rep.
     pub unrack: Option<Push>,
@@ -292,9 +270,7 @@ impl Set {
     }
 }
 
-/// The canonical sets, the ones that ask different things of the detector: rest between reps, no
-/// rest, a push either side of a rep, and a push on its own. Shared by the `set_probe` example and
-/// the report, so the two cannot measure different sets.
+/// The canonical sets, the ones that ask different things of the detector: rest between reps, no rest, a push either side of a rep, and a push on its own.
 pub fn probe_sets() -> Vec<(&'static str, Set)> {
     let push = Push {
         travel: 0.06,
@@ -349,8 +325,7 @@ pub fn probe_sets() -> Vec<(&'static str, Set)> {
     ]
 }
 
-/// A shortcut: [`detect_and_trace`] a set's samples and keep only the summaries that clear
-/// [`MIN_ROM_M`], the same "would the device store it" question [`stored`] asks of a single motion.
+/// A shortcut: [`detect_and_trace`] a set's samples and keep only the summaries that clear [`MIN_ROM_M`], the same "would the device store it" question [`stored`] asks of a single motion.
 pub fn stored_set(set: &Set) -> Vec<msg::RepSummary> {
     detect_and_trace(&set.samples(), TRACE_POINTS)
         .into_iter()
@@ -361,9 +336,7 @@ pub fn stored_set(set: &Set) -> Vec<msg::RepSummary> {
 
 /// The summaries the device would store for this motion — the ones that clear [`MIN_ROM_M`].
 ///
-/// The detector closes a span for a wobble or a bump as readily as for a press; what it cannot
-/// see is how far anything moved. `stored` is the answer after that check, so a cell is one
-/// bit: did this motion produce a rep, or not.
+/// The detector closes a span for a wobble or a bump as readily as for a press; what it cannot see is how far anything moved. `stored` is the answer after that check, so a cell is one bit: did this motion produce a rep, or not.
 pub fn stored(motion: &Motion) -> Vec<msg::RepSummary> {
     detect_and_trace(&motion.samples(), TRACE_POINTS)
         .into_iter()
@@ -401,13 +374,9 @@ impl Rng {
     }
 }
 
-/// The ways a sensor reading is not the motion, added to synthetic motion — never to a captured
-/// rep, which already carries the device's own error. Every field is zero by default (a no-op),
-/// so a loss can be attributed to the one error that was turned up.
+/// The ways a sensor reading is not the motion, added to synthetic motion — never to a captured rep, which already carries the device's own error. Every field is zero by default (a no-op), so a loss can be attributed to the one error that was turned up.
 ///
-/// These are the sensor's faults, not the filter's: the mount is real and the offsets are real,
-/// so a scenario built from them is motion the device could actually have seen. What is *not*
-/// injectable any more is a wrong attitude — there is no estimate here to bias.
+/// These are the sensor's faults, not the filter's: the mount is real and the offsets are real, so a scenario built from them is motion the device could actually have seen. What is *not* injectable any more is a wrong attitude — there is no estimate here to bias.
 #[derive(Debug, Clone, Copy)]
 pub struct Impairments {
     /// Per-sample white noise on the accelerometer (m/s²).
@@ -418,9 +387,7 @@ pub struct Impairments {
     pub gyro_bias_dps: [f32; 3],
     /// The angle the sensor is bolted to the bar at, as a rotation vector in degrees `(x, y, z)`.
     ///
-    /// A real mount is never square to the bar. It rotates every reading into another frame, and
-    /// the filter is supposed to be indifferent to it: what a tilt costs is a different attitude,
-    /// not a different travel.
+    /// A real mount is never square to the bar. It rotates every reading into another frame, and the filter is supposed to be indifferent to it: what a tilt costs is a different attitude, not a different travel.
     pub tilt_deg: [f32; 3],
 }
 
@@ -438,9 +405,7 @@ impl Default for Impairments {
 impl Impairments {
     /// Add the impairments to generated samples, in place.
     ///
-    /// The generators emit specific force in the world frame with the sensor level, so this is
-    /// where a sample becomes a *sensor* reading: rotated into the mount's frame, then given the
-    /// accelerometer's offset and the platform noise.
+    /// The generators emit specific force in the world frame with the sensor level, so this is where a sample becomes a *sensor* reading: rotated into the mount's frame, then given the accelerometer's offset and the platform noise.
     pub fn apply(&self, samples: &mut [Sample], rng: &mut Rng) {
         let mount = quat_from_rotvec(self.tilt_deg.map(|d| d.to_radians()));
         for s in samples.iter_mut() {

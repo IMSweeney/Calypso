@@ -1,14 +1,9 @@
 #!/bin/sh
 # Regenerates the BLE GATT table (src/gatt.rs) from proto/calypso_gatt.proto.
 #
-# The output is checked in on purpose: the firmware build then needs no codegen
-# toolchain, no protoc and nothing from the network, and a change to the table
-# shows up in review as a diff. Re-run this when the .proto changes, and commit
-# the result: nothing checks it for you, so a table left behind is a device and an
-# app disagreeing about the interface, in silence.
+# The output is checked in on purpose: the firmware build then needs no codegen toolchain, no protoc and nothing from the network, and a change to the table shows up in review as a diff. Re-run this when the .proto changes, and commit the result: nothing checks it for you, so a table left behind is a device and an app disagreeing about the interface, in silence.
 #
-# `gatt-gen` brings its own protoc (protoc-bin-vendored), so there is nothing to
-# install beyond a Rust toolchain.
+# `gatt-gen` brings its own protoc (protoc-bin-vendored), so there is nothing to install beyond a Rust toolchain.
 #
 # Usage: ./tool/gen_gatt.sh   (from calypso-core/, or anywhere)
 set -e
@@ -16,20 +11,9 @@ cd "$(dirname "$0")/../.."
 
 # The pipe's numbers, which both ends have to agree on.
 #
-#   --window 8           chunks in flight before the sender waits, and the
-#                        receiver acknowledges every window / 2. **This is the
-#                        flow control.** 127 was not one: a whole trace chunk
-#                        left as a single blast of ~150 notifications at an
-#                        18-byte frame, and the phone's own writes -- including
-#                        the acknowledgements the device was waiting for --
-#                        queued behind it for seconds (docs/GOTCHAS.md, "A
-#                        window of 127 is not flow control").
-#   --chunk-max 244      the pipe characteristic's backing buffer: one
-#                        notification's worth at a 247-byte MTU.
-#   --pipe-msg-max 4096  a whole chunk — 48 `TraceComputedPoint`s at ~1.9 KB,
-#                        or 48 `TraceRawPoint`s at ~1.4 KB — which is what makes
-#                        a trace one transfer per stored chunk instead of three
-#                        points a notification.
+#   --window 8           chunks in flight before the sender waits, and the receiver acknowledges every window / 2. **This is the flow control.** 127 was not one: a whole trace chunk left as a single blast of ~150 notifications at an 18-byte frame, and the phone's own writes -- including the acknowledgements the device was waiting for -- queued behind it for seconds.
+#   --chunk-max 244      the pipe characteristic's backing buffer: one notification's worth at a 247-byte MTU.
+#   --pipe-msg-max 4096  a whole chunk — 48 `TraceComputedPoint`s at ~1.9 KB, or 48 `TraceRawPoint`s at ~1.4 KB — which is what makes a trace one transfer per stored chunk instead of three points a notification.
 #   --xfer-timeout 5000  no progress for this long abandons a transfer.
 cargo run --quiet --manifest-path tools/gatt-gen/Cargo.toml -- \
   rust-trouble \

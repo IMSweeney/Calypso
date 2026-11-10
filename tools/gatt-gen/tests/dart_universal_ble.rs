@@ -107,10 +107,7 @@ fn a_bare_codec_is_emitted_for_the_direction_the_schema_uses_it_in() {
 
 #[test]
 fn a_write_method_is_laid_out_the_way_dart_format_leaves_it() {
-    // The generated file is committed as `dart format` leaves it, so the emitter has to pick the
-    // formatter's shape itself: the call on the `=>` line when it fits, on the line after when only
-    // that fits, and one argument per line when neither does. The app's format check is what enforces
-    // it; this says which of the three a characteristic is meant to get.
+    // The generated file is committed as `dart format` leaves it, so the emitter has to pick the formatter's shape itself: the call on the `=>` line when it fits, on the line after when only that fits, and one argument per line when neither does. The app's format check is what enforces it; this says which of the three a characteristic is meant to get.
     let (gatt, _) = load("valid/bare_codecs.proto").unwrap();
     let config = Config {
         messages_import: "../protocol/bare.pb.dart".to_string(),

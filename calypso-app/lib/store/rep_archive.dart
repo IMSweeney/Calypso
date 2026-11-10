@@ -67,8 +67,7 @@ BlockScan scanBlocks(Uint8List bytes) {
   var blockLength = 0;
   var blockHasTrace = false;
   (String, pb.RepSummary)? pending;
-  // The newest clock record so far: a capture read as history dates its reps from it, the way a fixture is dated
-  // by [`summariesOf`]. An archive the app itself wrote has the times on the summaries already, and no clocks.
+  // The newest clock record so far: a capture read as history dates its reps from it, the way a fixture is dated by [`summariesOf`]. An archive the app itself wrote has the times on the summaries already, and no clocks.
   var epochS = 0;
 
   while (pos + 4 <= bytes.length) {
@@ -89,8 +88,7 @@ BlockScan scanBlocks(Uint8List bytes) {
       truncated = true;
       break;
     }
-    // A clock is not part of a rep: it sets the epoch and belongs to no block, or a capture's boot record would
-    // be counted into whatever rep precedes it.
+    // A clock is not part of a rep: it sets the epoch and belongs to no block, or a capture's boot record would be counted into whatever rep precedes it.
     if (record.hasClock()) {
       epochS = record.clock.epochS;
       pos = start + length;

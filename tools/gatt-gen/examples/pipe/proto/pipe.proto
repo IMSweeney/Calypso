@@ -1,9 +1,6 @@
-// A device whose two characteristics are a pipe: one transfer carries one
-// message, however big, instead of one value.
+// A device whose two characteristics are a pipe: one transfer carries one message, however big, instead of one value.
 //
-// The shape is what SPEC.md calls a pipe: a written characteristic and a notified
-// one, sharing a name, with no `max_len` — a pipe sizes its transfers, not its
-// values.
+// The shape is what SPEC.md calls a pipe: a written characteristic and a notified one, sharing a name, with no `max_len` — a pipe sizes its transfers, not its values.
 
 syntax = "proto3";
 
@@ -28,8 +25,7 @@ service Bulk {
     primary: true
   };
 
-  // Written by the central: `WRITE_NO_RSP`, because the pipe acknowledges with
-  // its own chunks.
+  // Written by the central: `WRITE_NO_RSP`, because the pipe acknowledges with its own chunks.
   rpc Down(Command) returns (google.protobuf.Empty) {
     option (gatt.characteristic) = {
       uuid: "e3a20002-1f2c-4a5b-9d3e-8c7f6a5b4c3d"

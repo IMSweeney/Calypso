@@ -183,38 +183,6 @@ void main() {
     );
   });
 
-  test(
-    'the IMU read is in the app log, in the units the sample carries',
-    () async {
-      final records = captureLogs();
-      final link = FakeBleLink();
-      FakeDevice(
-        link,
-      ).servesImu(pb.ImuState(tUptimeMs: 123456, az: 981, qw: 16384));
-      final transport = BleTransport(
-        link,
-        traceTimeout: const Duration(milliseconds: 50),
-      );
-
-      final connecting = transport.connect();
-      await pumpEventQueue();
-      link.seeDevice('device-1', 'Calypso');
-      await connecting;
-      await transport.close();
-
-      final line = records.singleWhere(
-        (r) => r.message.contains(SyncClient.imuUuid),
-      );
-      expect(line.level, Level.FINE);
-      expect(line.message, contains('t=123456 ms'));
-      expect(
-        line.message,
-        contains('f=(0.00, 0.00, 9.81) m/s^2'),
-        reason: 'scaled out of the fixed point, so the log is readable',
-      );
-    },
-  );
-
   test('the transport reports the session, and every message in it', () async {
     final records = captureLogs();
     final link = FakeBleLink();

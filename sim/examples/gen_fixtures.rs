@@ -129,8 +129,6 @@ fn main() -> std::io::Result<()> {
             duration_ms: 100,
             rom: f32::MAX,
             peak_velocity: f32::MIN,
-            mean_velocity: f32::MAX,
-            peak_accel: f32::MAX,
             roll_min_deg: f32::MIN,
             roll_max_deg: f32::MAX,
             pitch_min_deg: f32::MIN,

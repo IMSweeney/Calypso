@@ -18,7 +18,6 @@ pb.RepSummary summary(
   int computedLen = 140,
   int chunkCount = 3,
   bool decimated = false,
-  bool calibrated = true,
 }) => pb.RepSummary(
   repUuid: uuidToBytes(testUuid(index)) ?? Uint8List(0),
   tStartMs: index * 10_000,
@@ -26,8 +25,6 @@ pb.RepSummary summary(
   durationMs: durationMs,
   rom: rom,
   peakVelocity: peakVelocity,
-  meanVelocity: peakVelocity / 3,
-  peakAccel: 2.5,
   rollMinDeg: -1,
   rollMaxDeg: 1,
   pitchMinDeg: -2,

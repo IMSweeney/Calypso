@@ -1,34 +1,22 @@
-//! Detectability map — phase 1 of `docs/DETECTOR_TESTS.md`.
+//! Detectability map.
 //!
-//! For one lift class, draw where a synthetic rep is stored and where it is not, as 2-D ASCII
-//! slices. A cell is one of three outcomes: `.` nothing stored, `#` exactly one rep stored, `X`
-//! more than one — the detector splitting one rep into two, which a boolean could not show. `*`
-//! marks the nominal. The map is a boundary, not a score — the interesting part is how far each
-//! nominal sits inside it, and the map is expected to show that some of the pause range stores
-//! nothing (that is a result, not a failure).
+//! For one lift class, draw where a synthetic rep is stored and where it is not, as 2-D ASCII slices. A cell is one of three outcomes: `.` nothing stored, `#` exactly one rep stored, `X` more than one — the detector splitting one rep into two, which a boolean could not show. `*` marks the nominal. The map is a boundary, not a score — the interesting part is how far each nominal sits inside it, and the map is expected to show that some of the pause range stores nothing (that is a result, not a failure).
 //!
-//! Five knobs (travel, speed in, speed out, pause top, pause bottom) do not plot, so the map is
-//! four slices. Travel is the x axis on every one of them: it is the dimension a lifter actually
-//! varies, and keeping it fixed to the columns makes the slices read the same way across.
+//! Five knobs (travel, speed in, speed out, pause top, pause bottom) do not plot, so the map is four slices. Travel is the x axis on every one of them: it is the dimension a lifter actually varies, and keeping it fixed to the columns makes the slices read the same way across.
 //!
 //!   1. travel × speed in
 //!   2. travel × speed out
 //!   3. travel × pause top
 //!   4. travel × pause bottom
 //!
-//! A slice is computed once, into [`Cell`]s by [`Slice::scan`], and the drawing here and the
-//! numbers in [`crate::stats`] are two views of those cells rather than two sweeps of the detector.
-//! The grid machinery is shared: [`crate::false_positive`] draws its slices with the same types, so
-//! both maps and the report read at the same resolution.
+//! A slice is computed once, into [`Cell`]s by [`Slice::scan`], and the drawing here and the numbers in [`crate::stats`] are two views of those cells rather than two sweeps of the detector.
+//! The grid machinery is shared: [`crate::false_positive`] draws its slices with the same types, so both maps and the report read at the same resolution.
 
 use crate::motion::{stored, Motion, Rep};
 
 /// One knob's sweep: the values it is drawn at, `steps` of them from `lo` to `hi` inclusive.
 ///
-/// A class carries these rather than the renderer imposing them, because how far from the nominal
-/// a rep still reads as a rep is a property of the lift: a bench's travel range is not a deadlift's,
-/// and a squat's speeds are not a press's. A class that wants a different grid for one knob writes
-/// its own (see [`profiles`]).
+/// A class carries these rather than the renderer imposing them, because how far from the nominal a rep still reads as a rep is a property of the lift: a bench's travel range is not a deadlift's, and a squat's speeds are not a press's. A class that wants a different grid for one knob writes its own (see [`profiles`]).
 #[derive(Debug, Clone, Copy)]
 pub struct Sweep {
     pub lo: f32,
@@ -48,8 +36,7 @@ impl Sweep {
             .collect()
     }
 
-    /// `lo..hi (n pts)`, for the header that says what a map was drawn over, printed to the same
-    /// precision as the axis so the header cannot name a range the columns do not show.
+    /// `lo..hi (n pts)`, for the header that says what a map was drawn over, printed to the same precision as the axis so the header cannot name a range the columns do not show.
     fn label(&self) -> String {
         let d = decimals_for(&self.values());
         format!(
@@ -61,8 +48,7 @@ impl Sweep {
     }
 }
 
-/// One axis of a slice: what the knob is called, the unit it is measured in, and the values it was
-/// drawn at, low to high.
+/// One axis of a slice: what the knob is called, the unit it is measured in, and the values it was drawn at, low to high.
 #[derive(Debug, Clone)]
 pub struct Knob {
     pub name: &'static str,
@@ -79,8 +65,7 @@ impl Knob {
         }
     }
 
-    /// Decimals needed to tell one value from its neighbour, so a run's ends do not all print as
-    /// the same number.
+    /// Decimals needed to tell one value from its neighbour, so a run's ends do not all print as the same number.
     pub fn decimals(&self) -> usize {
         decimals_for(&self.values)
     }
@@ -89,8 +74,7 @@ impl Knob {
         fmt(v, self.decimals())
     }
 
-    /// `lo .. hi unit`, the extent the knob was drawn over — the denominator of any count taken
-    /// over it.
+    /// `lo .. hi unit`, the extent the knob was drawn over — the denominator of any count taken over it.
     pub fn extent(&self) -> String {
         let (first, last) = match (self.values.first(), self.values.last()) {
             (Some(f), Some(l)) => (f, l),
@@ -180,8 +164,7 @@ pub struct Cell {
     /// The travel the motion asked for, so a stored ROM can be read against it.
     pub asked: f32,
     pub outcome: Outcome,
-    /// The stored rep's ROM. `None` unless exactly one was stored: no reps and several reps both
-    /// leave no single number to read.
+    /// The stored rep's ROM. `None` unless exactly one was stored: no reps and several reps both leave no single number to read.
     pub rom: Option<f32>,
 }
 
@@ -228,8 +211,7 @@ impl Slice {
         &self.cells[j * self.x.values.len() + i]
     }
 
-    /// Mark the cell nearest `(x, y)`, the class's nominal, so the drawing can point at it and the
-    /// report can measure the run through it.
+    /// Mark the cell nearest `(x, y)`, the class's nominal, so the drawing can point at it and the report can measure the run through it.
     pub fn mark(mut self, x: f32, y: f32) -> Self {
         self.nominal = Some((
             nearest_index(&self.x.values, x),
@@ -243,16 +225,13 @@ impl Slice {
     }
 }
 
-/// Half to one and a half times the nominal, so the map reaches well past where a class's own reps
-/// live in both directions: the boundary is what is being looked for, and its position is only
-/// meaningful if the map goes on past it.
+/// Half to one and a half times the nominal, so the map reaches well past where a class's own reps live in both directions: the boundary is what is being looked for, and its position is only meaningful if the map goes on past it.
 fn travel_sweep(nominal: f32) -> Sweep {
     Sweep::new(nominal * 0.5, nominal * 1.5, 21)
 }
 
 /// Both strokes, 0.1 to 2.0 m/s: from barely moving to the fastest a bar is pulled through a rep.
-/// Shared by every class — what a lift can be driven at is a property of the lift, but what the
-/// detector can resolve is a property of the detector, and that is what the sweep is asking.
+/// Shared by every class — what a lift can be driven at is a property of the lift, but what the detector can resolve is a property of the detector, and that is what the sweep is asking.
 const SPEEDS: Sweep = Sweep::new(0.1, 2.0, 21);
 
 /// Stillness at a turnaround, 0 to 1 s: no pause at all, to longer than any lifter holds at a turn.
@@ -325,9 +304,7 @@ impl Profile {
     }
 }
 
-/// A class with the sweeps every class starts from: travel ±50% of its own nominal, the speeds and
-/// pauses over [`SPEEDS`] and [`PAUSES`]. Override a field to give a class its own grid for that
-/// knob.
+/// A class with the sweeps every class starts from: travel ±50% of its own nominal, the speeds and pauses over [`SPEEDS`] and [`PAUSES`]. Override a field to give a class its own grid for that knob.
 fn profile_of(name: &'static str, rep: Rep) -> Profile {
     Profile {
         name,
@@ -349,8 +326,7 @@ pub fn profiles() -> [Profile; 3] {
     ]
 }
 
-/// Decimals needed to tell one axis value from its neighbour, so travel columns do not all print
-/// as the same two-decimal number.
+/// Decimals needed to tell one axis value from its neighbour, so travel columns do not all print as the same two-decimal number.
 fn decimals_for(vals: &[f32]) -> usize {
     let step = match (vals.first(), vals.get(1)) {
         (Some(a), Some(b)) => (b - a).abs(),
@@ -371,8 +347,7 @@ fn fmt(v: f32, decimals: usize) -> String {
     format!("{:.*}", decimals, v)
 }
 
-/// The grid index closest to `target`. The nominal travel lands exactly on its grid; a knob whose
-/// range does not put the nominal on a grid point gets the nearest cell marked instead.
+/// The grid index closest to `target`. The nominal travel lands exactly on its grid; a knob whose range does not put the nominal on a grid point gets the nearest cell marked instead.
 fn nearest_index(vals: &[f32], target: f32) -> usize {
     let mut best = 0;
     let mut best_d = f32::MAX;
@@ -466,16 +441,14 @@ pub(crate) fn draw(slice: &Slice, symbols: [char; 3], legend: &str) {
 mod tests {
     use super::*;
 
-    /// The sweeps are the class's, so a class that needs its own grid gets one without the
-    /// renderer knowing: this is the property the fields exist for.
+    /// The sweeps are the class's, so a class that needs its own grid gets one without the renderer knowing: this is the property the fields exist for.
     #[test]
     fn each_class_sweeps_its_own_grid() {
         let all = profiles();
         let bench = &all[0];
         let deadlift = &all[1];
 
-        // Where the classes must differ: their nominal travels are 36 cm apart, and the grid
-        // follows the nominal, so a shared travel sweep would have one of them off its own map.
+        // Where the classes must differ: their nominal travels are 36 cm apart, and the grid follows the nominal, so a shared travel sweep would have one of them off its own map.
         assert_ne!(bench.travel.lo, deadlift.travel.lo);
         assert_ne!(bench.travel.hi, deadlift.travel.hi);
 
@@ -502,8 +475,7 @@ mod tests {
         }
     }
 
-    /// A pause sweep starts at no pause at all: the no-rest edge is the one the detector is
-    /// measured against, so no class may quietly stop drawing it.
+    /// A pause sweep starts at no pause at all: the no-rest edge is the one the detector is measured against, so no class may quietly stop drawing it.
     #[test]
     fn every_pause_sweep_reaches_no_pause() {
         for p in &profiles() {
@@ -513,9 +485,7 @@ mod tests {
         }
     }
 
-    /// The four slices are the four knobs each crossed with travel, and a slice is drawn on its
-    /// class's own sweeps — so the map cannot plot a knob over another knob's range, and the
-    /// report's run is over the grid the drawing shows.
+    /// The four slices are the four knobs each crossed with travel, and a slice is drawn on its class's own sweeps — so the map cannot plot a knob over another knob's range, and the report's run is over the grid the drawing shows.
     #[test]
     fn the_slices_are_the_four_knobs_against_travel() {
         for p in profiles() {
@@ -549,8 +519,7 @@ mod tests {
                     slice.x.values.len() * slice.y.values.len()
                 );
 
-                // The star is the nearest grid point, so a class whose nominal is off-grid (the
-                // bench's 0.55 m/s between 0.48 and 0.575) is marked within half a step of it.
+                // The star is the nearest grid point, so a class whose nominal is off-grid (the bench's 0.55 m/s between 0.48 and 0.575) is marked within half a step of it.
                 let (i, j) = slice.nominal.expect("every class marks its nominal");
                 let half_x = (slice.x.values[1] - slice.x.values[0]) / 2.0;
                 let half_y = (slice.y.values[1] - slice.y.values[0]) / 2.0;

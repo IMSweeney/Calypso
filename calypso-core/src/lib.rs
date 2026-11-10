@@ -24,36 +24,3 @@ pub mod sampler;
 pub mod store;
 pub mod sync;
 pub mod uuid;
-
-/// Threshold (m/s²) under which a gravity component counts as "level".
-pub const LEVEL_THRESHOLD: f32 = 0.1;
-
-/// Whether the device is level along an axis, given that axis' gravity component (m/s²).
-pub fn is_level_along_axis(gravity_component: f32) -> bool {
-    gravity_component.abs() < LEVEL_THRESHOLD
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn level_when_gravity_is_orthogonal() {
-        assert!(is_level_along_axis(0.0));
-        assert!(is_level_along_axis(0.05));
-        assert!(is_level_along_axis(-0.05));
-    }
-
-    #[test]
-    fn not_level_when_gravity_along_axis() {
-        assert!(!is_level_along_axis(9.8));
-        assert!(!is_level_along_axis(0.5));
-        assert!(!is_level_along_axis(-0.5));
-    }
-
-    #[test]
-    fn threshold_is_exclusive() {
-        assert!(!is_level_along_axis(LEVEL_THRESHOLD));
-        assert!(!is_level_along_axis(-LEVEL_THRESHOLD));
-    }
-}

@@ -11,12 +11,9 @@ pub const QUAT_SCALE: i32 = 1 << 14;
 
 pub const SAMPLE_RATE_HZ: u32 = 100;
 
-/// What the sensor was set to when a rep was recorded: what the numbers in a stored trace mean, and
-/// which detection logic closed the rep.
+/// What the sensor was set to when a rep was recorded: what the numbers in a stored trace mean, and which detection logic closed the rep.
 ///
-/// It travels in a rep's summary rather than being assumed, because a trace is read on a different
-/// day by a different build — and because the scales here are the ones the chip's registers use,
-/// which its range setting does *not* change. A field left at 0 is one the device did not record.
+/// It travels in a rep's summary rather than being assumed, because a trace is read on a different day by a different build — and because the scales here are the ones the chip's registers use, which its range setting does *not* change. A field left at 0 is one the device did not record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RepConfig {
     /// The accelerometer's configured clip point, in g.
@@ -32,8 +29,7 @@ pub struct RepConfig {
 }
 
 impl RepConfig {
-    /// What the sampler itself knows: the rate it samples at and the version of the logic that
-    /// closed the rep. The sensor's own settings are the driver's to fill in.
+    /// What the sampler itself knows: the rate it samples at and the version of the logic that closed the rep. The sensor's own settings are the driver's to fill in.
     pub const fn of(rate_hz: u32, detector_version: u32) -> Self {
         RepConfig {
             sample_rate_hz: rate_hz,
@@ -56,8 +52,7 @@ impl RepConfig {
 /// One IMU sample, fixed point.
 ///
 /// - `t_ms`: monotonic timestamp in milliseconds.
-/// - `accel`: **specific force**, `ACCEL_SCALE` LSB/m/s² — gravity still in it, so a still sensor
-///   reads 1 g up its own up axis. This is the raw accelerometer, not an acceleration.
+/// - `accel`: **specific force**, `ACCEL_SCALE` LSB/m/s² — gravity still in it, so a still sensor reads 1 g up its own up axis. This is the raw accelerometer, not an acceleration.
 /// - `gyro`: angular rate, `GYRO_SCALE` LSB/dps, in the sensor's own frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Sample {

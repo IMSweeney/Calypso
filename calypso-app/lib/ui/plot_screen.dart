@@ -18,8 +18,7 @@ class PlotScreen extends StatefulWidget {
   final RepArchive store;
   final String repUuid;
 
-  /// What the screen calls the rep: what the row it was opened from called it. Naming a rep is the list's business,
-  /// and a rep the list cannot name is a rep it does not offer.
+  /// What the screen calls the rep: what the row it was opened from called it. Naming a rep is the list's business, and a rep the list cannot name is a rep it does not offer.
   final String label;
 
   @override

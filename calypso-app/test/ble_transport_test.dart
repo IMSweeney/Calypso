@@ -24,8 +24,6 @@ pb.RepSummary summaryProto(String uuid, {int computedLen = 7}) => pb.RepSummary(
   durationMs: 1400,
   rom: 0.41,
   peakVelocity: 0.7,
-  meanVelocity: 0.3,
-  peakAccel: 2.5,
   rollMinDeg: -1,
   rollMaxDeg: 1,
   pitchMinDeg: -2,
@@ -167,36 +165,38 @@ void main() {
     },
   );
 
-  test('a characteristic the schema does not declare is refused, named', () async {
-    // Every characteristic this build's schema declares, and one it does not: a uuid from outside the
-    // family, so this test cannot start passing by accident the next time the schema grows one.
-    final link = FakeBleLink()
-      ..services = const [
-        DiscoveredService('0000ca20-b0cd-11ec-871f-d45ddf138840', [
-          '0000ca21-b0cd-11ec-871f-d45ddf138840',
-          '0000ca22-b0cd-11ec-871f-d45ddf138840',
-          '0000ca24-b0cd-11ec-871f-d45ddf138840',
-          '0000ca25-b0cd-11ec-871f-d45ddf138840',
-          '0000ca23-b0cd-11ec-871f-d45ddf138840',
-          '12345678-1234-5678-1234-567812345678',
-        ]),
-      ];
+  test(
+    'a characteristic the schema does not declare is refused, named',
+    () async {
+      // Every characteristic this build's schema declares, and one it does not: a uuid from outside the family, so this test cannot start passing by accident the next time the schema grows one.
+      final link = FakeBleLink()
+        ..services = const [
+          DiscoveredService('0000ca20-b0cd-11ec-871f-d45ddf138840', [
+            '0000ca21-b0cd-11ec-871f-d45ddf138840',
+            '0000ca22-b0cd-11ec-871f-d45ddf138840',
+            '0000ca24-b0cd-11ec-871f-d45ddf138840',
+            '0000ca25-b0cd-11ec-871f-d45ddf138840',
+            '0000ca23-b0cd-11ec-871f-d45ddf138840',
+            '12345678-1234-5678-1234-567812345678',
+          ]),
+        ];
 
-    final transport = await connectedTransport(link);
+      final transport = await connectedTransport(link);
 
-    expect(transport.status.status, BleStatus.failed);
-    expect(link.subscribed, isEmpty, reason: 'nothing was subscribed to');
-    expect(
-      transport.status.error,
-      contains('12345678-1234-5678-1234-567812345678'),
-      reason: 'the stranger is in the message',
-    );
-    expect(
-      transport.status.error,
-      contains('cached GATT database'),
-      reason: 'and the cause a reflash does not fix',
-    );
-  });
+      expect(transport.status.status, BleStatus.failed);
+      expect(link.subscribed, isEmpty, reason: 'nothing was subscribed to');
+      expect(
+        transport.status.error,
+        contains('12345678-1234-5678-1234-567812345678'),
+        reason: 'the stranger is in the message',
+      );
+      expect(
+        transport.status.error,
+        contains('cached GATT database'),
+        reason: 'and the cause a reflash does not fix',
+      );
+    },
+  );
 
   test('a reversed GATT tree names both causes', () async {
     final link = FakeBleLink()
@@ -280,7 +280,6 @@ void main() {
 
       final request = pb.SyncRequest.fromBuffer(device.requests.single).trace;
       expect(uuidFromBytes(request.repUuid), u(1));
-      expect(request.allChunks, isTrue);
 
       device.send(chunkMessage(u(1), 2, 3, points: 1, from: 6));
       device.send(chunkMessage(u(1), 0, 3, from: 0));
@@ -464,8 +463,7 @@ void main() {
       final device = FakeDevice(link);
       final transport = await connectedTransport(link);
 
-      // The device holds this boot's summaries until it has a clock, so the write is the first thing that happens
-      // after the link is up — before the sync that asks for them.
+      // The device holds this boot's summaries until it has a clock, so the write is the first thing that happens after the link is up — before the sync that asks for them.
       expect(device.clocks, hasLength(1), reason: 'set once, at connect');
       final nowS = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
       expect(
@@ -551,48 +549,6 @@ void main() {
       expect(transport.reports.count, 0);
     },
   );
-
-  test('the IMU read is the sample the device\'s sampler last took', () async {
-    final link = FakeBleLink();
-    // Served before connecting: the transport reads it while bringing the link up, the way it
-    // reads the calibration levels.
-    FakeDevice(link).servesImu(
-      pb.ImuState(
-        tUptimeMs: 123456,
-        ax: 100,
-        ay: -50,
-        az: 981,
-        gx: 16,
-        gy: -32,
-        gz: 0,
-        qw: 16384,
-        qz: 4096,
-      ),
-    );
-    final transport = await connectedTransport(link);
-
-    final state = await transport.readImu();
-
-    expect(state, isNotNull);
-    expect(
-      state!.tUptimeMs,
-      123456,
-      reason: 'when the sampler read the sensor',
-    );
-    expect(
-      [state.ax, state.ay, state.az],
-      [100, -50, 981],
-      reason: 'specific force in the fixed point a trace carries, unchanged',
-    );
-    expect(
-      [state.gx, state.gy, state.gz],
-      [16, -32, 0],
-      reason: 'angular rate at 1/16 dps per LSB',
-    );
-    expect([state.qw, state.qx, state.qy, state.qz], [16384, 0, 0, 4096]);
-
-    await transport.disconnect();
-  });
 
   test('a device that cannot report faults is refused, named', () async {
     final link = FakeBleLink()

@@ -27,8 +27,7 @@ const String seedFixture = String.fromEnvironment(
   defaultValue: 'synthetic-squat',
 );
 
-/// The day heading's date, without a locale: the app carries no localisations, and three letters is all a heading
-/// needs.
+/// The day heading's date, without a locale: the app carries no localisations, and three letters is all a heading needs.
 const List<String> _weekdays = [
   'Mon',
   'Tue',
@@ -67,8 +66,7 @@ enum TraceState {
 
 /// One row: a rep the device has told the app about, and where its trace got to.
 ///
-/// A row only exists for a rep the device could date and that happened today (`_rows`), which is why the uuid and the
-/// time are not nullable here.
+/// A row only exists for a rep the device could date and that happened today (`_rows`), which is why the uuid and the time are not nullable here.
 class RepRow {
   const RepRow(this.summary, this.state);
 
@@ -119,8 +117,7 @@ class _RepListScreenState extends State<RepListScreen> {
   StreamSubscription<pb.RepSummary>? _live;
   Future<void> _writes = Future<void>.value();
 
-  /// The day the list is on, or null while it is on today. Null rather than today's date, so a screen left open
-  /// across midnight follows the clock instead of pinning the day it was opened on.
+  /// The day the list is on, or null while it is on today. Null rather than today's date, so a screen left open across midnight follows the clock instead of pinning the day it was opened on.
   DateTime? _day;
 
   @override
@@ -162,14 +159,11 @@ class _RepListScreenState extends State<RepListScreen> {
     return DateTime(local.year, local.month, local.day);
   }
 
-  /// One day either side of [day], as a calendar date: built from the date rather than by subtracting 24 hours, so a
-  /// page stays a calendar date across a daylight-saving change, and `DateTime` normalises a day number that walks
-  /// off either end of a month.
+  /// One day either side of [day], as a calendar date: built from the date rather than by subtracting 24 hours, so a page stays a calendar date across a daylight-saving change, and `DateTime` normalises a day number that walks off either end of a month.
   static DateTime _shift(DateTime day, int days) =>
       DateTime(day.year, day.month, day.day + days);
 
-  /// What the heading over the list says: `Today` needs no date, and `Yesterday` reads faster than one. Anything
-  /// further back is the date, with the year only when it is not this year's.
+  /// What the heading over the list says: `Today` needs no date, and `Yesterday` reads faster than one. Anything further back is the date, with the year only when it is not this year's.
   String get _dayHeading {
     final day = _day;
     if (day == null) return 'Today';
@@ -190,14 +184,10 @@ class _RepListScreenState extends State<RepListScreen> {
   }
 
   /// Back to today from however many pages back, which is the one page the arrows cannot reach in a single press.
-  /// Null is this screen's way of saying today, so a screen left open across midnight lands on the new day rather
-  /// than returning to the one it was opened on.
+  /// Null is this screen's way of saying today, so a screen left open across midnight lands on the new day rather than returning to the one it was opened on.
   void _toToday() => setState(() => _day = null);
 
-  /// The day a seeded fixture's reps are dated, so the app opens on the session the fixture is: a recording read
-  /// back months later would otherwise sit behind a today page that no arrow on today leads away from. Null when the
-  /// newest rep is today's, or when nothing in the archive is dated — the screen stays on today then, and the
-  /// forward arrow belongs off.
+  /// The day a seeded fixture's reps are dated, so the app opens on the session the fixture is: a recording read back months later would otherwise sit behind a today page that no arrow on today leads away from. Null when the newest rep is today's, or when nothing in the archive is dated — the screen stays on today then, and the forward arrow belongs off.
   DateTime? _seedDay(RepArchive archive) {
     DateTime? newest;
     for (final rep in archive.reps) {
@@ -239,8 +229,7 @@ class _RepListScreenState extends State<RepListScreen> {
           rep.hasTrace ? TraceState.fetched : TraceState.missing,
         ),
     ];
-    // `sort` is not stable, so the comparator has to be total: two reps in the same millisecond are ordered by uuid
-    // rather than by whatever order the list happened to be built in.
+    // `sort` is not stable, so the comparator has to be total: two reps in the same millisecond are ordered by uuid rather than by whatever order the list happened to be built in.
     rows.sort((a, b) {
       final at = a.summary.tUnixMs.toInt();
       final bt = b.summary.tUnixMs.toInt();
@@ -255,7 +244,7 @@ class _RepListScreenState extends State<RepListScreen> {
 
   /// The state of a rep's trace, as the row's trailing widget.
   ///
-  /// An icon and its word, and no spinner: a spinner never stops animating, and a widget test that waits for the tree to settle would wait for ever (docs/GOTCHAS.md).
+  /// An icon and its word, and no spinner: a spinner never stops animating, and a widget test that waits for the tree to settle would wait for ever.
   Widget _traceState(TraceState state) {
     final scheme = Theme.of(context).colorScheme;
     final (icon, label, colour) = switch (state) {
@@ -385,16 +374,11 @@ class _RepListScreenState extends State<RepListScreen> {
     return '';
   }
 
-  /// The day heading with an arrow either side of it: left is backwards in time, right is forwards, and forwards
-  /// stops at today because nothing has happened tomorrow.
+  /// The day heading with an arrow either side of it: left is backwards in time, right is forwards, and forwards stops at today because nothing has happened tomorrow.
   ///
-  /// The calendar at the end is the way back from a page more than one day back — a fixture's session, or a look at
-  /// last month — which the arrows would otherwise take that many presses to return from. It is disabled rather than
-  /// hidden while the screen is on today, so the arrows do not move under the finger as a page turns.
+  /// The calendar at the end is the way back from a page more than one day back — a fixture's session, or a look at last month — which the arrows would otherwise take that many presses to return from. It is disabled rather than hidden while the screen is on today, so the arrows do not move under the finger as a page turns.
   ///
-  /// The gap before the arrows is the calendar button's own width (`kMinInteractiveDimension`, which is what an
-  /// `IconButton` is), so the heading sits in the middle of the bar rather than in the middle of what is left of it
-  /// once the extra button is on one side.
+  /// The gap before the arrows is the calendar button's own width (`kMinInteractiveDimension`, which is what an `IconButton` is), so the heading sits in the middle of the bar rather than in the middle of what is left of it once the extra button is on one side.
   Widget _dayBar() => Row(
     children: [
       const SizedBox(width: kMinInteractiveDimension),
@@ -423,8 +407,7 @@ class _RepListScreenState extends State<RepListScreen> {
     ],
   );
 
-  /// The list with nothing on this day, which is not the same as an empty archive: the arrows are how you find out
-  /// where the reps are, so the words only have to say that this page is bare.
+  /// The list with nothing on this day, which is not the same as an empty archive: the arrows are how you find out where the reps are, so the words only have to say that this page is bare.
   Widget _empty(RepArchive? archive) {
     final error = _error;
     if (error != null) return Center(child: Text(error));

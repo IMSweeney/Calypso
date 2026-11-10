@@ -142,8 +142,7 @@ class BleTransport implements RepTransport {
       debugPrint(
         'calypso: device offers ${_describe(services)}; '
         'want ${SyncClient.serviceUuid}[${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}, '
-        '${SyncClient.reportsUuid}, ${SyncClient.timeUuid}, '
-        '${SyncClient.imuUuid}]',
+        '${SyncClient.reportsUuid}, ${SyncClient.timeUuid}]',
       );
       if (!_offersSync(services) || _strangersIn(services).isNotEmpty) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -229,32 +228,21 @@ class BleTransport implements RepTransport {
       return;
     }
 
-    // The schema's client for this connection: the calibration levels, which it reads, the clock, which it writes, and the reports it subscribes to.
+    // The schema's client for this connection: the clock, which it writes, and the reports it subscribes to.
     _client = SyncClient(_GattLink(_link, deviceId));
-    // Before the clock and before anything is asked for: from here on the device can tell
-    // the app what has gone wrong, including what it raised while nobody was listening.
+    // Before the clock and before anything is asked for: from here on the device can tell the app what has gone wrong, including what it raised while nobody was listening.
     await _subscribeReports();
-    // The clock before anything is asked for: the device holds this boot's summaries
-    // until it has one, and they are the reps this connection exists for.
+    // The clock before anything is asked for: the device holds this boot's summaries until it has one, and they are the reps this connection exists for.
     await setClock();
-    // Read the levels once now, so the hint is right from the first frame, and ask for them again on the app's own interval.
-    // The sensor's own numbers once per session: what the device was seeing as the link came up,
-    // which is what a log gets read against when a rep looks wrong later. Nothing shows it yet.
-    await readImu();
-
     bleLog.info('connected to $deviceId');
     status.set(BleStatus.connected, deviceId: deviceId);
   }
 
   /// Subscribe to the device's own reports of what went wrong, and start listening.
   ///
-  /// Notifications, not a read: a fault is an event with no state to catch up on, and the
-  /// device hands over anything it raised while nobody was listening as soon as this
-  /// subscription lands (`proto/calypso_gatt.proto`). Listening first and subscribing
-  /// second, because the first report can arrive the moment the subscription completes.
+  /// Notifications, not a read: a fault is an event with no state to catch up on, and the device hands over anything it raised while nobody was listening as soon as this subscription lands (`proto/calypso_gatt.proto`). Listening first and subscribing second, because the first report can arrive the moment the subscription completes.
   ///
-  /// A failure is logged and not raised: these are diagnostics, and a link that will not
-  /// carry them is still the link the reps sync over.
+  /// A failure is logged and not raised: these are diagnostics, and a link that will not carry them is still the link the reps sync over.
   Future<void> _subscribeReports() async {
     final client = _client;
     if (client == null) return;
@@ -281,36 +269,11 @@ class BleTransport implements RepTransport {
     reports.add(report.kind);
   }
 
-  /// The IMU as the sampler last read it: the sample the rep detector is fed.
-  ///
-  /// A read, not a subscription: the device republishes this ten times a second and a client that
-  /// wants to watch the sensor polls it, so this is whatever the table held at the moment of the
-  /// read. The numbers are the fixed point a stored trace carries (0.01 m/s^2, 1/2^14), and
-  /// `tUptimeMs` is when the sampler read the sensor — a value that stops moving while reps keep
-  /// arriving is a stalled sampler.
-  ///
-  /// Read once per connection and logged; nothing on screen uses it yet.
-  Future<pb.ImuState?> readImu() async {
-    final client = _client;
-    if (client == null) return null;
-    try {
-      final state = await client.readImu();
-      bleLog.fine('rx ${SyncClient.imuUuid} ${describeImuState(state)}');
-      return state;
-    } catch (e) {
-      bleLog.warning('could not read the IMU: $e');
-      return null;
-    }
-  }
-
   /// Tell the device what time it is: unix seconds in UTC.
   ///
-  /// The device keeps that as the epoch of the boot it is running — what its uptime zero was worth — and dates
-  /// every rep it sends with it, including the ones it stored before this write. The epoch lasts exactly one boot
-  /// (`proto/calypso.proto`), so it is set on every connection rather than tracked or cached here.
+  /// The device keeps that as the epoch of the boot it is running — what its uptime zero was worth — and dates every rep it sends with it, including the ones it stored before this write. The epoch lasts exactly one boot (`proto/calypso.proto`), so it is set on every connection rather than tracked or cached here.
   ///
-  /// A failure is logged and not raised: the reps still arrive, and one that cannot be dated is one the device
-  /// says nothing about rather than one the app guesses at.
+  /// A failure is logged and not raised: the reps still arrive, and one that cannot be dated is one the device says nothing about rather than one the app guesses at.
   Future<void> setClock() async {
     final client = _client;
     if (client == null) return;
@@ -332,23 +295,17 @@ class BleTransport implements RepTransport {
         service.characteristics.any(
           (c) => _sameUuid(c, SyncClient.requestsUuid),
         ) &&
-        // Required for the same reason as the clock: a device that cannot say what went wrong
-        // is one whose failures are silent, which is the thing this characteristic exists to end.
+        // Required for the same reason as the clock: a device that cannot say what went wrong is one whose failures are silent, which is the thing this characteristic exists to end.
         service.characteristics.any(
           (c) => _sameUuid(c, SyncClient.reportsUuid),
         ) &&
-        // Required rather than optional: without it nothing this device sends can be dated, and the archive it
-        // syncs into would keep those reps for ever (`proto/calypso_gatt.proto`).
+        // Required rather than optional: without it nothing this device sends can be dated, and the archive it syncs into would keep those reps for ever (`proto/calypso_gatt.proto`).
         service.characteristics.any((c) => _sameUuid(c, SyncClient.timeUuid)),
-    // No clause for the IMU: it is a diagnostic, read for the log rather than for the screen, so a
-    // device from before it existed is still one reps sync from ([`readImu`] logs the failure and
-    // returns null). It must still be a *known* characteristic, which is the other half of this
-    // file's check — see [`_strangersIn`].
   );
 
   /// The sync service's characteristics that the schema does not declare.
   ///
-  /// The device's table is generated from the schema, so one here is a tree that is not this firmware's: a cached database from an older build, or firmware this app predates. The attributes after it belong to that other table, which is what makes them worth refusing (docs/GOTCHAS.md).
+  /// The device's table is generated from the schema, so one here is a tree that is not this firmware's: a cached database from an older build, or firmware this app predates. The attributes after it belong to that other table, which is what makes them worth refusing.
   static List<String> _strangersIn(List<DiscoveredService> services) => [
     for (final service in services)
       if (_sameUuid(service.uuid, SyncClient.serviceUuid))
@@ -356,8 +313,7 @@ class BleTransport implements RepTransport {
           if (!_sameUuid(characteristic, SyncClient.messagesUuid) &&
               !_sameUuid(characteristic, SyncClient.requestsUuid) &&
               !_sameUuid(characteristic, SyncClient.reportsUuid) &&
-              !_sameUuid(characteristic, SyncClient.timeUuid) &&
-              !_sameUuid(characteristic, SyncClient.imuUuid))
+              !_sameUuid(characteristic, SyncClient.timeUuid))
             characteristic,
   ];
 
@@ -386,8 +342,7 @@ class BleTransport implements RepTransport {
     status.set(BleStatus.disconnected);
   }
 
-  /// Drop the client that belongs to the link that is going away, whether it was closed or lost
-  /// (`_client` holds a device id, and a read on it would go to a connection that no longer exists).
+  /// Drop the client that belongs to the link that is going away, whether it was closed or lost (`_client` holds a device id, and a read on it would go to a connection that no longer exists).
   void _dropClient() {
     _client = null;
   }
@@ -473,10 +428,7 @@ class BleTransport implements RepTransport {
     _requestTimers.remove(uuid)?.cancel();
 
     final request = pb.SyncRequest(
-      trace: pb.TraceRequest(
-        repUuid: uuidToBytes(uuid) ?? Uint8List(0),
-        allChunks: true,
-      ),
+      trace: pb.TraceRequest(repUuid: uuidToBytes(uuid) ?? Uint8List(0)),
     );
     try {
       // The request itself is a transfer now, and it is acknowledged before the device answers: the response budget starts when it lands, not when it is sent, or a slow link would spend it on the request.
@@ -684,8 +636,6 @@ class BleTransport implements RepTransport {
       case pb.SyncMessage_Body.raw:
         // Only a device whose dev switch is on records these, and nothing asks for one yet.
         break;
-      case pb.SyncMessage_Body.status:
-        break;
       case pb.SyncMessage_Body.notSet:
         break;
     }
@@ -751,10 +701,6 @@ class _GattLink implements GattClientLink {
   @override
   Stream<Uint8List> values(String characteristicUuid) =>
       _link.valueStream(_deviceId, characteristicUuid);
-
-  @override
-  Future<Uint8List> read(String serviceUuid, String characteristicUuid) =>
-      _link.read(_deviceId, serviceUuid, characteristicUuid);
 
   @override
   Future<void> write(

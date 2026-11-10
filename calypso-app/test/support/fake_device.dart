@@ -32,8 +32,7 @@ class FakeDevice {
   final Receiver _receiver = Receiver(SyncPipe.window);
   final Uint8List _inbound = Uint8List(SyncPipe.messageMax);
 
-  /// How much payload one chunk carries on this link, for a message of `length`
-  /// bytes (the length is part of the frame, so it belongs to the sum).
+  /// How much payload one chunk carries on this link, for a message of `length` bytes (the length is part of the frame, so it belongs to the sum).
   int? payloadCapacity(int length) => capacity(mtu, SyncPipe.chunkMax, length);
 
   /// A frame the device puts on the wire, as the app would see it.
@@ -72,14 +71,6 @@ class FakeDevice {
 
   /// The clock the app has set, in unix seconds: the device's own copy of it, and what it dates its reps by.
   final List<int> clocks = [];
-
-  /// Put `state` in the table's IMU characteristic: the sample the device's sampler last read.
-  ///
-  /// The device republishes it ten times a second whether or not anybody is reading, so a test
-  /// serves one and the app reads it on its own schedule.
-  void servesImu(pb.ImuState state) {
-    link.readValues[SyncClient.imuUuid] = state.writeToBuffer();
-  }
 
   /// Put a fault on the `Reports` characteristic, which is how the device says something went wrong.
   ///

@@ -24,26 +24,19 @@ pub const OUTPUT_FILE: &str = "gatt.rs";
 /// What the generated code needs to know about the crate it lands in.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Where the generated protobuf message types live, e.g. `crate::pb::msg`
-    /// for a crate whose `micropb` output is re-exported there.
+    /// Where the generated protobuf message types live, e.g. `crate::pb::msg` for a crate whose `micropb` output is re-exported there.
     pub message_module: String,
     /// The name of the generated server struct.
     pub server_name: String,
-    /// Backing buffer of a pipe characteristic: the largest chunk that goes in
-    /// one notification.
+    /// Backing buffer of a pipe characteristic: the largest chunk that goes in one notification.
     pub pipe_chunk_max: usize,
-    /// Largest message a pipe may carry. `0` skips the check, for schemas whose
-    /// pipes are not in use yet.
+    /// Largest message a pipe may carry. `0` skips the check, for schemas whose pipes are not in use yet.
     pub pipe_msg_max: usize,
-    /// How many chunks a pipe may have in flight before it waits for an
-    /// acknowledgement. Below 128: a cumulative acknowledgement against a
-    /// wrapping `u8` sequence number is only unambiguous below half the space.
+    /// How many chunks a pipe may have in flight before it waits for an acknowledgement. Below 128: a cumulative acknowledgement against a wrapping `u8` sequence number is only unambiguous below half the space.
     pub window: u8,
     /// No-progress timeout for one transfer, in milliseconds.
     pub xfer_timeout_ms: u32,
-    /// The command that regenerates this file, written into its own header so
-    /// that whoever finds it does not have to work out how. The tool fills this
-    /// in with the invocation it was given.
+    /// The command that regenerates this file, written into its own header so that whoever finds it does not have to work out how. The tool fills this in with the invocation it was given.
     pub regenerate_with: Option<String>,
 }
 
@@ -134,8 +127,7 @@ pub fn generate(gatt: &Gatt, config: &Config) -> Result<Output, Error> {
     })
 }
 
-/// The UUIDs the schema declares, so nothing else in the firmware needs a copy of
-/// them — the advertisement included.
+/// The UUIDs the schema declares, so nothing else in the firmware needs a copy of them — the advertisement included.
 fn emit_uuids(out: &mut String, gatt: &Gatt) -> Result<(), Error> {
     let wire = |uuid: &str, what: &str| -> Result<[u8; 16], Error> {
         let canonical = crate::uuid::parse_canonical(uuid).ok_or_else(|| {
@@ -195,8 +187,7 @@ fn emit_uuids(out: &mut String, gatt: &Gatt) -> Result<(), Error> {
     Ok(())
 }
 
-/// Close a module or struct the way `rustfmt` leaves it: no blank line before the
-/// brace.
+/// Close a module or struct the way `rustfmt` leaves it: no blank line before the brace.
 fn end_module(out: &mut String) {
     while out.ends_with('\n') {
         out.pop();
@@ -204,13 +195,10 @@ fn end_module(out: &mut String) {
     out.push_str("\n}\n\n");
 }
 
-/// `rustfmt`'s line budget, which the generated file has to satisfy: it is
-/// committed, and `cargo fmt --check` covers it like any other source file.
+/// `rustfmt`'s line budget, which the generated file has to satisfy: it is committed, and `cargo fmt --check` covers it like any other source file.
 const MAX_WIDTH: usize = 100;
 
-/// A byte array laid out the way `rustfmt` would leave it: one line if it fits,
-/// otherwise filled to the width budget. Emitting it unformatted would make the
-/// committed file fail the repo's own `cargo fmt --check`.
+/// A byte array laid out the way `rustfmt` would leave it: one line if it fits, otherwise filled to the width budget. Emitting it unformatted would make the committed file fail the repo's own `cargo fmt --check`.
 fn byte_array(bytes: &[u8; 16], indent: usize) -> String {
     let hex: Vec<String> = bytes.iter().map(|byte| format!("0x{byte:02x}")).collect();
     let single = format!("[{}]", hex.join(", "));
@@ -240,9 +228,7 @@ fn byte_array(bytes: &[u8; 16], indent: usize) -> String {
     out
 }
 
-/// The declared `max_len` of every sized characteristic, so a buffer that has to
-/// hold one is sized from the schema rather than from a second number kept in
-/// step by hand.
+/// The declared `max_len` of every sized characteristic, so a buffer that has to hold one is sized from the schema rather than from a second number kept in step by hand.
 fn emit_max_lens(out: &mut String, gatt: &Gatt) {
     let sized: Vec<(&Characteristic, String)> = gatt
         .characteristics()
@@ -286,8 +272,7 @@ fn summary(gatt: &Gatt) -> String {
     format!("Schema: {}", services.join(", "))
 }
 
-/// The value type a protobuf characteristic stores. A pipe characteristic does
-/// not get one: it carries chunks, which the pipe runtime owns.
+/// The value type a protobuf characteristic stores. A pipe characteristic does not get one: it carries chunks, which the pipe runtime owns.
 fn emit_value_type(out: &mut String, characteristic: &Characteristic, config: &Config) {
     let ValueType::Message(message) = characteristic.value_type() else {
         return;
@@ -410,15 +395,12 @@ fn emit_service(out: &mut String, service: &Service) {
     end_module(out);
 }
 
-/// The `#[characteristic(...)]` attribute, split over lines when `rustfmt` would
-/// split it (its attribute budget is `attr_fn_like_width`, 70 by default).
+/// The `#[characteristic(...)]` attribute, split over lines when `rustfmt` would split it (its attribute budget is `attr_fn_like_width`, 70 by default).
 fn characteristic_attr(characteristic: &Characteristic) -> String {
     let properties: Vec<&str> = property_names(characteristic);
     let uuid = &characteristic.uuid;
 
-    // The budget is the attribute's *arguments*, not the whole line: that is what
-    // `attr_fn_like_width` measures, and matching it is what keeps the committed
-    // file format-clean without running rustfmt over it.
+    // The budget is the attribute's *arguments*, not the whole line: that is what `attr_fn_like_width` measures, and matching it is what keeps the committed file format-clean without running rustfmt over it.
     let arguments = if properties.is_empty() {
         format!("uuid = \"{uuid}\"")
     } else {
@@ -703,8 +685,7 @@ fn decoded_type(characteristic: &Characteristic, config: &Config) -> String {
 
 /// The characteristic's storage: the value itself, or a chunk buffer for a pipe.
 ///
-/// A pipe's is `PIPE_STORAGE_MAX`, one byte wider than the largest frame it can
-/// hold: see the constant for why the spare byte is not slack.
+/// A pipe's is `PIPE_STORAGE_MAX`, one byte wider than the largest frame it can hold: see the constant for why the spare byte is not slack.
 fn storage_type(characteristic: &Characteristic, len: u32) -> String {
     if characteristic.pipe.is_some() {
         return "Vec<u8, PIPE_STORAGE_MAX>".to_string();

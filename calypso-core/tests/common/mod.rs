@@ -13,8 +13,7 @@ pub const WIDE_SECTORS: usize = 64;
 
 // Bytes the mock flash has handed out read.
 //
-// Counted outside the flash because the log borrows the flash for as long as it lives: a test that measures what a
-// read cost cannot touch the flash to ask.
+// Counted outside the flash because the log borrows the flash for as long as it lives: a test that measures what a read cost cannot touch the flash to ask.
 std::thread_local! {
     static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -29,8 +28,7 @@ pub fn reads() -> usize {
     READS.with(|r| r.get())
 }
 
-// Sectors erased, counted for the same reason as the reads: on the device an erase stops the whole chip for tens of
-// milliseconds, so "this append did not erase" is the property worth asserting, rather than how it was arranged.
+// Sectors erased, counted for the same reason as the reads: on the device an erase stops the whole chip for tens of milliseconds, so "this append did not erase" is the property worth asserting, rather than how it was arranged.
 std::thread_local! {
     static ERASES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

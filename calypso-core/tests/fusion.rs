@@ -1,8 +1,6 @@
-//! The filter, on its own: what the accelerometer and gyroscope say about where the bar is and
-//! which way is down.
+//! The filter, on its own: what the accelerometer and gyroscope say about where the bar is and which way is down.
 //!
-//! Everything here is a stream fed straight to [`Fusion`], so a failure names the filter rather than
-//! the detector or the trace. What the *pipeline* stores is `calypso-sim`'s.
+//! Everything here is a stream fed straight to [`Fusion`], so a failure names the filter rather than the detector or the trace. What the *pipeline* stores is `calypso-sim`'s.
 
 use calypso_core::fusion::{
     magnitude, quat_from_rotvec, roll_pitch_deg, rotate_by_quat, Fusion, FusionState, GRAVITY,
@@ -13,9 +11,7 @@ const DT_MS: u32 = 10;
 
 /// A sample of a sensor at rest, mounted so that its own up axis is `mount` away from the world's.
 ///
-/// At rest the accelerometer measures gravity and nothing else, so this is exactly `1 g` along the
-/// sensor's up axis — the whole point of the raw path: a still sensor reads a number with a known
-/// meaning, and anything else is the sensor's own offset.
+/// At rest the accelerometer measures gravity and nothing else, so this is exactly `1 g` along the sensor's up axis — the whole point of the raw path: a still sensor reads a number with a known meaning, and anything else is the sensor's own offset.
 fn rest(t_ms: u32, mount: [f32; 3], offset: [f32; 3], gyro_dps: [f32; 3]) -> Sample {
     let up = rotate_by_quat(quat_from_rotvec(mount), [0.0, 0.0, 1.0]);
     Sample {
@@ -44,10 +40,7 @@ fn settle(mount: [f32; 3], offset: [f32; 3], gyro_dps: [f32; 3], ms: u32) -> (Fu
 
 /// A sensor at rest reads nothing, whatever angle it is bolted on at.
 ///
-/// This is the property the fused path could not offer: "linear acceleration" there is zero at rest
-/// by definition, so it cannot be checked. Here the accelerometer reads gravity and the filter takes
-/// its direction from it, so every mount is the same answer — including the ones beyond a quarter
-/// turn, where the attitude has to be turned right over.
+/// This is the property the fused path could not offer: "linear acceleration" there is zero at rest by definition, so it cannot be checked. Here the accelerometer reads gravity and the filter takes its direction from it, so every mount is the same answer — including the ones beyond a quarter turn, where the attitude has to be turned right over.
 #[test]
 fn a_still_sensor_reads_nothing_at_any_attitude() {
     for axis in 0..3 {
@@ -72,12 +65,9 @@ fn a_still_sensor_reads_nothing_at_any_attitude() {
     }
 }
 
-/// An accelerometer offset is learned while the bar is still, and a still bar does not accelerate
-/// because of it.
+/// An accelerometer offset is learned while the bar is still, and a still bar does not accelerate because of it.
 ///
-/// The offset arrives in the sensor's own frame, so which axis it is on must not matter — and a z
-/// offset is the interesting one: a sideways one is indistinguishable from a tilt at one
-/// orientation, while the vertical component has nowhere to hide.
+/// The offset arrives in the sensor's own frame, so which axis it is on must not matter — and a z offset is the interesting one: a sideways one is indistinguishable from a tilt at one orientation, while the vertical component has nowhere to hide.
 #[test]
 fn a_constant_offset_is_learned_from_the_still_window() {
     for offset in [
@@ -100,10 +90,7 @@ fn a_constant_offset_is_learned_from_the_still_window() {
 
 /// A gyroscope that reports a rate while nothing is turning does not rotate the ground.
 ///
-/// The attitude is integrated from the gyro, so an offset in it is a slow tilt that never stops —
-/// and a tilt is gravity leaking into the horizontal, which is the acceleration a detector would
-/// read as a bar being carried. The offset is learned from the same still window as the
-/// accelerometer's.
+/// The attitude is integrated from the gyro, so an offset in it is a slow tilt that never stops — and a tilt is gravity leaking into the horizontal, which is the acceleration a detector would read as a bar being carried. The offset is learned from the same still window as the accelerometer's.
 #[test]
 fn a_gyro_offset_does_not_rotate_gravity() {
     for axis in 0..3 {
@@ -123,10 +110,7 @@ fn a_gyro_offset_does_not_rotate_gravity() {
 
 /// A gyro bias that arrives after boot is learned during the set, not only at its rests.
 ///
-/// A bar moving up and down has no angular rate and leaves gravity pointing the same way in the
-/// sensor's frame, so a set teaches the gyro even between reps. Without that, a degree per second
-/// left in the attitude walks the vertical over a set, and the horizontal velocity that leaks from
-/// it is metres per second the bar never had.
+/// A bar moving up and down has no angular rate and leaves gravity pointing the same way in the sensor's frame, so a set teaches the gyro even between reps. Without that, a degree per second left in the attitude walks the vertical over a set, and the horizontal velocity that leaks from it is metres per second the bar never had.
 #[test]
 fn a_gyro_bias_that_arrives_during_a_set_does_not_walk_the_ground() {
     let mut fusion = Fusion::new();
@@ -193,9 +177,7 @@ fn feed(
 
 /// A boot in the middle of a rep is not ready, and becomes ready at the first rest — never before.
 ///
-/// There is nothing to integrate before the filter has seen gravity, so a bar that starts moving at
-/// a boot has no frame at all. What matters is that it says so rather than inventing one: the gate
-/// the device records through is this answer.
+/// There is nothing to integrate before the filter has seen gravity, so a bar that starts moving at a boot has no frame at all. What matters is that it says so rather than inventing one: the gate the device records through is this answer.
 #[test]
 fn a_boot_in_motion_is_not_ready_until_the_bar_stops() {
     let mut fusion = Fusion::new();
@@ -225,14 +207,9 @@ fn a_boot_in_motion_is_not_ready_until_the_bar_stops() {
     );
 }
 
-/// A stored trace is re-derivable: the state is the filter's memory, so the same window and the same
-/// state give the same run, and a run that started earlier lands in the same place.
+/// A stored trace is re-derivable: the state is the filter's memory, so the same window and the same state give the same run, and a run that started earlier lands in the same place.
 ///
-/// Two claims. **Determinism** is the one the archive depends on: a summary recomputed from a trace
-/// and its header is the summary that was stored, bit for bit. **Fidelity** is the one that says the
-/// state is enough: a filter started from a recorded state tracks the one that never stopped. The
-/// offsets are the exception and are allowed a hair — a replay has to refill its stillness window,
-/// which pauses the slow tracking for 400 ms, and nothing the trace is integrated from can see it.
+/// Two claims. **Determinism** is the one the archive depends on: a summary recomputed from a trace and its header is the summary that was stored, bit for bit. **Fidelity** is the one that says the state is enough: a filter started from a recorded state tracks the one that never stopped. The offsets are the exception and are allowed a hair — a replay has to refill its stillness window, which pauses the slow tracking for 400 ms, and nothing the trace is integrated from can see it.
 #[test]
 fn a_replay_from_a_state_reproduces_the_run() {
     let mut samples = Vec::new();
@@ -250,8 +227,7 @@ fn a_replay_from_a_state_reproduces_the_run() {
         });
     }
 
-    // Past the boot, because a replay is not a boot: `from_state` takes the attitude as learned, so
-    // the state a stored window carries is always one taken after the filter was ready.
+    // Past the boot, because a replay is not a boot: `from_state` takes the attitude as learned, so the state a stored window carries is always one taken after the filter was ready.
     let at = 150;
     let mut live = Fusion::new();
     for s in &samples[..=at] {
@@ -259,8 +235,7 @@ fn a_replay_from_a_state_reproduces_the_run() {
     }
     let state = live.state();
 
-    // The window starts at the sample the state was taken at, so the replay is fed that one too: it
-    // is the replay's starting point rather than a step from one, so it changes nothing.
+    // The window starts at the sample the state was taken at, so the replay is fed that one too: it is the replay's starting point rather than a step from one, so it changes nothing.
     let mut again = Fusion::from_state(state);
     let mut replay = Fusion::from_state(state);
     for s in &samples[at..] {

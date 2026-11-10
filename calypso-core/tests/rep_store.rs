@@ -31,8 +31,7 @@ fn append_set(
     }
 }
 
-/// A set costs the sampler nothing but the write when the ring is erased ahead of it, and this is that said as the
-/// flash sees it: the same three reps, into the same wrapped ring, with and without a reserve.
+/// A set costs the sampler nothing but the write when the ring is erased ahead of it, and this is that said as the flash sees it: the same three reps, into the same wrapped ring, with and without a reserve.
 #[test]
 fn a_set_appended_into_a_reserve_erases_nothing() {
     let (samples, _) = squat_set(3, 1500, 800, 0.4);
@@ -40,9 +39,7 @@ fn a_set_appended_into_a_reserve_erases_nothing() {
     let mut flash = WideFlash::new();
     let mut buf = [0u8; RECORD_BUF_BYTES];
 
-    // Round the ring, so that the sector it drops next holds a rep and a set landing in it has to erase. How many
-    // sets that takes is the record sizes' business, so the loop asks the ring rather than guessing: one sector ahead
-    // that reads erased means the ring has not been round yet.
+    // Round the ring, so that the sector it drops next holds a rep and a set landing in it has to erase. How many sets that takes is the record sizes' business, so the loop asks the ring rather than guessing: one sector ahead that reads erased means the ring has not been round yet.
     let mut log = mount(&mut flash);
     let mut set = 0;
     while log.prepared_ahead(1).unwrap() > 0 {
@@ -200,8 +197,7 @@ fn oldest_reps_fall_off_when_the_ring_wraps() {
 
 /// A trace read that is told where the rep is: the same points as the walk, and a fraction of the reads.
 ///
-/// This is the path a trace request takes, and the cost is the thing being tested: the walk is what used to hold the
-/// sampler off its tick for seconds while the phone waited for a trace (docs/GOTCHAS.md).
+/// This is the path a trace request takes, and the cost is the thing being tested: the walk is what used to hold the sampler off its tick for seconds while the phone waited for a trace.
 #[test]
 fn a_trace_read_from_its_summary_walks_the_reps_records_only() {
     let (samples, _) = squat_set(1, 1500, 800, 0.4);

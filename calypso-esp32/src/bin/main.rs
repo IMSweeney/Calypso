@@ -38,10 +38,8 @@ use bno055::Bno055;
 use bno055::{AccBandwidth, AccGRange, BNO055OperationMode};
 use calypso_core::clock::{self, Boots};
 use calypso_core::flashlog::{self, FlashLog};
-use calypso_core::fusion::{Fusion, FusionState, GRAVITY, conjugate, rotate_by_quat};
-use calypso_core::gatt::{
-    CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncImuValue, SyncReportsValue,
-};
+use calypso_core::fusion::{Fusion, FusionState};
+use calypso_core::gatt::{CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncReportsValue};
 use calypso_core::pb::msg;
 use calypso_core::pipe::{self, Session, Stalled};
 use calypso_core::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, compute_rep};
@@ -82,9 +80,7 @@ const DEVICE_NAME: &str = "Calypso";
 
 /// Whether a client has armed dev mode this boot: every rep stored from here on keeps its raw trace as well as its plotted one.
 ///
-/// Off at every boot and never persisted (`msg::DevMode` says why): a switch left on fills the log three times as fast,
-/// and a switch remembered would cost a reflash to turn off. On from the first sample in a record-mode build, because
-/// the raw trace is the whole of what that build is for and no client is there to ask for it.
+/// Off at every boot and never persisted (`msg::DevMode` says why): a switch left on fills the log three times as fast, and a switch remembered would cost a reflash to turn off. On from the first sample in a record-mode build, because the raw trace is the whole of what that build is for and no client is there to ask for it.
 static DEV_MODE: AtomicBool = AtomicBool::new(RECORD_MODE);
 
 /// The wall clock the client last set: unix seconds at this boot's uptime zero, or 0 while nothing has set one.
@@ -103,12 +99,6 @@ static BOOT_FROM_ID: AtomicU32 = AtomicU32::new(0);
 static REPORTS: critical_section::Mutex<RefCell<Latch>> =
     critical_section::Mutex::new(RefCell::new(Latch::new()));
 
-/// The last sample the sampler read, for the app's read of the `Imu` characteristic.
-///
-/// A critical-section mutex for the reason [`REPORTS`] is one: the sampler writes it a hundred times a second and the BLE task copies it out on its tick, and a sample assembled from two different reads — an acceleration from one tick beside a quaternion from the next — would be a reading the sensor never gave.
-static LAST_SAMPLE: critical_section::Mutex<RefCell<Option<(Sample, [f32; 4])>>> =
-    critical_section::Mutex::new(RefCell::new(None));
-
 /// Room for one `BootClock` record: a varint field, its tag, and the record envelope (`proto/calypso.proto`).
 const CLOCK_RECORD_BYTES: usize = 16;
 
@@ -118,33 +108,23 @@ const FAKE_REPS: bool = cfg!(feature = "fake-reps");
 
 /// Record mode: raw windows of whatever the sensor read, on a timer, with no detector (`--features record-mode`).
 ///
-/// The opposite question to [`FAKE_REPS`]: that one exercises the path with motion that never happened, and this one
-/// captures motion that did, whether or not anything in it was a rep — which is the only evidence a session that
-/// stored nothing can leave behind. The filter still runs, because its offsets and its attitude are half of what a
-/// capture is read for; only the decision that a window is worth keeping is taken away from the detector.
+/// The opposite question to [`FAKE_REPS`]: that one exercises the path with motion that never happened, and this one captures motion that did, whether or not anything in it was a rep — which is the only evidence a session that stored nothing can leave behind. The filter still runs, because its offsets and its attitude are half of what a capture is read for; only the decision that a window is worth keeping is taken away from the detector.
 const RECORD_MODE: bool = cfg!(feature = "record-mode");
 
-/// A build asks for one bench behaviour, not two: a device that both fabricated reps and recorded windows would tell a
-/// reader nothing about which of them a stored record was.
+/// A build asks for one bench behaviour, not two: a device that both fabricated reps and recorded windows would tell a reader nothing about which of them a stored record was.
 const _: () = assert!(!(FAKE_REPS && RECORD_MODE));
 
 /// How much of the ring a recorded window holds, and how long after one closes the next opens.
 ///
-/// Nine seconds rather than ten: the window is copied into `REP_WINDOW_SAMPLES`, and ten seconds at 100 Hz is one
-/// sample more than that buffer holds. The period is the window's own length, so windows tile and a set runs across as
-/// many as it needs: a set takes longer than nine seconds, and the alternative — one window in three — captures the
-/// middle of it. The append is what sits between two windows, which is where a flash write has to be.
+/// Nine seconds rather than ten: the window is copied into `REP_WINDOW_SAMPLES`, and ten seconds at 100 Hz is one sample more than that buffer holds. The period is the window's own length, so windows tile and a set runs across as many as it needs: a set takes longer than nine seconds, and the alternative — one window in three — captures the middle of it. The append is what sits between two windows, which is where a flash write has to be.
 const RECORD_WINDOW_MS: u32 = 9_000;
-const RECORD_PERIOD_MS: u32 = RECORD_WINDOW_MS;
+const RECORD_PERIOD_MS: u32 = 30_000;
 
 /// What a stored rep's summary says about the sensor that recorded it.
 ///
-/// The settings are the ones `main` puts the chip in before it starts sampling, and the read-back there is what says the
-/// chip agreed. The accelerometer's range and bandwidth are chosen; the gyroscope's are the chip's defaults, because this
-/// driver can set only the accelerometer's and 2000 dps is past anything a barbell does.
+/// The settings are the ones `main` puts the chip in before it starts sampling, and the read-back there is what says the chip agreed. The accelerometer's range and bandwidth are chosen; the gyroscope's are the chip's defaults, because this driver can set only the accelerometer's and 2000 dps is past anything a barbell does.
 ///
-/// None of it changes the scale a trace is decoded with — the registers are fixed at 1 m/s² = 100 LSB and 1 dps = 16 LSB
-/// whatever the range — so this is what the numbers were taken under, not how to convert them.
+/// None of it changes the scale a trace is decoded with — the registers are fixed at 1 m/s² = 100 LSB and 1 dps = 16 LSB whatever the range — so this is what the numbers were taken under, not how to convert them.
 const SAMPLER_CONFIG: calypso_core::sampler::RepConfig = calypso_core::sampler::RepConfig {
     accel_range_g: 8,
     gyro_range_dps: 2000,
@@ -157,9 +137,7 @@ const SAMPLER_CONFIG: calypso_core::sampler::RepConfig = calypso_core::sampler::
 
 /// Attempts at starting the sensor before the device reboots.
 ///
-/// A reset that lands in the middle of an I²C read leaves the sensor holding SDA low, and the first transaction after it
-/// times out rather than answering; the driver clears the bus on that error, so the next attempt is on a clean one. Five
-/// is enough for that and for a sensor still coming up, and short enough that a genuinely absent sensor reboots quickly.
+/// A reset that lands in the middle of an I²C read leaves the sensor holding SDA low, and the first transaction after it times out rather than answering; the driver clears the bus on that error, so the next attempt is on a clean one. Five is enough for that and for a sensor still coming up, and short enough that a genuinely absent sensor reboots quickly.
 const BNO055_INIT_ATTEMPTS: u32 = 5;
 
 /// How long each attempt after the first waits, in milliseconds.
@@ -172,9 +150,7 @@ const FAKE_REP_MS: u32 = 6_000;
 /// Ring-buffer window: how much history the detector can be asked for, plus headroom.
 ///
 /// When the detector closes a rep, the sampler copies `[start - margin, end + margin]` out of the ring.
-/// The longest rep the detector can close is 8 s and the margins are 500 ms each side — as long as they
-/// are because the filter only calls a bar at rest after it has held still for 400 ms — so 9 s is the
-/// most that is ever needed and 12 s leaves a third of the ring spare.
+/// The longest rep the detector can close is 8 s and the margins are 500 ms each side — as long as they are because the filter only calls a bar at rest after it has held still for 400 ms — so 9 s is the most that is ever needed and 12 s leaves a third of the ring spare.
 ///
 /// Growing it costs heap the radio also lives in: read `Radio up, heap free N B` and `Sync buffers ready, heap free N B` in the boot log before changing it.
 const SAMPLE_RING_LEN: usize = REP_WINDOW_SAMPLES + 3 * SAMPLE_RATE_HZ as usize;
@@ -186,18 +162,14 @@ type SampleWindow = RefCell<SampleRing<'static>>;
 /// Longest gap between two samples that is still this loop being busy rather than stopped: ten times the tick, and well past the tens of ms a flash write in this loop costs.
 const SAMPLER_HOLE_MS: u32 = 500;
 
-/// How many already-erased sectors to keep ahead of the ring, so an append finds the space it needs already blank
-/// and never stops the sampler to make some.
+/// How many already-erased sectors to keep ahead of the ring, so an append finds the space it needs already blank and never stops the sampler to make some.
 ///
-/// A sample is 21 bytes on the wire, so 100 Hz is 2.1 kB/s and a minute — one set — is 31 sectors of 4 kB. The price
-/// is that many sectors of history: the reserve is erased from the oldest end of the ring, so a device holding this
-/// much ahead remembers that many sectors less than it has room for.
+/// A sample is 21 bytes on the wire, so 100 Hz is 2.1 kB/s and a minute — one set — is 31 sectors of 4 kB. The price is that many sectors of history: the reserve is erased from the oldest end of the ring, so a device holding this much ahead remembers that many sectors less than it has room for.
 const RESERVE_SECTORS: u32 = 32;
 
 /// How long the bar has to have been still before the reserve may take its 45 ms erase.
 ///
-/// Longer than the detector's own rest debounce: the erase is a hole, and the one place a hole is harmless is a bar
-/// that has stopped moving.
+/// Longer than the detector's own rest debounce: the erase is a hole, and the one place a hole is harmless is a bar that has stopped moving.
 const RESERVE_STILL_S: f32 = 0.5;
 
 /// The flash peripheral, and the scratch a partition lookup needs.
@@ -221,19 +193,14 @@ impl FlashStore {
 /// Summaries collected per pass of the summary stream. Each is ~76 bytes, so the batch is a heap buffer rather than a local.
 const SUMMARY_BATCH: usize = 16;
 
-/// What the heap must still have free once the raw trace buffer is allocated: the radio is in the same heap, and a
-/// device this short of it stops taking connections.
+/// What the heap must still have free once the raw trace buffer is allocated: the radio is in the same heap, and a device this short of it stops taking connections.
 const RAW_TRACE_HEADROOM_BYTES: usize = 8 * 1024;
 
 /// How many records this boot has added to the flash log.
 ///
-/// The summary stream re-reads the whole log every time it fills a batch, and a walk over a full log holds the
-/// sampler off its 100 Hz tick for seconds — which is where the sampler's timeline holes come from
-/// (docs/GOTCHAS.md). A stream with nothing new to read must therefore not read: every append bumps this, and a
-/// batch remembers the value it was collected at.
+/// The summary stream re-reads the whole log every time it fills a batch, and a walk over a full log holds the sampler off its 100 Hz tick for seconds — which is where the sampler's timeline holes come from. A stream with nothing new to read must therefore not read: every append bumps this, and a batch remembers the value it was collected at.
 ///
-/// A count rather than a flag because the writes are in three places (a rep, a boot's clock, the client's clock
-/// write) and the reader only has to tell "same as last time" from "not the same".
+/// A count rather than a flag because the writes are in three places (a rep, a boot's clock, the client's clock write) and the reader only has to tell "same as last time" from "not the same".
 static LOG_APPENDS: AtomicU32 = AtomicU32::new(0);
 
 /// Say that the log has changed in a way the summary stream has to see.
@@ -243,9 +210,7 @@ fn log_changed() {
 
 /// Window handed to the detector when a rep closes: `MAX_REP_MS` plus the ZUPT margins (9 s at 100 Hz).
 ///
-/// Ten seconds, and not the nine a window can ask for: a window is inclusive at both ends, so the longest
-/// one is 901 samples, and a buffer that fits it exactly would drop the newest sample — the one a trace is
-/// most worth having.
+/// Ten seconds, and not the nine a window can ask for: a window is inclusive at both ends, so the longest one is 901 samples, and a buffer that fits it exactly would drop the newest sample — the one a trace is most worth having.
 const REP_WINDOW_SAMPLES: usize = 1000;
 /// Trace points kept per rep; longer reps are decimated uniformly.
 const TRACE_POINTS: usize = calypso_core::rep::TRACE_POINTS;
@@ -297,8 +262,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // Setup the bno055 imu
     info!("Setting up i2c");
-    // Pinout for the esp32 pico: https://learn.adafruit.com/assets/112309
-    // 400 kHz so the 100 Hz sampler's ~14 bytes/sample cost ~0.5 ms of the 10 ms period.
+    // Pinout for the esp32 pico: https://learn.adafruit.com/assets/112309 400 kHz so the 100 Hz sampler's ~14 bytes/sample cost ~0.5 ms of the 10 ms period.
     let i2c_config = esp_hal::i2c::master::Config::default().with_frequency(Rate::from_khz(400));
     let i2c = I2c::new(peripherals.I2C0, i2c_config)
         .unwrap()
@@ -310,8 +274,7 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Setting up Bno055");
     let mut bno055 = Bno055::new(i2c).with_alternative_address();
-    // Retried, and rebooted rather than halted if every attempt fails: this device spends its life in a gym bag, and one
-    // that halts on a bad first read needs a person to unplug it. A reboot loop is visible in the log and recovers itself.
+    // Retried, and rebooted rather than halted if every attempt fails: this device spends its life in a gym bag, and one that halts on a bad first read needs a person to unplug it. A reboot loop is visible in the log and recovers itself.
     let mut attempt = 0;
     loop {
         attempt += 1;
@@ -338,22 +301,17 @@ async fn main(spawner: Spawner) -> ! {
     }
     info!("Bno055 initialized");
     // **The raw sensors, not the chip's fusion.** ACCGYRO reports uncompensated accelerometer and gyroscope registers;
-    // the orientation is this firmware's (`fusion.rs`), because the fused output cannot say whether its own reading is
-    // right and a residue it left behind kept a session from recording anything.
+    // the orientation is this firmware's (`fusion.rs`), because the fused output cannot say whether its own reading is right and a residue it left behind kept a session from recording anything.
     //
     // The range is set here because a non-fusion mode is the only one that allows it, and it decides only what clips:
-    // the registers' scale is fixed at 1 m/s² = 100 LSB and 1 dps = 16 LSB whatever the range. ±8 g clips at 78 m/s²,
-    // past a rep and past a rerack; the chip's 4 g default clips at 39 m/s², which a hard rerack can reach. The
-    // bandwidth is written too, so the number a rep's summary carries is one this build chose rather than a default.
+    // the registers' scale is fixed at 1 m/s² = 100 LSB and 1 dps = 16 LSB whatever the range. ±8 g clips at 78 m/s², past a rep and past a rerack; the chip's 4 g default clips at 39 m/s², which a hard rerack can reach. The bandwidth is written too, so the number a rep's summary carries is one this build chose rather than a default.
     //
-    // The gyroscope keeps the chip's defaults — 2000 dps at 32 Hz — because this driver can set only the accelerometer's,
-    // and at 2000 dps it cannot clip. Both are recorded in `SAMPLER_CONFIG`.
+    // The gyroscope keeps the chip's defaults — 2000 dps at 32 Hz — because this driver can set only the accelerometer's, and at 2000 dps it cannot clip. Both are recorded in `SAMPLER_CONFIG`.
     let mut acc = bno055.get_acc_config().unwrap();
     acc.set_g_range(AccGRange::G8);
     acc.set_bandwidth(AccBandwidth::Hz62_5);
     bno055.set_acc_config(&acc).unwrap();
-    // Read back, because the write reports only that the bus took it: what a rep's summary claims has to be what the
-    // chip holds, or a trace is decoded against settings nobody had.
+    // Read back, because the write reports only that the bus took it: what a rep's summary claims has to be what the chip holds, or a trace is decoded against settings nobody had.
     match bno055.get_acc_config() {
         Ok(after) if after.bits() == acc.bits() => {}
         Ok(after) => warn!(
@@ -374,8 +332,7 @@ async fn main(spawner: Spawner) -> ! {
         SAMPLER_CONFIG.gyro_bandwidth_hz,
     );
     if RECORD_MODE {
-        // Said once and loudly, for the reason fake-reps says its own: a device recording whatever it hears must not be
-        // mistaken for one detecting reps, and the log is where a session is read back from.
+        // Said once and loudly, for the reason fake-reps says its own: a device recording whatever it hears must not be mistaken for one detecting reps, and the log is where a session is read back from.
         warn!(
             "record mode: no detector; {} ms of raw samples every {} ms, dev mode on from boot",
             RECORD_WINDOW_MS, RECORD_PERIOD_MS
@@ -493,9 +450,7 @@ async fn main(spawner: Spawner) -> ! {
     // What the setup above is holding before the tasks start: the total moves whenever a static does, so measure rather than assume.
     info!("Stack before the tasks: {}", Stack);
 
-    // The boot's clock, shared by both tasks: the sampler times its samples from it, and the client's epoch is
-    // read against it, so a rep's uptime and the wall time attributed to it are the same frame
-    // (`calypso_core::clock`).
+    // The boot's clock, shared by both tasks: the sampler times its samples from it, and the client's epoch is read against it, so a rep's uptime and the wall time attributed to it are the same frame (`calypso_core::clock`).
     let boot = Instant::now();
     join3(
         // HCI runner: must run forever alongside any other BLE tasks.
@@ -546,15 +501,12 @@ async fn main(spawner: Spawner) -> ! {
                     Err(_) => continue,
                 };
                 info!("BLE connection established (stack {})", Stack);
-                // What a message is cut into, on this link: the MTU the peer's stack reports, and the frame the framing will use given it. `23` is the spec default and what a central that never sends the exchange leaves behind — it is not the size of the notifications that follow (docs/GOTCHAS.md, "A window of 127 is not flow control").
+                // What a message is cut into, on this link: the MTU the peer's stack reports, and the frame the framing will use given it. `23` is the spec default and what a central that never sends the exchange leaves behind — it is not the size of the notifications that follow.
                 info!(
                     "ATT MTU {}: notifications up to {} bytes",
                     conn.raw().att_mtu(),
                     pipe::frame_ceiling(conn.raw().att_mtu() as usize)
                 );
-                // A read returns the last value published, so both are published before a client can ask for them.
-                publish_imu(&gatt);
-
                 // Sync state: how many summaries this subscriber has been sent, the batch they are read from, and the clock the pipe's timeouts are measured against.
                 //
                 // A fresh session per connection: whatever was in flight is gone with the link, and half a message is not a message.
@@ -566,19 +518,11 @@ async fn main(spawner: Spawner) -> ! {
                 batch.reset();
                 sync.session.reset();
 
-                let mut ticks: u32 = 0;
                 loop {
-                    // Service GATT events; on every tenth tick (a second), keep the table's copy of the last IMU sample current.
-                    //
-                    // The tick itself is 100 ms because the app's read of the `Imu` characteristic is a snapshot of the sensor: at a second it would show a rep's whole stroke as one frame. Everything else in this arm is a second's business.
-                    let event = match select(conn.next(), Timer::after(Duration::from_millis(100))).await {
+                    // Service GATT events, and once a second do what is the second's business: who is listening, a stalled transfer, what goes out to a subscriber, and any report owed.
+                    let event = match select(conn.next(), Timer::after(Duration::from_secs(1))).await {
                         Either::First(event) => event,
                         Either::Second(()) => {
-                            ticks = ticks.wrapping_add(1);
-                            publish_imu(&gatt);
-                            if !ticks.is_multiple_of(10) {
-                                continue;
-                            }
                             let now = now_ms(start);
                                         // Who is listening, asked of the server rather than inferred from a notify result, because a notify result says nothing (see `is_subscribed`). Once a tick is often enough to say when it changes.
                             let listening =
@@ -632,8 +576,7 @@ async fn main(spawner: Spawner) -> ! {
                                 )
                                 .await;
                             }
-                            // Beside the pipe's own sending, and outside its `subscribed`: a fault is
-                            // owed to whoever subscribed to `Reports`, not to the summaries' subscriber.
+                            // Beside the pipe's own sending, and outside its `subscribed`: a fault is owed to whoever subscribed to `Reports`, not to the summaries' subscriber.
                             push_report(&gatt, &conn, now).await;
                             continue;
                         }
@@ -656,8 +599,7 @@ async fn main(spawner: Spawner) -> ! {
                             supervision_timeout.as_millis() as u32
                         ),
                         GattConnectionEvent::Gatt { event } => {
-                            // Which characteristic a write was for, decided before it is accepted — accepting consumes
-                            // the event, and until it has run the table still holds the value before this write.
+                            // Which characteristic a write was for, decided before it is accepted — accepting consumes the event, and until it has run the table still holds the value before this write.
                             let written = match &event {
                                 GattEvent::Write(write) => Some(write.handle()),
                                 _ => None,
@@ -675,8 +617,7 @@ async fn main(spawner: Spawner) -> ! {
                                 }
                                 continue;
                             }
-                            // Everything else the app writes is a chunk of a request on the pipe — which is also
-                            // where it acknowledges a message this end sent, and the frame says which.
+                            // Everything else the app writes is a chunk of a request on the pipe — which is also where it acknowledges a message this end sent, and the frame says which.
                             if written == Some(gatt.sync.requests.handle) {
                                 let wrote = {
                                     let Ok(value) = gatt.get(&gatt.sync.requests) else {
@@ -721,8 +662,7 @@ async fn main(spawner: Spawner) -> ! {
                                         );
                                         if is_subscribed(&gatt, &conn, gatt.sync.messages.cccd_handle) {
                                             // The two traces are read differently because they are different sizes:
-                                            // the plotted one fits the session's buffer from boot, and a window of
-                                            // full-rate samples does not.
+                                            // the plotted one fits the session's buffer from boot, and a window of full-rate samples does not.
                                             if request.kind == msg::TraceKind::Raw {
                                                 stream_raw_trace(
                                                     store,
@@ -792,18 +732,13 @@ async fn main(spawner: Spawner) -> ! {
             let mut logged_fake_reps = false;
             // Whether the filter had settled, logged only when it changes, so "paused until the filter knows which way is down" is printed when it becomes true rather than 3,600 times an hour.
             let mut logged_ready: Option<bool> = None;
-            let mut logged_level: Option<bool> = None;
-            // Record mode's open window: when it began, and where the filter stood then, because a window nine
-            // seconds old has nothing else to replay `compute_rep` from.
+            // Record mode's open window: when it began, and where the filter stood then, because a window nine seconds old has nothing else to replay `compute_rep` from.
             let mut recording: Option<(u32, FusionState)> = None;
-            // The earliest moment the next recorded window may open, set past each append because an append stops
-            // the sampler for its duration.
+            // The earliest moment the next recorded window may open, set past each append because an append stops the sampler for its duration.
             let mut next_record_ms: u32 = 0;
             // How long the last append took end to end, taken by the hole the tick after it reports: a hole with a flash in it and one with a sync arm in it read the same otherwise.
             let mut append_ms: Option<u32> = None;
-            // Whether the reserve needs nothing more done to it, so a device with nothing left to erase does not spend
-            // the 9 ms a log mount costs asking, a hundred times a second, for the rest of the session: true when it is
-            // full, and true when it could not be filled — a log that will not mount will not mount next tick either.
+            // Whether the reserve needs nothing more done to it, so a device with nothing left to erase does not spend the 9 ms a log mount costs asking, a hundred times a second, for the rest of the session: true when it is full, and true when it could not be filled — a log that will not mount will not mount next tick either.
             let mut reserve_done = false;
             loop {
                 ticker.next().await;
@@ -815,8 +750,7 @@ async fn main(spawner: Spawner) -> ! {
                     // Cleared whether or not this tick is a hole, so a stale append is never blamed for one.
                     let of_append = append_ms.take().unwrap_or(0);
                     if gap > SAMPLER_HOLE_MS {
-                        // A recorded window is written between windows, so the pause is a hole by construction —
-                        // and only a gap with a window open is something a client should be told about.
+                        // A recorded window is written between windows, so the pause is a hole by construction — and only a gap with a window open is something a client should be told about.
                         if RECORD_MODE && recording.is_none() {
                             info!(
                                 "record: {} ms of append between windows, {} ms of it a rep's store",
@@ -833,8 +767,7 @@ async fn main(spawner: Spawner) -> ! {
                 }
                 last_t_ms = Some(t_ms);
 
-                // The chip's two sensor registers, straight into the sample's fixed point: 1 m/s² = 100 LSB and
-                // 1 dps = 16 LSB are this format's scales, so nothing is converted and nothing is rounded twice.
+                // The chip's two sensor registers, straight into the sample's fixed point: 1 m/s² = 100 LSB and 1 dps = 16 LSB are this format's scales, so nothing is converted and nothing is rounded twice.
                 let Ok(accel) = bno055.accel_data_fixed() else {
                     warn!("BNO055 accelerometer read error");
                     report(msg::ReportKind::ImuReadFailed);
@@ -850,11 +783,7 @@ async fn main(spawner: Spawner) -> ! {
                     accel: [accel.x, accel.y, accel.z],
                     gyro: [gyro.x, gyro.y, gyro.z],
                 };
-                // The chip's acceleration registers are still empty when the first poll lands: that sample
-                // reads no specific force at all while the rate beside it is plausible. It is a whole g of
-                // step at the head of the first window — enough to integrate metres of travel that never
-                // happened — so it is dropped rather than recorded. A still sensor never reads zero, so the
-                // test cannot throw away a reading that was real.
+                // The chip's acceleration registers are still empty when the first poll lands: that sample reads no specific force at all while the rate beside it is plausible. It is a whole g of step at the head of the first window — enough to integrate metres of travel that never happened — so it is dropped rather than recorded. A still sensor never reads zero, so the test cannot throw away a reading that was real.
                 if first_sample {
                     first_sample = false;
                     if sample.accel == [0, 0, 0] {
@@ -864,24 +793,15 @@ async fn main(spawner: Spawner) -> ! {
                 }
                 samples.borrow_mut().push(sample);
                 let filtered = fusion.update(&sample);
-                // The attitude the app reads is the filter's: the chip no longer reports one.
-                critical_section::with(|cs| {
-                    *LAST_SAMPLE.borrow(cs).borrow_mut() =
-                        Some((sample, fusion.state().attitude));
-                });
 
                 // Detect reps; on close, slice the window out of the ring and compute the ZUPT-anchored trace + summary, then persist it.
                 //
                 // Only once the filter knows which way is down: it seeds gravity and both offsets from a still window, and before that there is no vertical for a rep to be measured against, so a trace recorded then would be fiction rather than a measurement.
                 let window = if RECORD_MODE {
-                    // The detector is not asked, so nothing here can decide a window is not a rep. This sample either
-                    // opens one or ends one; the close is logged with the moment the next is due, so the log says
-                    // plainly which of recording and waiting the device is doing, and when.
+                    // The detector is not asked, so nothing here can decide a window is not a rep. This sample either opens one or ends one; the close is logged with the moment the next is due, so the log says plainly which of recording and waiting the device is doing, and when.
                     match recording {
-                        // Not before the filter knows which way is down: a window that opens first has no
-                        // vertical for `compute_rep` to replay in, and its trace reads hundreds of metres.
-                        // The price is that a device whose gate never opens records nothing — which the
-                        // sampler's own line says, rather than leaving silence to be interpreted.
+                        // Not before the filter knows which way is down: a window that opens first has no vertical for `compute_rep` to replay in, and its trace reads hundreds of metres.
+                        // The price is that a device whose gate never opens records nothing — which the sampler's own line says, rather than leaving silence to be interpreted.
                         None if t_ms >= next_record_ms && fusion.ready() => {
                             recording = Some((t_ms, filtered.state));
                             info!(
@@ -917,9 +837,7 @@ async fn main(spawner: Spawner) -> ! {
                             "fake-reps: storing a synthetic rep every {} s, not detecting real ones",
                             FAKE_REP_PERIOD_S
                         );
-                        // One synthetic fault as well, raised before any client can have subscribed: what the
-                        // app shows is then the latch being handed over, which is the half of this path a
-                        // bench session with a real fault could not easily reach.
+                        // One synthetic fault as well, raised before any client can have subscribed: what the app shows is then the latch being handed over, which is the half of this path a bench session with a real fault could not easily reach.
                         warn!("fake-reps: raising a synthetic report (REP_NOT_STORED)");
                         report(msg::ReportKind::RepNotStored);
                     }
@@ -937,20 +855,15 @@ async fn main(spawner: Spawner) -> ! {
                         None
                     }
                 } else if fusion.ready() {
-                    // The filter is fed every sample, so its offsets and its attitude keep up with the sensor; only
-                    // the detector is gated, and it starts from a real rest whenever the gate opens.
+                    // The filter is fed every sample, so its offsets and its attitude keep up with the sensor; only the detector is gated, and it starts from a real rest whenever the gate opens.
                     detector.update(&filtered).map(|span| (span, None))
                 } else {
                     None
                 };
                 if let Some((span, edge)) = window {
-                    // Marks either side of each step between a rep closing and the sampler coming back, because the
-                    // log's own timestamps are taken at the host end of the serial link and subtracting two of them
-                    // is a range rather than a measurement.
+                    // Marks either side of each step between a rep closing and the sampler coming back, because the log's own timestamps are taken at the host end of the serial link and subtracting two of them is a range rather than a measurement.
                     let closed_at = Instant::now();
-                    // Where the window begins and where the filter stood: the detector's answer for a rep it closed,
-                    // the snapshot taken when the window opened for one that was recorded. A detected rep's is not
-                    // always `MARGIN_MS` before it, because one close behind the boot has no history that far back.
+                    // Where the window begins and where the filter stood: the detector's answer for a rep it closed, the snapshot taken when the window opened for one that was recorded. A detected rep's is not always `MARGIN_MS` before it, because one close behind the boot has no history that far back.
                     let (from_ms, state) = edge.unwrap_or_else(|| detector.rep_state());
                     let copied = samples
                         .borrow()
@@ -969,16 +882,13 @@ async fn main(spawner: Spawner) -> ! {
                         warn!("rep window unavailable (ring too short)");
                         report(msg::ReportKind::RepWindowUnavailable);
                     } else {
-                        // Where the filter stood at the window's edge: the detector's for a real rep,
-                        // level for a synthetic one the fake-reps build fabricates wholesale.
+                        // Where the filter stood at the window's edge: the detector's for a real rep, level for a synthetic one the fake-reps build fabricates wholesale.
                         let state = if FAKE_REPS {
                             calypso_core::fusion::FusionState::LEVEL
                         } else {
                             state
                         };
-                        // A recorded window and a synthetic one were cut out of the stream, not found in it, so
-                        // there are no turns in either to anchor the replay at. Everything else was closed by the
-                        // detector, which kept the turns it measured the rep between.
+                        // A recorded window and a synthetic one were cut out of the stream, not found in it, so there are no turns in either to anchor the replay at. Everything else was closed by the detector, which kept the turns it measured the rep between.
                         let turns = if RECORD_MODE || FAKE_REPS {
                             None
                         } else {
@@ -986,8 +896,7 @@ async fn main(spawner: Spawner) -> ! {
                         };
                         let mut sum = compute_rep(&rep_window[..copied], &state, turns, &mut rep_trace);
                         let computed_at = Instant::now();
-                        // A recorded window is kept whatever it measured: a session in which nothing was a rep is
-                        // exactly the case it exists to leave evidence of.
+                        // A recorded window is kept whatever it measured: a session in which nothing was a rep is exactly the case it exists to leave evidence of.
                         if !RECORD_MODE && !sum.is_a_rep() {
                             info!(
                                 "rep discarded: {} m of travel, under the {} m a rep needs",
@@ -1003,8 +912,7 @@ async fn main(spawner: Spawner) -> ! {
                             // Identity is minted when the rep closes, so it is set here rather than computed with the stats.
                             sum.rep_uuid = calypso_core::pb::uuid_to_field(&rep_uuid);
                             // What the sensor was set to, so the trace can be read without assuming today's build.
-                            // A recorded window says version 0: no detection logic closed it, and 0 is what the field
-                            // says when nothing did.
+                            // A recorded window says version 0: no detection logic closed it, and 0 is what the field says when nothing did.
                             let config = if RECORD_MODE {
                                 calypso_core::sampler::RepConfig {
                                     detector_version: 0,
@@ -1021,8 +929,7 @@ async fn main(spawner: Spawner) -> ! {
                             // Persist the rep (summary + trace chunks). This happens right after the rest debounce, i.e. while the sensor is at rest, so the tens of ms an erase takes here can't land in the middle of a rep.
                             let (stored, locked_at) = {
                                 let mut guard = store.lock().await;
-                                // After the lock, so the mark before it to here is the wait for a sync arm walking the
-                                // log: the one hole in this path with no flash in it.
+                                // After the lock, so the mark before it to here is the wait for a sync arm walking the log: the one hole in this path with no flash in it.
                                 let locked_at = Instant::now();
                                 let out = flash_window("rep append", || {
                                     store_rep(&mut guard, rec_buf, &mut sum, &rep_trace, raw)
@@ -1050,7 +957,7 @@ async fn main(spawner: Spawner) -> ! {
                                 }
                             }
                             info!(
-                                "rep {}: {}..{} ms ({} ms), {} trace pts, {} raw samples, rom {=f32} m, peak v {=f32} m/s, mean v {=f32} m/s, peak a {=f32} m/s^2, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
+                                "rep {}: {}..{} ms ({} ms), {} trace pts, {} raw samples, rom {=f32} m, peak v {=f32} m/s, roll {=f32}..{=f32} deg, pitch {=f32}..{=f32} deg",
                                 UuidShort(Some(&rep_uuid)),
                                 span.start_ms,
                                 span.end_ms,
@@ -1059,15 +966,12 @@ async fn main(spawner: Spawner) -> ! {
                                 sum.raw_len,
                                 sum.rom,
                                 sum.peak_velocity,
-                                sum.mean_velocity,
-                                sum.peak_accel,
                                 sum.roll_min_deg,
                                 sum.roll_max_deg,
                                 sum.pitch_min_deg,
                                 sum.pitch_max_deg,
                             );
-                            // Where the sampler's ~half second went, in the order it is spent. Only the part in the flash
-                            // is unavoidable for a NOR write; the rest is the size of the solution.
+                            // Where the sampler's ~half second went, in the order it is spent. Only the part in the flash is unavoidable for a NOR write; the rest is the size of the solution.
                             let total_ms = closed_at.elapsed().as_millis() as u32;
                             append_ms = Some(total_ms);
                             // The append spent as many of the erased sectors as it wrote, and nothing here counts them:
@@ -1086,11 +990,9 @@ async fn main(spawner: Spawner) -> ! {
                     }
                 }
 
-                // Refill the erased reserve while nothing is being stroked or recorded: the erase parks the chip for
-                // ~45 ms, and this is the one moment in the session where that costs no samples.
+                // Refill the erased reserve while nothing is being stroked or recorded: the erase parks the chip for ~45 ms, and this is the one moment in the session where that costs no samples.
                 //
-                // One sector a tick, because a tick's worth of the sampler is all this loop is willing to hand over, and
-                // the try lock because a sync walk holds the store for seconds and the sampler will not wait for it.
+                // One sector a tick, because a tick's worth of the sampler is all this loop is willing to hand over, and the try lock because a sync walk holds the store for seconds and the sampler will not wait for it.
                 if !reserve_done
                     && append_ms.is_none()
                     && recording.is_none()
@@ -1122,69 +1024,56 @@ async fn main(spawner: Spawner) -> ! {
                 }
 
                 n += 1;
-                // The level verdict and the sampler figures are *read* at 1 Hz, but logged only when they change, or once a minute. Two lines a second used to say the same thing forever: the verdict only moves when the sensor does, and the ring and heap figures are there to spot a leak, not to be watched. The minute keeps the boot-log figures this device is debugged from (see docs/GOTCHAS.md).
-                if n.is_multiple_of(SAMPLE_RATE_HZ) {
-                    let (x_grav, is_level) = level_sense(fusion.state().attitude);
-                    // Compared on the verdict, not the reading: X-grav moves by a hundredth a second, and the question is only whether it is level.
-                    if logged_level != Some(is_level) {
-                        logged_level = Some(is_level);
-                        if is_level {
-                            info!("Sensor is level on the X axis (X-grav={=f32})", x_grav)
-                        } else {
-                            warn!("Sensor is not level, X-grav={=f32}", x_grav)
-                        }
-                    }
+                // The sampler figures are logged when they change and once a minute besides: the ring and heap numbers are there to spot a leak, not to be watched, and the minute keeps the boot-log figures this device is debugged from.
+                // Every 5 s while recording: what the filter is subtracting, and how much motion it sees.
+                //
+                // A session that stores nothing has two causes that look identical from outside — the sensor's offset never came out of the signal, or the bar really was still — and the once-a-minute sampler line says neither.
+                if fusion.ready() && n.is_multiple_of(SAMPLE_RATE_HZ * 5) {
+                    let b = fusion.state().accel_bias;
+                    // Centimetres per second squared, because defmt has no precision hint and whole numbers read better than raw floats.
+                    let a = calypso_core::fusion::magnitude(filtered.linear_accel);
+                    let speed = detector.speed();
+                    info!(
+                        "detector: bias ({}, {}, {}) cm/s², |a| {} cm/s², |v| {} cm/s, legs {}, open {}",
+                        (b[0] * 100.0) as i32,
+                        (b[1] * 100.0) as i32,
+                        (b[2] * 100.0) as i32,
+                        (a * 100.0) as i32,
+                        (speed * 100.0) as i32,
+                        detector.legs(),
+                        detector.leg_open()
+                    );
+                }
 
-                    // Every 5 s while recording: what the filter is subtracting, and how much motion it sees.
-                    //
-                    // A session that stores nothing has two causes that look identical from outside — the sensor's offset never came out of the signal, or the bar really was still — and the once-a-minute sampler line says neither.
-                    if fusion.ready() && n.is_multiple_of(SAMPLE_RATE_HZ * 5) {
-                        let b = fusion.state().accel_bias;
-                        // Centimetres per second squared, because defmt has no precision hint and whole numbers read better than raw floats.
-                        let a = calypso_core::fusion::magnitude(filtered.linear_accel);
-                        let speed = detector.speed();
+                let ready = fusion.ready();
+                if n.is_multiple_of(SAMPLE_RATE_HZ * 60) || logged_ready != Some(ready) {
+                    logged_ready = Some(ready);
+                    let (len, pushed) = {
+                        let r = samples.borrow();
+                        (r.len(), r.pushed())
+                    };
+                    if ready {
                         info!(
-                            "detector: bias ({}, {}, {}) cm/s², |a| {} cm/s², |v| {} cm/s, legs {}, open {}",
-                            (b[0] * 100.0) as i32,
-                            (b[1] * 100.0) as i32,
-                            (b[2] * 100.0) as i32,
-                            (a * 100.0) as i32,
-                            (speed * 100.0) as i32,
-                            detector.legs(),
-                            detector.leg_open()
+                            "sampler: {} Hz, ring {}/{} samples, {} pushed, {} reps, imu settled (stack {}, heap free {} B)",
+                            SAMPLE_RATE_HZ,
+                            len,
+                            SAMPLE_RING_LEN,
+                            pushed,
+                            reps,
+                            Stack,
+                            esp_alloc::HEAP.free()
                         );
-                    }
-
-                    let ready = fusion.ready();
-                    if n.is_multiple_of(SAMPLE_RATE_HZ * 60) || logged_ready != Some(ready) {
-                        logged_ready = Some(ready);
-                        let (len, pushed) = {
-                            let r = samples.borrow();
-                            (r.len(), r.pushed())
-                        };
-                        if ready {
-                            info!(
-                                "sampler: {} Hz, ring {}/{} samples, {} pushed, {} reps, imu settled (stack {}, heap free {} B)",
-                                SAMPLE_RATE_HZ,
-                                len,
-                                SAMPLE_RING_LEN,
-                                pushed,
-                                reps,
-                                Stack,
-                                esp_alloc::HEAP.free()
-                            );
-                        } else {
-                            // Warn, not info: nothing is being recorded until the bar holds still for a moment.
-                            warn!(
-                                "sampler: {} Hz, ring {}/{} samples, {} pushed, imu {=f32} s of stillness — rep recording paused until the filter knows which way is down (stack {})",
-                                SAMPLE_RATE_HZ,
-                                len,
-                                SAMPLE_RING_LEN,
-                                pushed,
-                                fusion.still_for_s(),
-                                Stack
-                            );
-                        }
+                    } else {
+                        // Warn, not info: nothing is being recorded until the bar holds still for a moment.
+                        warn!(
+                            "sampler: {} Hz, ring {}/{} samples, {} pushed, imu {=f32} s of stillness — rep recording paused until the filter knows which way is down (stack {})",
+                            SAMPLE_RATE_HZ,
+                            len,
+                            SAMPLE_RING_LEN,
+                            pushed,
+                            fusion.still_for_s(),
+                            Stack
+                        );
                     }
                 }
             }
@@ -1221,9 +1110,7 @@ fn mount_rep_log(store: &mut FlashStore) -> Result<u32, LogError> {
             Err(e) => Err(e),
             Ok(mut log) => {
                 let sectors = log.sectors();
-                // Every boot opens with its own clock record, before any rep it will contain
-                // (`calypso_core::clock`): it is what stops this boot's reps being dated by the boot before it,
-                // and what the client's write replaces later in this boot. Its id is where this boot's reps start.
+                // Every boot opens with its own clock record, before any rep it will contain (`calypso_core::clock`): it is what stops this boot's reps being dated by the boot before it, and what the client's write replaces later in this boot. Its id is where this boot's reps start.
                 let from_record_id = log.next_id();
                 let mut buf = [0u8; CLOCK_RECORD_BYTES];
                 match store::append_clock(&mut log, &mut buf, 0) {
@@ -1231,8 +1118,7 @@ fn mount_rep_log(store: &mut FlashStore) -> Result<u32, LogError> {
                         BOOT_FROM_ID.store(from_record_id, Ordering::Relaxed);
                         Ok(sectors)
                     }
-                    // Without that record nothing in the log can be told apart by age, so it is unusable for
-                    // this boot: the same answer as a mount that failed, and the same log line.
+                    // Without that record nothing in the log can be told apart by age, so it is unusable for this boot: the same answer as a mount that failed, and the same log line.
                     Err(store::Error::Log(e)) => Err(e),
                     Err(store::Error::Encode(e)) => return Err(LogError::Encode(e)),
                 }
@@ -1413,7 +1299,7 @@ fn log_partition_table(pt: &partitions::PartitionTable<'_>) {
 
 /// The value a pipe characteristic stores: a chunk's frame, in the table's own type.
 ///
-/// `PIPE_STORAGE_MAX` because that is what the generated characteristic is typed as — `notify` takes the type the table holds — and the spare byte over a frame is what keeps a full-frame write out of `trouble-host`'s equal-length path (see `docs/GOTCHAS.md`). What is notified is only ever a frame, `pipe::FRAME_MAX` bytes at most.
+/// `PIPE_STORAGE_MAX` because that is what the generated characteristic is typed as — `notify` takes the type the table holds — and the spare byte over a frame is what keeps a full-frame write out of `trouble-host`'s equal-length path. What is notified is only ever a frame, `pipe::FRAME_MAX` bytes at most.
 type BleVec = heapless::Vec<u8, PIPE_STORAGE_MAX>;
 
 /// The sending side of the sync service: the pipe's session, the one characteristic every message goes out on, and the buffer each frame is built in.
@@ -1436,7 +1322,7 @@ impl Sync<'_> {
             payload,
         } = self;
         let mtu = conn.raw().att_mtu() as usize;
-        // Frames of the *message* this call gets out (the reply is not one). A message wider than the window is sent in waves, and a wave that stops short is the thing to see when a transfer stalls (docs/GOTCHAS.md).
+        // Frames of the *message* this call gets out (the reply is not one). A message wider than the window is sent in waves, and a wave that stops short is the thing to see when a transfer stalls.
         let mut frames = 0u32;
 
         loop {
@@ -1506,16 +1392,13 @@ impl Sync<'_> {
 struct SummaryBatch {
     messages: &'static mut AllocVec<msg::RepSummary>,
     next: usize,
-    /// What the log looked like when this batch was collected, or `None` if it never has been: a collect that
-    /// drained the log is not repeated while the answer cannot have changed.
+    /// What the log looked like when this batch was collected, or `None` if it never has been: a collect that drained the log is not repeated while the answer cannot have changed.
     collected_at: Option<u32>,
-    /// Whether that collect ran out of log rather than out of batch. A batch that was *filled* has more behind it
-    /// whatever `LOG_APPENDS` says, which is what keeps a log of exactly one batch's worth of reps from stalling.
+    /// Whether that collect ran out of log rather than out of batch. A batch that was *filled* has more behind it whatever `LOG_APPENDS` says, which is what keeps a log of exactly one batch's worth of reps from stalling.
     drained: bool,
     /// Where the records of the reps this batch handed out are.
     ///
-    /// Not cleared by `reset`: a rep's records do not move, and the app may still ask for a trace of a rep it was
-    /// sent on the connection before this one.
+    /// Not cleared by `reset`: a rep's records do not move, and the app may still ask for a trace of a rep it was sent on the connection before this one.
     index: BatchIndex,
 }
 
@@ -1559,8 +1442,7 @@ impl SummaryBatch {
     }
 }
 
-/// Where the reps this batch handed out sit in the log, so the trace each summary causes is a walk of that rep's
-/// records rather than of the whole log (`calypso_core::sync::RepIndex`).
+/// Where the reps this batch handed out sit in the log, so the trace each summary causes is a walk of that rep's records rather than of the whole log (`calypso_core::sync::RepIndex`).
 ///
 /// Not cleared by `reset` (see the field), and never the record of what exists: a miss falls back to the walk.
 type BatchIndex = calypso_core::sync::RepIndex;
@@ -1585,7 +1467,7 @@ async fn stream_new_summaries(
         if !sync.session.is_idle() {
             return;
         }
-        // A collect walks every record in the log, and the sampler stops for as long as it runs (docs/GOTCHAS.md):
+        // A collect walks every record in the log, and the sampler stops for as long as it runs:
         // one that already drained the log is not run again until the log has changed.
         if !batch.stale() {
             return;
@@ -1625,17 +1507,13 @@ async fn stream_new_summaries(
 struct Collected {
     /// Summaries in the log, the ones behind the cursor included.
     total: usize,
-    /// Whether the pass ran out of log rather than out of batch: everything the cursor could be offered is in the
-    /// batch, or this boot's clock is still missing and the stream is holding for it. A batch that was *filled* is
-    /// not this: there is more behind it, and the cursor has not been sent it.
+    /// Whether the pass ran out of log rather than out of batch: everything the cursor could be offered is in the batch, or this boot's clock is still missing and the stream is holding for it. A batch that was *filled* is not this: there is more behind it, and the cursor has not been sent it.
     drained: bool,
 }
 
-/// Fill `batch` with the next summaries the subscriber hasn't seen, returning what the log holds and whether there
-/// was more than the batch could take (or `None` if the log couldn't be read).
+/// Fill `batch` with the next summaries the subscriber hasn't seen, returning what the log holds and whether there was more than the batch could take (or `None` if the log couldn't be read).
 ///
-/// Also records where each summary it hands out sits in the log, which is how the trace request that summary causes
-/// is answered without reading the log again (see [`BatchIndex`]).
+/// Also records where each summary it hands out sits in the log, which is how the trace request that summary causes is answered without reading the log again (see [`BatchIndex`]).
 ///
 /// **Everything that goes out carries a time** (`calypso_core::clock`), and the two kinds of untimed summary are handled differently:
 /// one from a boot that never had a clock can never gain one, so it is stepped over for good; one from *this* boot is only waiting for the client to set the clock, so the batch holds there rather than sending a rep the app cannot place in time.
@@ -1660,9 +1538,7 @@ fn collect_summaries(
     let mut region = partition.as_embedded_storage(flash);
     let mut log = FlashLog::mount(&mut region).ok()?;
 
-    // This boot as the log sees it: the id its first record got, and the epoch in RAM. 0 for the id means the
-    // mount could not write that record, which leaves the log unable to say which boot a rep came from — so
-    // `Boots` dates none of them, rather than dating them by the boot before.
+    // This boot as the log sees it: the id its first record got, and the epoch in RAM. 0 for the id means the mount could not write that record, which leaves the log unable to say which boot a rep came from — so `Boots` dates none of them, rather than dating them by the boot before.
     let our_from_record_id = match BOOT_FROM_ID.load(Ordering::Relaxed) {
         0 => None,
         id => Some(id),
@@ -1689,20 +1565,17 @@ fn collect_summaries(
                 }
                 let Some(t_unix_ms) = boots.boot_of(id).rep_time_ms(s.t_start_ms) else {
                     if boots.is_ours(id) {
-                        // The client has not set this boot's clock yet. Everything after this record is this
-                        // boot's too, and one write dates it all, so the batch waits for it.
+                        // The client has not set this boot's clock yet. Everything after this record is this boot's too, and one write dates it all, so the batch waits for it.
                         holding = true;
                     } else {
-                        // A boot that never had a clock never will, so this rep is never sent: step over it, or
-                        // every batch from here on would read it again.
+                        // A boot that never had a clock never will, so this rep is never sent: step over it, or every batch from here on would read it again.
                         cursor.advance(1);
                     }
                     return;
                 };
                 let mut summary = s.clone();
                 summary.t_unix_ms = t_unix_ms;
-                // A trace request for this rep comes as soon as this summary lands on the phone, and its chunks are
-                // the records that follow it (`store::append_rep` writes them together).
+                // A trace request for this rep comes as soon as this summary lands on the phone, and its chunks are the records that follow it (`store::append_rep` writes them together).
                 if let Some(rep_uuid) = calypso_core::pb::summary_uuid(s) {
                     index.record(rep_uuid, id + 1, s.computed_chunks, s.raw_chunks);
                 }
@@ -1765,13 +1638,7 @@ async fn stream_trace(
 
     log_trace(&rep_uuid, points);
 
-    // A request for one chunk sends one chunk; a request for the trace sends all of it. Which is a cursor position and a stop, not a different stream.
-    let only = if request.all_chunks {
-        None
-    } else {
-        Some(request.chunk_index)
-    };
-    sync.session.start_trace(rep_uuid, t0_ms, points, only);
+    sync.session.start_trace(rep_uuid, t0_ms, points);
 
     // The first transfer goes now; the rest go as the app acknowledges them (see `keep_sending`).
     sync.send_trace_chunk(conn).await;
@@ -1779,9 +1646,7 @@ async fn stream_trace(
 
 /// Read one rep's trace out of the log into `trace`, returning whether it was there at all (a rep the ring has overwritten reads back empty).
 ///
-/// `index` is where the summary stream saw the rep's records: with it the read is a walk of those records, and
-/// without it the rep is found by walking the log (which holds the sampler off its tick for seconds, so it is the
-/// answer for a rep this connection has not seen rather than the usual one).
+/// `index` is where the summary stream saw the rep's records: with it the read is a walk of those records, and without it the rep is found by walking the log (which holds the sampler off its tick for seconds, so it is the answer for a rep this connection has not seen rather than the usual one).
 ///
 /// Sync, and separate from its caller for the same reason as [`collect_summaries`].
 fn read_trace_from_log(
@@ -1822,11 +1687,9 @@ fn read_trace_from_log(
 
 /// Read a rep's **raw** trace out of the log and start streaming it, the same way the plotted one is.
 ///
-/// The only difference is where the samples are while they are sent: a full-rate window is the one trace too big to
-/// hold from boot, so its buffer is allocated on the first request (`ensure_raw_storage`).
+/// The only difference is where the samples are while they are sent: a full-rate window is the one trace too big to hold from boot, so its buffer is allocated on the first request (`ensure_raw_storage`).
 ///
-/// A function of its own rather than an arm of [`stream_trace`] because two awaited futures in one frame is one future
-/// holding both, and this crate lints the frame size.
+/// A function of its own rather than an arm of [`stream_trace`] because two awaited futures in one frame is one future holding both, and this crate lints the frame size.
 async fn stream_raw_trace(
     store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
     rec_buf: &mut [u8],
@@ -1860,19 +1723,13 @@ async fn stream_raw_trace(
     };
 
     log_raw_trace(&rep_uuid, samples);
-    let only = if request.all_chunks {
-        None
-    } else {
-        Some(request.chunk_index)
-    };
-    sync.session.start_raw_trace(rep_uuid, t0_ms, samples, only);
+    sync.session.start_raw_trace(rep_uuid, t0_ms, samples);
 
     // The first transfer goes now; the rest go as the app acknowledges them (see `keep_sending`).
     sync.send_trace_chunk(conn).await;
 }
 
-/// Read one rep's raw trace out of the log into `samples`, returning how many were recovered — 0 when the rep's raw
-/// chunks were never recorded or the ring has overwritten them.
+/// Read one rep's raw trace out of the log into `samples`, returning how many were recovered — 0 when the rep's raw chunks were never recorded or the ring has overwritten them.
 ///
 /// In its own frame, and never inlined: the partition table it reads into is the largest local in this file.
 #[inline(never)]
@@ -1914,9 +1771,7 @@ fn read_raw_from_log(
 
 /// Give the session the buffer a raw trace is streamed from, if it has none yet.
 ///
-/// A window of full-rate samples is the largest thing a session can be asked to hold, and only a client in dev mode
-/// asks for it, so it is allocated on the first request rather than at boot. The heap check is the radio's: the two
-/// share one heap, and a device left too short of it stops accepting connections.
+/// A window of full-rate samples is the largest thing a session can be asked to hold, and only a client in dev mode asks for it, so it is allocated on the first request rather than at boot. The heap check is the radio's: the two share one heap, and a device left too short of it stops accepting connections.
 #[inline(never)]
 fn ensure_raw_storage(sync: &mut Sync<'_>) {
     if !sync.session.raw_storage().is_empty() {
@@ -1956,8 +1811,7 @@ impl defmt::Format for UuidShort<'_> {
     }
 }
 
-/// Which trace a request is for, for a log line. The same question the stream is chosen by: anything that is not raw
-/// is served as the plotted trace.
+/// Which trace a request is for, for a log line. The same question the stream is chosen by: anything that is not raw is served as the plotted trace.
 fn trace_kind(kind: msg::TraceKind) -> &'static str {
     if kind == msg::TraceKind::Raw {
         "raw"
@@ -1975,8 +1829,7 @@ struct Ops {
 
 /// The time the last [`flash_window`] spent inside the driver, split by operation, each as `(count, microseconds)`.
 ///
-/// Split because the three have different fixes: an erase cannot be made shorter, only rarer, while the writes are
-/// however many pages there are and can be spread across ticks.
+/// Split because the three have different fixes: an erase cannot be made shorter, only rarer, while the writes are however many pages there are and can be spread across ticks.
 struct FlashTime {
     erase: (AtomicU32, AtomicU32),
     write: (AtomicU32, AtomicU32),
@@ -2012,11 +1865,9 @@ impl FlashTime {
     }
 }
 
-/// A flash region whose every operation is counted, which is what turns "the append took 385 ms" into what inside it
-/// did.
+/// A flash region whose every operation is counted, which is what turns "the append took 385 ms" into what inside it did.
 ///
-/// Nothing else observes the region: the counters are cleared as a [`flash_window`] opens and read as it closes, and
-/// one append runs at a time behind the store lock.
+/// Nothing else observes the region: the counters are cleared as a [`flash_window`] opens and read as it closes, and one append runs at a time behind the store lock.
 struct TimedFlash<N>(N);
 
 // Named by path rather than imported: the read and capacity names collide with the `ReadStorage` traits this file already has in scope.
@@ -2089,11 +1940,9 @@ fn flash_window<T>(what: &'static str, op: impl FnOnce() -> T) -> T {
     out
 }
 
-/// The client set the clock: keep it in RAM if it is a time at all, and write it into the log so the reps this
-/// boot has already stored are dated by it too (`calypso_core::clock`).
+/// The client set the clock: keep it in RAM if it is a time at all, and write it into the log so the reps this boot has already stored are dated by it too (`calypso_core::clock`).
 ///
-/// A time the device will not believe is refused rather than stored: dating real reps with a plausible lie is the
-/// one outcome nothing downstream can detect.
+/// A time the device will not believe is refused rather than stored: dating real reps with a plausible lie is the one outcome nothing downstream can detect.
 async fn set_clock(
     store: &'static AsyncMutex<NoopRawMutex, FlashStore>,
     rec_buf: &mut [u8],
@@ -2108,8 +1957,7 @@ async fn set_clock(
         return;
     };
     CLOCK_EPOCH_S.store(epoch_s, Ordering::Relaxed);
-    // Both outcomes change what the summary stream would read: a written record, or the RAM epoch that dates this
-    // boot's summaries without one.
+    // Both outcomes change what the summary stream would read: a written record, or the RAM epoch that dates this boot's summaries without one.
     log_changed();
 
     let written = {
@@ -2129,8 +1977,7 @@ async fn set_clock(
     }
 }
 
-/// One step of the erased reserve: how deep it is now, how deep it is meant to be, and how long an erase took when one
-/// ran — the erases are silent otherwise, and a 45 ms erase the log does not mention is a hole with no cause in it.
+/// One step of the erased reserve: how deep it is now, how deep it is meant to be, and how long an erase took when one ran — the erases are silent otherwise, and a 45 ms erase the log does not mention is a hole with no cause in it.
 struct Reserve {
     depth: u32,
     want: u32,
@@ -2139,8 +1986,7 @@ struct Reserve {
 
 /// Erase the next sector the ring will drop, so the append that reaches it does not carry the erase.
 ///
-/// One sector a call, mounted afresh like every other use of the log: the caller runs it once a tick in the idle
-/// stretch, and the mount's scan is a tenth of what the erase it precedes costs.
+/// One sector a call, mounted afresh like every other use of the log: the caller runs it once a tick in the idle stretch, and the mount's scan is a tenth of what the erase it precedes costs.
 fn prepare_log(store: &mut FlashStore, want: u32) -> Result<Reserve, LogError> {
     let (flash, pt_mem) = store.split();
     let pt = partitions::read_partition_table(flash, pt_mem).map_err(LogError::Table)?;
@@ -2166,8 +2012,7 @@ fn prepare_log(store: &mut FlashStore, want: u32) -> Result<Reserve, LogError> {
         None
     };
     Ok(Reserve {
-        // Whatever `prepare_one` found, the sector it was pointed at is erased now: either it erased it, or it was
-        // already blank.
+        // Whatever `prepare_one` found, the sector it was pointed at is erased now: either it erased it, or it was already blank.
         depth: if depth < want { depth + 1 } else { depth },
         want,
         erased_ms,
@@ -2244,8 +2089,7 @@ fn store_rep(
 
 /// Whether the peer has this characteristic's notifications enabled.
 ///
-/// **This is the only way to know, and it is why the logs and the summary cursor are built on it rather than on a notification's result.**
-/// `Characteristic::notify` returns `Ok(())` whether or not anybody is subscribed:
+/// **This is the only way to know, and it is why the logs and the summary cursor are built on it rather than on a notification's result.** `Characteristic::notify` returns `Ok(())` whether or not anybody is subscribed:
 /// trouble-host checks its per-connection CCCD table (`should_notify`) and returns early *without sending* when the peer is not in it. So "the notification succeeded" is not evidence of anything, and code that treated it as evidence got it wrong twice here — a line printed once a second to a device that was sending nothing, and a summary cursor that walked the whole log into the void while nobody was listening.
 fn is_subscribed(
     server: &CalypsoGatt<'_>,
@@ -2293,31 +2137,12 @@ async fn push_report(
     else {
         return;
     };
-    // A `Report` is one enum field in a characteristic that holds 20 bytes, which is asserted
-    // where the schema is (`calypso_core::report`), so this is not a case that can happen.
+    // A `Report` is one enum field in a characteristic that holds 20 bytes, which is asserted where the schema is (`calypso_core::report`), so this is not a case that can happen.
     let Some(value) = SyncReportsValue::encode(&msg::Report { kind }) else {
         return;
     };
     if gatt.sync.reports.notify(conn, &value).await.is_err() {
         warn!("reports: notify failed on the link");
-    }
-}
-
-/// Put the last sample the sampler read into the table, which is what the app's read of the `Imu` characteristic returns.
-///
-/// Called on connection and every 100 ms after, so a client polling the read sees the sensor moving rather than a rep's stroke in one frame.
-fn publish_imu(gatt: &CalypsoGatt<'_>) {
-    let Some((sample, attitude)) = critical_section::with(|cs| *LAST_SAMPLE.borrow(cs).borrow())
-    else {
-        return;
-    };
-    match SyncImuValue::encode(&calypso_core::pb::imu_state_message(&sample, attitude)) {
-        Some(value) => {
-            if gatt.set(&gatt.sync.imu, &value).is_err() {
-                warn!("imu: the table refused the sample");
-            }
-        }
-        None => warn!("imu: the sample is larger than the characteristic"),
     }
 }
 
@@ -2343,7 +2168,7 @@ async fn keep_sending(
     cursor: &mut SummaryCursor,
 ) {
     // **A message can be wider than the window.** The window is 8 chunks and a trace chunk is up to 10 frames, so a transfer is usually sent in waves — and the rest of the wave goes out here, when the acknowledgement that made room arrives.
-    // Returning early on a busy pipe leaves the message half-sent for ever: nothing else calls `flush`, and the app waits for a chunk that is sitting in the device's buffer (docs/GOTCHAS.md).
+    // Returning early on a busy pipe leaves the message half-sent for ever: nothing else calls `flush`, and the app waits for a chunk that is sitting in the device's buffer.
     if !sync.session.is_idle() {
         sync.flush(conn).await;
         return;
@@ -2419,7 +2244,7 @@ fn now_ms(start: Instant) -> u32 {
     start.elapsed().as_millis() as u32
 }
 
-// The linker stack: `Reset` sets the stack pointer to `_stack_start` and the stack grows down from there, so bytes in use are measured from the top and free bytes from `_stack_end` — which is wherever `.data` and `.bss` ended, making the stack what the RWDATA region has left over (see docs/GOTCHAS.md).
+// The linker stack: `Reset` sets the stack pointer to `_stack_start` and the stack grows down from there, so bytes in use are measured from the top and free bytes from `_stack_end` — which is wherever `.data` and `.bss` ended, making the stack what the RWDATA region has left over.
 unsafe extern "C" {
     static _stack_start: u8;
     static _stack_end: u8;
@@ -2497,16 +2322,4 @@ impl defmt::Format for Stack {
             stack_deepest()
         )
     }
-}
-
-/// The device's X-axis gravity as the filter sees it, and whether that reads as level.
-///
-/// A non-fusion mode has no gravity vector to read, so this is the world's up axis carried back into the sensor's frame
-/// by the attitude the filter estimated — the same quantity the fusion used to report, from an estimate that is
-/// pulled onto gravity continuously and hard at rest. Logged by the caller, and only when the verdict changes: this used to print
-/// `Sensor is not level` every second and bury everything else.
-fn level_sense(attitude: [f32; 4]) -> (f32, bool) {
-    let up = rotate_by_quat(conjugate(attitude), [0.0, 0.0, 1.0]);
-    let x_grav = up[0] * GRAVITY;
-    (x_grav, calypso_core::is_level_along_axis(x_grav))
 }

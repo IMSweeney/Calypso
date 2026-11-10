@@ -102,7 +102,7 @@ prints the frames, and the transport prints what it made of them.
 2026-10-18T20:41:03.482119 INFO    ble subscribed to 0000ca21-b0cd-11ec-871f-d45ddf138840
 2026-10-18T20:41:03.631902 FINE    ble raw 0000ca21-b0cd-11ec-871f-d45ddf138840 13B 01 01 0c 0a 0a 00 …
 2026-10-18T20:41:03.631955 FINE    ble rx 0000ca21-b0cd-11ec-871f-d45ddf138840 summary rep=…
-2026-10-18T20:41:04.010004 FINE    ble rx 0000ca24-b0cd-11ec-871f-d45ddf138840 calibration sys=3 accel=3 gyro=3 mag=0 ready=true
+2026-10-18T20:41:04.010004 INFO    ble clock: device set to 1760829664 s
 ```
 
 Reading a session back from that file, and what each shape of it means, is in

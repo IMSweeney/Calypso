@@ -7,8 +7,6 @@ offers — so a notify on a characteristic with no `NOTIFY` is a compile error
 rather than a device that stays silent.
 
 - [`SPEC.md`](SPEC.md) — the design (handoff spec, revision 2).
-- [`PLAN.md`](PLAN.md) — the review of that spec against the pinned crates, the
-  decisions taken, what is still open, and the traps found on the way.
 
 ## Layout
 

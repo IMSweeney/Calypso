@@ -1,12 +1,6 @@
-// The BLE GATT table the device serves, described the way `tools/gatt-gen`
-// reads it: a `service` is a GATT service, an `rpc` is a characteristic, the
-// request type is what the central writes and the response type is what the
-// peripheral reads or notifies.
+// The BLE GATT table the device serves, described the way `tools/gatt-gen` reads it: a `service` is a GATT service, an `rpc` is a characteristic, the request type is what the central writes and the response type is what the peripheral reads or notifies.
 //
-// Separate from `calypso.proto`, which holds the messages: that file is the wire
-// format both sides encode, while this one is the device's table. The device
-// generates its attribute table from this file and the app its typed client, so
-// the UUIDs, the directions and the pipe's shape are declared once.
+// Separate from `calypso.proto`, which holds the messages: that file is the wire format both sides encode, while this one is the device's table. The device generates its attribute table from this file and the app its typed client, so the UUIDs, the directions and the pipe's shape are declared once.
 // Both generated files are committed and nothing regenerates or checks them: run `calypso-core/tool/gen_gatt.sh` and `calypso-app/tool/gen_gatt.sh` after changing this file, and commit both results.
 
 syntax = "proto3";
@@ -19,32 +13,16 @@ import "google/protobuf/empty.proto";
 
 // --- The table -------------------------------------------------------------
 //
-// The generated Rust lands in `calypso_core::gatt`, the generated Dart in
-// `calypso-app/lib/gatt/gatt_client.dart`.
+// The generated Rust lands in `calypso_core::gatt`, the generated Dart in `calypso-app/lib/gatt/gatt_client.dart`.
 //
-// The two pipe characteristics belong to one **pipe** (`pipe: "sync"`): neither
-// carries a whole message in one value. A message is cut into chunks, each framed and
-// carried in one write or one notification, and reassembled at the other end —
-// `tools/gatt-gen/SPEC.md` §7 describes the protocol, and `tools/gatt-pipe` is the
-// runtime both ends drive it with. That is what a trace travels as: one `TraceChunk`
-// per transfer, a few notifications each, instead of the device re-cutting a trace
-// into three-point notifications. The size of a chunk and of a message are the
-// generator's (`tool/gen_gatt.sh`), not this file's: a pipe has no `max_len`,
-// because it sizes transfers rather than values.
+// The two pipe characteristics belong to one **pipe** (`pipe: "sync"`): neither carries a whole message in one value. A message is cut into chunks, each framed and carried in one write or one notification, and reassembled at the other end — `tools/gatt-gen/SPEC.md` §7 describes the protocol, and `tools/gatt-pipe` is the runtime both ends drive it with. That is what a trace travels as: one `TraceChunk` per transfer, a few notifications each, instead of the device re-cutting a trace into three-point notifications. The size of a chunk and of a message are the generator's (`tool/gen_gatt.sh`), not this file's: a pipe has no `max_len`, because it sizes transfers rather than values.
 //
-// The other three characteristics carry **values**, not transfers: the IMU's own last
-// sample, which the app reads when it wants it (`max_len` is what a single read carries);
-// the clock it writes the same way; and the device's own faults, which are pushed. A state
-// has no event to be pushed on, and a push would have to be sent whenever it might have
-// changed — which on a pipe that carries one message at a time means it competes with the
-// summaries (`docs/GOTCHAS.md`, "An acknowledgement is also a request for the next message").
+// The other two characteristics carry **values**, not transfers: the clock the app writes (`max_len` is what a single write carries), and the device's own faults, which are pushed.
+// A state has no event to be pushed on, and a push would have to be sent whenever it might have changed — which on a pipe that carries one message at a time means it competes with the summaries.
 //
-// Anything the app *does* rather than reads goes on the pipe as an arm of `SyncRequest`
-// (`DevMode`), so the table does not grow a characteristic per operation.
+// Anything the app *does* rather than reads goes on the pipe as an arm of `SyncRequest` (`DevMode`), so the table does not grow a characteristic per operation.
 //
-// The faults are the exception that proves it: they *are* events, so they are pushed,
-// and they carry one small value because an event the sender has to be paced through
-// is one that can be lost behind the very transfer it is reporting (`Report`).
+// The faults are the exception that proves it: they *are* events, so they are pushed, and they carry one small value because an event the sender has to be paced through is one that can be lost behind the very transfer it is reporting (`Report`).
 
 service Sync {
   option (gatt.service) = {
@@ -52,33 +30,9 @@ service Sync {
     primary: true
   };
 
-  // The IMU as the sampler last read it, for a client that wants to see the sensor rather
-  // than derive a rep from it: the detector's own input.
+  // What went wrong, as it happens. `NOTIFY` only: a fault is an event, so no client reads a latest one back — the device sends what it raised while nobody was listening when a subscriber appears, and the kind is all the app gets.
   //
-  // `max_len` 64 is above the 20 bytes a default MTU guarantees, deliberately. Eleven
-  // fixed-point fields cannot encode to less — a clamped i16 is three bytes at its widest,
-  // so the quaternion alone can take twelve — and the scales are the ones a trace point uses,
-  // so the sample survives the trip unchanged instead of being rescaled into a readout that
-  // could not be compared against one. Our own app negotiates a 247 byte MTU before it reads
-  // anything; a client that does not gets a failed read rather than a truncated value.
-  rpc Imu(google.protobuf.Empty) returns (ImuState) {
-    option (gatt.characteristic) = {
-      uuid: "0000ca26-b0cd-11ec-871f-d45ddf138840"
-      props: [READ]
-      max_len: 64
-    };
-  }
-
-  // What went wrong, as it happens. `NOTIFY` only: a fault is an event, so no
-  // client reads a latest one back — the device sends what it raised while nobody
-  // was listening when a subscriber appears, and the kind is all the app gets.
-  //
-  // `max_len` 20 is the payload every stack guarantees, which is far more than this
-  // needs: a `Report` is one enum field, so it encodes to two bytes and
-  // `SyncReportsValue::encode` cannot fail. **A value rather than a pipe transfer**,
-  // because a fault that had to take its turn behind a trace would be the one thing
-  // the app most needs and least gets — and the pipe's own failures are among the
-  // faults (see `Report` and `docs/APP_SYNC.md`).
+  // `max_len` 20 is the payload every stack guarantees, which is far more than this needs: a `Report` is one enum field, so it encodes to two bytes and `SyncReportsValue::encode` cannot fail. **A value rather than a pipe transfer**, because a fault that had to take its turn behind a trace would be the one thing the app most needs and least gets — and the pipe's own failures are among the faults (see `Report`).
   rpc Reports(google.protobuf.Empty) returns (Report) {
     option (gatt.characteristic) = {
       uuid: "0000ca25-b0cd-11ec-871f-d45ddf138840"
@@ -89,15 +43,9 @@ service Sync {
 
   // The device's clock, which the app sets. Unix seconds.
   //
-  // Four bytes cannot hold milliseconds, and a second is the precision a phone's
-  // clock can honestly claim — the rep times the device derives from this are
-  // milliseconds (`RepSummary.t_unix_ms`), so two reps in the same second still
-  // order exactly. There is a floor on what the device will believe, and a value
-  // below it is ignored rather than stored (see `calypso_core::clock`).
+  // Four bytes cannot hold milliseconds, and a second is the precision a phone's clock can honestly claim — the rep times the device derives from this are milliseconds (`RepSummary.t_unix_ms`), so two reps in the same second still order exactly. There is a floor on what the device will believe, and a value below it is ignored rather than stored (see `calypso_core::clock`).
   //
-  // `WRITE` rather than `WRITE_NO_RSP`: the app sets this once per boot and is
-  // entitled to know whether it landed. Written every time the app connects,
-  // because the device's clock lasts exactly one boot.
+  // `WRITE` rather than `WRITE_NO_RSP`: the app sets this once per boot and is entitled to know whether it landed. Written every time the app connects, because the device's clock lasts exactly one boot.
   rpc Time(gatt.U32) returns (google.protobuf.Empty) {
     option (gatt.characteristic) = {
       uuid: "0000ca23-b0cd-11ec-871f-d45ddf138840"
@@ -107,9 +55,7 @@ service Sync {
 
   // Everything the app sends: a `SyncRequest`, as chunks the pipe reassembles.
   //
-  // `WRITE_NO_RSP` only: the pipe acknowledges with frames of its own, so a write
-  // that waits for an ATT response would put the app's next chunk behind a round
-  // trip for no signal it does not already have.
+  // `WRITE_NO_RSP` only: the pipe acknowledges with frames of its own, so a write that waits for an ATT response would put the app's next chunk behind a round trip for no signal it does not already have.
   rpc Requests(SyncRequest) returns (google.protobuf.Empty) {
     option (gatt.characteristic) = {
       uuid: "0000ca22-b0cd-11ec-871f-d45ddf138840"
@@ -118,11 +64,9 @@ service Sync {
     };
   }
 
-  // Everything the device sends: a `SyncMessage`, as chunks. Summaries stream to a
-  // subscriber; trace chunks answer a request.
+  // Everything the device sends: a `SyncMessage`, as chunks. Summaries stream to a subscriber; trace chunks answer a request.
   //
-  // One characteristic, so the frame that carries an acknowledgement travels
-  // beside the chunks it is about rather than on a third characteristic of its own.
+  // One characteristic, so the frame that carries an acknowledgement travels beside the chunks it is about rather than on a third characteristic of its own.
   rpc Messages(google.protobuf.Empty) returns (SyncMessage) {
     option (gatt.characteristic) = {
       uuid: "0000ca21-b0cd-11ec-871f-d45ddf138840"

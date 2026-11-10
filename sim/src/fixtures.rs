@@ -17,9 +17,7 @@ pub const SAMPLE_DT_MS: u32 = 10;
 
 /// Milliseconds of rest every synthetic stream starts with.
 ///
-/// Not politeness: the filter reports no linear acceleration until it has been still long enough to
-/// know which way gravity points, and the detector is not fed before that, so a stream that starts
-/// moving is not recordable anywhere in it.
+/// Not politeness: the filter reports no linear acceleration until it has been still long enough to know which way gravity points, and the detector is not fed before that, so a stream that starts moving is not recordable anywhere in it.
 pub const LEAD_IN_MS: u32 = 1600;
 
 /// The wall clock the fixtures are dated from: 2026-01-01T00:00:00Z.
@@ -43,12 +41,9 @@ const REPLAY_RING: usize = 4096;
 /// Detector window (max rep + ZUPT margins).
 const WINDOW_SAMPLES: usize = 900;
 
-/// One synthetic sample of level motion: `accel` is the bar's own acceleration, and the sensor
-/// reads that plus gravity.
+/// One synthetic sample of level motion: `accel` is the bar's own acceleration, and the sensor reads that plus gravity.
 ///
-/// The addition is the whole difference between a generator and a sensor, so it happens here
-/// rather than in each scenario: a stroke's acceleration is what a rep is made of, and `g` is
-/// only ever the platform.
+/// The addition is the whole difference between a generator and a sensor, so it happens here rather than in each scenario: a stroke's acceleration is what a rep is made of, and `g` is only ever the platform.
 pub fn at(t_ms: u32, accel: [f32; 3]) -> Sample {
     Sample {
         t_ms,
@@ -111,15 +106,12 @@ pub fn detect_and_trace(
     for s in samples {
         ring.push(*s);
         let filtered = fusion.update(s);
-        // The device records nothing until the filter knows which way is down, so a boot's first
-        // motion never reaches the detector. The ring still holds it, so a rep that starts right
-        // after readiness has its margin.
+        // The device records nothing until the filter knows which way is down, so a boot's first motion never reaches the detector. The ring still holds it, so a rep that starts right after readiness has its margin.
         if !fusion.ready() {
             continue;
         }
         if let Some(span) = det.update(&filtered) {
-            // The window starts where the filter state does, which is not always `MARGIN_MS` before
-            // the rep: one close behind the boot has no filtered history that far back.
+            // The window starts where the filter state does, which is not always `MARGIN_MS` before the rep: one close behind the boot has no filtered history that far back.
             let (from_ms, state) = det.rep_state();
             let n = ring.copy_window(from_ms, span.end_ms, 0, MARGIN_MS, &mut window);
             if n == 0 {
@@ -216,8 +208,7 @@ pub fn read_dump(dump: &[u8]) -> (Vec<&[u8]>, bool) {
     (records, truncated)
 }
 
-/// One stored window out of a `.pblog`, with the samples the device recorded and the filter state
-/// the stored summary says its replay starts from.
+/// One stored window out of a `.pblog`, with the samples the device recorded and the filter state the stored summary says its replay starts from.
 pub struct Window {
     /// The rep's uuid, lower-case hex, so a run can name one.
     pub uuid: String,
@@ -250,8 +241,7 @@ pub fn capture_windows(dump: &[u8]) -> (Vec<Window>, bool) {
                 let Some(w) = windows.last_mut() else {
                     panic!("a raw chunk before any summary")
                 };
-                // A point's time is an offset from the rep's first sample, which is the summary's
-                // `t_start_ms` — the same origin the plotted trace counts from.
+                // A point's time is an offset from the rep's first sample, which is the summary's `t_start_ms` — the same origin the plotted trace counts from.
                 for p in &r.samples {
                     let mut s = pb::raw_point_from_message(p);
                     s.t_ms = s.t_ms.saturating_add(w.t_start_ms);

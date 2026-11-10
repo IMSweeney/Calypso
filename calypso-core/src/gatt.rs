@@ -13,7 +13,7 @@ use trouble_host::types::gatt_traits::FromGattError;
 /// A hash of the schema this was generated from: firmware and app built from
 /// the same schema agree, and anything else is caught before a typed value is
 /// believed. Protobuf would otherwise decode a mismatch silently.
-pub const SCHEMA_HASH: u64 = 0x62dda8f6378221e2;
+pub const SCHEMA_HASH: u64 = 0xf52440a0d9269e20;
 
 /// Backing buffer for a pipe characteristic's chunk.
 pub const PIPE_CHUNK_MAX: usize = 244;
@@ -33,14 +33,6 @@ pub mod uuid {
     pub const SYNC_SERVICE_UUID: Uuid = Uuid::new_long(SYNC_SERVICE_BYTES);
     /// `calypso.Sync`, as a client prints it: the text the schema quotes.
     pub const SYNC_SERVICE_TEXT: &str = "0000ca20-b0cd-11ec-871f-d45ddf138840";
-
-    /// `calypso.Sync.Imu`.
-    pub const SYNC_IMU_UUID: Uuid = Uuid::new_long([
-        0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x26, 0xca, 0x00,
-        0x00,
-    ]);
-    /// `calypso.Sync.Imu`, as a client prints it.
-    pub const SYNC_IMU_TEXT: &str = "0000ca26-b0cd-11ec-871f-d45ddf138840";
 
     /// `calypso.Sync.Reports`.
     pub const SYNC_REPORTS_UUID: Uuid = Uuid::new_long([
@@ -79,86 +71,8 @@ pub mod uuid {
 /// of these values is sized from here, so the schema stays the one place the
 /// number is written down.
 pub mod max_len {
-    /// `calypso.Sync.Imu`.
-    pub const SYNC_IMU: usize = 64;
-
     /// `calypso.Sync.Reports`.
     pub const SYNC_REPORTS: usize = 20;
-}
-
-/// `calypso.ImuState` as one GATT attribute value: the message encoded whole, which is what a single-shot characteristic carries (`max_len` 64).
-/// `encode` returns `None` only for a message that does not fit `max_len`; `decode` returns `None` for bytes that are not this message at all.
-#[derive(Default)]
-pub struct SyncImuValue {
-    bytes: Vec<u8, 64>,
-}
-
-impl SyncImuValue {
-    /// Encode `message` into a value.
-    pub fn encode(message: &crate::pb::msg::ImuState) -> Option<Self> {
-        let mut bytes = Vec::new();
-        bytes.resize(64, 0).ok()?;
-        let mut writer: &mut [u8] = bytes.as_mut_slice();
-        {
-            let mut encoder = micropb::PbEncoder::new(&mut writer);
-            message.encode(&mut encoder).ok()?;
-        }
-        let written = 64 - writer.len();
-        bytes.truncate(written);
-        Some(SyncImuValue { bytes })
-    }
-
-    /// Encode `message` into an existing value, reusing its buffer: for a
-    /// sender that notifies repeatedly and does not want a value per message.
-    /// Returns false if the message does not fit.
-    pub fn encode_into(&mut self, message: &crate::pb::msg::ImuState) -> bool {
-        self.bytes.clear();
-        if self.bytes.resize(64, 0).is_err() {
-            return false;
-        }
-        let mut writer: &mut [u8] = self.bytes.as_mut_slice();
-        {
-            let mut encoder = micropb::PbEncoder::new(&mut writer);
-            if message.encode(&mut encoder).is_err() {
-                self.bytes.clear();
-                return false;
-            }
-        }
-        let written = 64 - writer.len();
-        self.bytes.truncate(written);
-        true
-    }
-
-    /// Decode the value.
-    pub fn decode(&self) -> Option<crate::pb::msg::ImuState> {
-        let mut message = crate::pb::msg::ImuState::default();
-        message.decode_from_bytes(self.bytes.as_slice()).ok()?;
-        Some(message)
-    }
-
-    /// The value as it goes on the wire.
-    pub fn as_bytes(&self) -> &[u8] {
-        self.bytes.as_slice()
-    }
-}
-
-impl AsGatt for SyncImuValue {
-    const MIN_SIZE: usize = 0;
-    const MAX_SIZE: usize = 64;
-
-    fn as_gatt(&self) -> &[u8] {
-        self.bytes.as_slice()
-    }
-}
-
-impl FromGatt for SyncImuValue {
-    fn from_gatt(data: &[u8]) -> Result<Self, FromGattError> {
-        let mut bytes = Vec::new();
-        bytes
-            .extend_from_slice(data)
-            .map_err(|_| FromGattError::InvalidLength)?;
-        Ok(SyncImuValue { bytes })
-    }
 }
 
 /// `calypso.Report` as one GATT attribute value: the message encoded whole, which is what a single-shot characteristic carries (`max_len` 20).
@@ -239,9 +153,6 @@ impl FromGatt for SyncReportsValue {
 /// `calypso.Sync`.
 #[gatt_service(uuid = "0000ca20-b0cd-11ec-871f-d45ddf138840")]
 pub struct SyncService {
-    /// `Imu` (0000ca26-b0cd-11ec-871f-d45ddf138840), calypso.ImuState.
-    #[characteristic(uuid = "0000ca26-b0cd-11ec-871f-d45ddf138840", read)]
-    pub imu: SyncImuValue,
     /// `Reports` (0000ca25-b0cd-11ec-871f-d45ddf138840), calypso.Report.
     #[characteristic(uuid = "0000ca25-b0cd-11ec-871f-d45ddf138840", notify)]
     pub reports: SyncReportsValue,

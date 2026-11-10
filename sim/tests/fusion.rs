@@ -1,12 +1,9 @@
 //! Pins for the filter's effect on what the device stores.
 //!
-//! These are the things the fused orientation could not do and the raw path must: a mount is never
-//! square to the bar, a sensor carries offsets, and a boot can happen anywhere — including mid-rep.
-//! Each scenario is synthetic motion plus one impairment, replayed through the whole pipeline, so a
-//! failure here is a stored summary changing rather than a filter internals changing.
+//! These are the things the fused orientation could not do and the raw path must: a mount is never square to the bar, a sensor carries offsets, and a boot can happen anywhere — including mid-rep.
+//! Each scenario is synthetic motion plus one impairment, replayed through the whole pipeline, so a failure here is a stored summary changing rather than a filter internals changing.
 //!
-//! The filter's own arithmetic is pinned in `calypso-core/tests/fusion.rs`; what is here is what
-//! reaches the log.
+//! The filter's own arithmetic is pinned in `calypso-core/tests/fusion.rs`; what is here is what reaches the log.
 
 use calypso_core::sampler::Sample;
 use calypso_sim::fixtures::{at, detect_and_trace, LEAD_IN_MS, SAMPLE_DT_MS};
@@ -28,14 +25,9 @@ fn impaired(samples: &[Sample], i: Impairments) -> Vec<Sample> {
     out
 }
 
-/// A sensor bolted to the bar at an angle measures the same motion in another frame, and the travel
-/// it reads back has to be the bar's, not the mount's.
+/// A sensor bolted to the bar at an angle measures the same motion in another frame, and the travel it reads back has to be the bar's, not the mount's.
 ///
-/// A fusion in IMU mode got this wrong in the direction that costs the most: roll and pitch came
-/// partly from the accelerometer, so a stroke's own acceleration pulled the estimate off, and five
-/// of fourteen captured reps had less vertical travel than sideways. Here the gyro carries the tilt
-/// and the accelerometer only supplies gravity's direction, so a mount at 90° costs nothing: it is
-/// one constant attitude the filter learns at boot and integrates from.
+/// A fusion in IMU mode got this wrong in the direction that costs the most: roll and pitch came partly from the accelerometer, so a stroke's own acceleration pulled the estimate off, and five of fourteen captured reps had less vertical travel than sideways. Here the gyro carries the tilt and the accelerometer only supplies gravity's direction, so a mount at 90° costs nothing: it is one constant attitude the filter learns at boot and integrates from.
 #[test]
 fn a_mount_tilt_does_not_change_the_travel() {
     let travel = Rep::bench().travel;
@@ -67,12 +59,9 @@ fn a_mount_tilt_does_not_change_the_travel() {
     }
 }
 
-/// A gyroscope that reports a rate while the bar is still does not turn the ground: the offset is
-/// learned at rest and taken out, so a rep after a long still period reads its travel.
+/// A gyroscope that reports a rate while the bar is still does not turn the ground: the offset is learned at rest and taken out, so a rep after a long still period reads its travel.
 ///
-/// This is the failure mode the fused part of the old path hid: an attitude that drifts while the
-/// bar rests leaks gravity into the horizontal axes, and a detector integrating that sees a bar
-/// that is moving when it is on the rack.
+/// This is the failure mode the fused part of the old path hid: an attitude that drifts while the bar rests leaks gravity into the horizontal axes, and a detector integrating that sees a bar that is moving when it is on the rack.
 #[test]
 fn a_gyro_bias_does_not_rotate_the_ground() {
     let travel = Rep::bench().travel;
@@ -104,8 +93,7 @@ fn a_gyro_bias_does_not_rotate_the_ground() {
     }
 }
 
-/// An accelerometer offset is the sensor's zero, not motion, and it arrives from a still window
-/// rather than from a seed taken at boot.
+/// An accelerometer offset is the sensor's zero, not motion, and it arrives from a still window rather than from a seed taken at boot.
 #[test]
 fn an_accelerometer_bias_is_the_sensor_zero_not_motion() {
     let travel = Rep::bench().travel;
@@ -136,9 +124,7 @@ fn an_accelerometer_bias_is_the_sensor_zero_not_motion() {
 /// An offset that arrives *after* boot is absorbed by the next still window.
 ///
 /// The sensor's offsets move with temperature, so a value learned at boot is wrong an hour later.
-/// What makes this testable is that nothing announces the change: the reading simply sits somewhere
-/// else, which is exactly what a bar being held at an angle looks like too — so the filter learns
-/// the accelerometer's offset only while the bar is still, and only from stillness.
+/// What makes this testable is that nothing announces the change: the reading simply sits somewhere else, which is exactly what a bar being held at an angle looks like too — so the filter learns the accelerometer's offset only while the bar is still, and only from stillness.
 #[test]
 fn an_offset_that_arrives_after_boot_is_absorbed() {
     for settle_ms in [3000u32, 5000, 10000] {
@@ -191,9 +177,7 @@ fn an_offset_that_arrives_after_boot_is_absorbed() {
 
 /// A boot in the middle of a rep stores nothing for it, and comes back at the first rest.
 ///
-/// The filter has no idea which way gravity points until it has been still, so a boot that starts
-/// moving has no frame to integrate in. What it must not do is invent one: the motion before the
-/// first rest is discarded, and the next rep — after the bar has rested — is recorded normally.
+/// The filter has no idea which way gravity points until it has been still, so a boot that starts moving has no frame to integrate in. What it must not do is invent one: the motion before the first rest is discarded, and the next rep — after the bar has rested — is recorded normally.
 #[test]
 fn a_boot_into_motion_stores_nothing_until_it_rests() {
     let travel = Rep::bench().travel;

@@ -65,8 +65,7 @@ pub fn descriptor_set(input: &Input, out: &Path) -> Result<(), Error> {
             command.arg(format!("-I{}", dir.display()));
         }
     }
-    // The vocabulary comes with the tool, so `import "gatt_options.proto"`
-    // resolves without every consumer vendoring a copy. Last, so a schema that deliberately ships its own copy is the one that gets checked.
+    // The vocabulary comes with the tool, so `import "gatt_options.proto"` resolves without every consumer vendoring a copy. Last, so a schema that deliberately ships its own copy is the one that gets checked.
     command.arg(format!("-I{}", vocabulary::vocabulary_dir()?.display()));
     command
         // Without this the custom options cannot be read back (see the module docs).

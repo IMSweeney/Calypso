@@ -1,17 +1,10 @@
-//! Run a stored window's raw samples back through the filter and the detector, twice: once from the
-//! state the device stored, and once from that state with the velocity zeroed.
+//! Run a stored window's raw samples back through the filter and the detector, twice: once from the state the device stored, and once from that state with the velocity zeroed.
 //!
-//! The two runs answer different questions and the pair is what names the fault. A window replayed
-//! from its own state is what the summary's `rom` already is — `compute_rep` integrates forward from
-//! it, so a state that arrives carrying speed produces travel the bar never did. The same samples
-//! replayed from rest are what the detector would have made of the window if the filter had known
-//! where the bar was: spans, legs, and a `rom` measured against the motion rather than the drift.
+//! The two runs answer different questions and the pair is what names the fault. A window replayed from its own state is what the summary's `rom` already is — `compute_rep` integrates forward from it, so a state that arrives carrying speed produces travel the bar never did. The same samples replayed from rest are what the detector would have made of the window if the filter had known where the bar was: spans, legs, and a `rom` measured against the motion rather than the drift.
 //!
-//! Nothing here changes what the device stores; it is the instrument that says whether a stored
-//! window is real motion or an estimate's error.
+//! Nothing here changes what the device stores; it is the instrument that says whether a stored window is real motion or an estimate's error.
 //!
-//! Usage: `cargo run --release --example replay_capture -- <dump.pblog> [window-prefix] [--series|--spans]`,
-//! where the dump came from `cargo run --example device_log -- <image.bin> --dump <dump.pblog>`.
+//! Usage: `cargo run --release --example replay_capture -- <dump.pblog> [window-prefix] [--series|--spans]`, where the dump came from `cargo run --example device_log -- <image.bin> --dump <dump.pblog>`.
 
 use std::env;
 use std::fs;
@@ -34,8 +27,7 @@ struct Replay {
     still: usize,
     /// The largest speed reached, and the largest of it that was horizontal.
     ///
-    /// Splitting the two is what tells a bar that moved from a gravity that leaked: a tilt puts speed into
-    /// the horizontal plane, where nothing a rep does ought to put metres per second.
+    /// Splitting the two is what tells a bar that moved from a gravity that leaked: a tilt puts speed into the horizontal plane, where nothing a rep does ought to put metres per second.
     peak_v: f32,
     peak_h: f32,
 }
@@ -90,16 +82,14 @@ fn main() {
 
 /// The vertical acceleration and velocity the detector would see, one line a sample.
 ///
-/// This is the instrument a turn rule is designed against: it prints the two signals the detector
-/// gates on, so whether a turnaround shows up in them is a question with an answer.
+/// This is the instrument a turn rule is designed against: it prints the two signals the detector gates on, so whether a turnaround shows up in them is a question with an answer.
 fn print_series(w: &Window) {
     let mut fusion = Fusion::from_state(w.state);
     println!("{}\tt_ms\ta_z\tv_z\tv_h\ta_x\ta_y\ttilt\tstill", w.uuid);
     for s in &w.samples {
         let f = fusion.update(s);
         let v = f.state.velocity;
-        // Where the world frame thinks gravity is, in degrees off vertical: zero if the attitude is
-        // right, and at a moment the bar is not accelerating, the attitude's own error.
+        // Where the world frame thinks gravity is, in degrees off vertical: zero if the attitude is right, and at a moment the bar is not accelerating, the attitude's own error.
         let a = f.linear_accel;
         let tilt = atan2f((a[0] * a[0] + a[1] * a[1]).sqrt(), a[2] + GRAVITY).to_degrees();
         println!(
@@ -132,9 +122,7 @@ fn report(label: &str, r: Replay) {
 
 /// Feed one window through a filter seeded at `from`, and close the reps the detector finds.
 ///
-/// `spans` prints where each rep's travel came from: the trace's vertical range, the velocity the
-/// replay started on, and the trace itself, coarse. A `rom` that grows between two ends sitting at
-/// zero metres was paid for inside the window; one that starts high was the state's.
+/// `spans` prints where each rep's travel came from: the trace's vertical range, the velocity the replay started on, and the trace itself, coarse. A `rom` that grows between two ends sitting at zero metres was paid for inside the window; one that starts high was the state's.
 fn replay(w: &Window, from: FusionState, spans: bool) -> Replay {
     let mut ring_buf = vec![Sample::ZERO; RING];
     let mut ring = SampleRing::new(&mut ring_buf);

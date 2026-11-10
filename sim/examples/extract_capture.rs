@@ -1,8 +1,6 @@
 //! Pull chosen reps out of a rep log dump into a dump of their own, so a real capture can be checked in as fixtures.
 //!
-//! Every record is copied byte for byte: the output is the same bytes the device wrote, in the same order, with the
-//! reps nobody asked for left out. Nothing is re-encoded, so a fixture made this way cannot drift from what the
-//! firmware stored.
+//! Every record is copied byte for byte: the output is the same bytes the device wrote, in the same order, with the reps nobody asked for left out. Nothing is re-encoded, so a fixture made this way cannot drift from what the firmware stored.
 //!
 //! Usage: `cargo run --example extract_capture -- <capture.pblog> <out.pblog> <uuid-prefix>...`
 //!
@@ -33,8 +31,7 @@ fn main() {
     let mut kept: Vec<Vec<u8>> = Vec::new();
     let mut found = vec![false; wanted.len()];
     for record in &records {
-        // A clock record belongs to whatever it sits in front of, so it is kept unconditionally: a dump is read by
-        // order, and dropping the one that dates a rep would leave that rep undated.
+        // A clock record belongs to whatever it sits in front of, so it is kept unconditionally: a dump is read by order, and dropping the one that dates a rep would leave that rep undated.
         let keep = match decode_record(record) {
             Ok(Record::Summary(s)) => prefix_matches(&s.rep_uuid, &wanted, &mut found),
             Ok(Record::Computed(c)) => prefix_matches(&c.rep_uuid, &wanted, &mut found),

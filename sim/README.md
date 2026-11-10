@@ -15,7 +15,6 @@ cargo run --example replay_dump -- <path.pblog>
 cargo run --example detector_report # every phase, counted
 cargo run --example detector_map -- bench        # draw where a synthetic rep is stored
 cargo run --example false_positive_map           # draw where motion that is not a rep is stored
-cargo run --example set_probe                    # print what a set comes back as
 ```
 
 `detector_report` is the one command that runs all of it: the same cells the maps draw, counted

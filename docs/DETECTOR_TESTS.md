@@ -272,7 +272,7 @@ having: the travel no longer depends on the drift the window carried in. What is
 residue integrating *inside* one leg, which is the filter's and is where the remaining 1–4 m lives.
 
 **What it cost on the maps.** Detection did not move: the same 5,292 cells store the same reps,
-the non-rep sweep is identical, and `set_probe` reads the same spans. ROM fidelity against the
+the non-rep sweep is identical, and the canonical sets read the same spans. ROM fidelity against the
 travel asked for moved with it, and not all one way: the bench's slices came in a point or two
 closer (+10.9 % → +10.4 % on `travel × speed_in`, +5.3 % → +5.1 % on `travel × pause_top`), while
 the deadlift and the squat went out (deadlift `travel × pause_top` +3.6 % → +5.4 %, squat
@@ -358,9 +358,9 @@ one-way pushes — direction is irrelevant to a detector that keys on magnitude.
 **What is measured.** For each assembled set, the stored summaries are judged on four things, not
 on `is_a_rep` alone: the **count** (N reps in, N reps out), the **order** (they come back in time
 order), the **ROM** (each still reads its travel, the neighbours not having skewed it), and the
-**edges** (neither the unrack nor the re-rack is stored). This is pins plus a `set_probe` example
-that prints the detected sequence — not a 2-D map, because the result is a discrete "N in → N out",
-not a boundary.
+**edges** (neither the unrack nor the re-rack is stored). This is pins plus the report's set
+table, which prints the detected sequence — not a 2-D map, because the result is a discrete "N in
+→ N out", not a boundary.
 
 **What the probe found.** The set is measured, not fixed. A comfortable set comes back whole and
 in time order; an unrack and a re-rack sit right next to a rep without being stored; and a set
@@ -395,10 +395,10 @@ The fix is in: the integration starts from the bar's velocity at the rep's left 
   unrack/re-rack/bump) and `Wobble` (the oscillation). There is no captured non-rep left to pin:
   the one capture's windows carry holes in their own timelines, so a test against them would pin
   numbers that came from bridging a gap (see [FIXTURES.md](FIXTURES.md)).
-- **Sets: done.** The `Set` generator is in `sim/src/motion.rs`, `sim/examples/set_probe.rs` prints
-  the detected sequence, and `sim/tests/sets.rs` pins that a set comes back whole, in order, with the
+- **Sets: done.** The `Set` generator is in `sim/src/motion.rs`, `sim/examples/detector_report.rs`
+  prints the detected sequence, and `sim/tests/sets.rs` pins that a set comes back whole, in order, with the
   unrack/re-rack unstored. The no-rest set splits correctly, and its later reps read their travel now
-  that the integration is seeded from the bar's left-edge velocity (`RepSummary.v0`) — a small edge
+  that the integration is seeded from the bar's left-edge velocity (`RepSummary.state`) — a small edge
   residual remains. The calibration transient (a roll, a fusion artifact
   rather than a stroke) is still open.
 

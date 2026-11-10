@@ -1,17 +1,10 @@
 //! What a recorded window's raw samples say about the sensor and the room it is in.
 //!
-//! Stage 0 of `docs/DETECTOR_TESTS.md` §2. The noise map's two largest terms cannot be fitted from a
-//! datasheet — how much of a still window's spread is the part and how much is the platform, and
-//! what shape the second has — so they come off a device. One capture from a `--features
-//! record-mode` build answers all four questions the model needs, and this prints them.
+//! The noise map's two largest terms cannot be fitted from a datasheet — how much of a still window's spread is the part and how much is the platform, and what shape the second has — so they come off a device. One capture from a `--features record-mode` build answers all four questions the model needs, and this prints them.
 //!
-//! Everything is in the units the gate is written in: milligrammes of specific force, and
-//! milliseconds against the window and the run length `Fusion` is judged on. The constants come from
-//! `calypso_core::fusion` rather than being copied here, so a report cannot describe a gate nothing
-//! uses.
+//! Everything is in the units the gate is written in: milligrammes of specific force, and milliseconds against the window and the run length `Fusion` is judged on. The constants come from `calypso_core::fusion` rather than being copied here, so a report cannot describe a gate nothing uses.
 //!
-//! Usage: `cargo run --release --example raw_dump -- <dump.pblog>`, where the dump came from
-//! `cargo run --example device_log -- <image.bin> --dump <dump.pblog>` or from the app's history.
+//! Usage: `cargo run --release --example raw_dump -- <dump.pblog>`, where the dump came from `cargo run --example device_log -- <image.bin> --dump <dump.pblog>` or from the app's history.
 
 use std::env;
 use std::fs;
@@ -69,10 +62,7 @@ fn main() {
                 let Some(w) = windows.last_mut() else {
                     panic!("a raw chunk before any summary")
                 };
-                // A point's time is an offset from the rep's first sample, which is the summary's
-                // `t_start_ms` — the same origin the plotted trace counts from — so that plus the
-                // offset is the sample's uptime. The chunk's own `first_t_offset_ms` places the chunk
-                // in a stream and is not part of it.
+                // A point's time is an offset from the rep's first sample, which is the summary's `t_start_ms` — the same origin the plotted trace counts from — so that plus the offset is the sample's uptime. The chunk's own `first_t_offset_ms` places the chunk in a stream and is not part of it.
                 for p in &r.samples {
                     let mut s = pb::raw_point_from_message(p);
                     s.t_ms = s.t_ms.saturating_add(w.t_start_ms);
@@ -135,8 +125,7 @@ fn report(index: usize, w: &Window) {
         n, dt_ms, holes
     );
     if holes > 0 {
-        // A hole is samples the device never took, so it is also a window the gate never saw end to
-        // end: where they are and how big they are is what says which of its paths is doing it.
+        // A hole is samples the device never took, so it is also a window the gate never saw end to end: where they are and how big they are is what says which of its paths is doing it.
         let mut gaps: Vec<(i64, u32)> = w
             .samples
             .windows(2)
@@ -153,8 +142,7 @@ fn report(index: usize, w: &Window) {
         println!();
     }
 
-    // Where gravity points is which way the sensor was bolted on, and nothing else: a still sensor
-    // reads 1 g up its own up axis, so this is the check that a window is the orientation it claims.
+    // Where gravity points is which way the sensor was bolted on, and nothing else: a still sensor reads 1 g up its own up axis, so this is the check that a window is the orientation it claims.
     let mean = mean3(&accel);
     println!(
         "  mean        x {:+.3}  y {:+.3}  z {:+.3} m/s²   |  {:.0} mg, and 1 g is {:.0} mg",
@@ -171,8 +159,7 @@ fn report(index: usize, w: &Window) {
         spread(&accel, 1, n) * 1000.0 / GRAVITY,
         spread(&accel, 2, n) * 1000.0 / GRAVITY
     );
-    // The first sample after the chip is configured is worth seeing: a window that opens at boot
-    // starts on it, and a reading that is not yet a reading would explain a window that swings a g.
+    // The first sample after the chip is configured is worth seeing: a window that opens at boot starts on it, and a reading that is not yet a reading would explain a window that swings a g.
     let first = &w.samples[0];
     println!(
         "  first sample at +{} ms   x {:+.2}  y {:+.2}  z {:+.2} m/s²   gyro {:.2} {:.2} {:.2} dps",
@@ -184,9 +171,7 @@ fn report(index: usize, w: &Window) {
         first.gyro_f32()[1],
         first.gyro_f32()[2]
     );
-    // A window that swings a tenth of a g is not a still window however its p50 reads, and where the
-    // swing is says which it was: at the very beginning the chip was still coming up, later on the
-    // device was being handled.
+    // A window that swings a tenth of a g is not a still window however its p50 reads, and where the swing is says which it was: at the very beginning the chip was still coming up, later on the device was being handled.
     for axis in 0..3 {
         let (far, at) = (0..n)
             .map(|i| ((accel[i][axis] - mean[axis]).abs(), i))
@@ -201,10 +186,8 @@ fn report(index: usize, w: &Window) {
         }
     }
 
-    // The gate's own statistic: a range over `STILL_WINDOW` samples, per axis, evaluated at every
-    // sample. The p50 says what the quiet is like, the max says how near the threshold it comes.
-    // Windows with a hole in them are left out of the count, because the gate never saw one: it is
-    // handed every sample the loop took, and a gap is a window that closed on nine hundred ms.
+    // The gate's own statistic: a range over `STILL_WINDOW` samples, per axis, evaluated at every sample. The p50 says what the quiet is like, the max says how near the threshold it comes.
+    // Windows with a hole in them are left out of the count, because the gate never saw one: it is handed every sample the loop took, and a gap is a window that closed on nine hundred ms.
     println!(
         "  quiet {:.0} ms window (p50 / p95 / max)",
         STILL_WINDOW as f32 * dt_ms as f32
@@ -228,9 +211,7 @@ fn report(index: usize, w: &Window) {
         READY_S * 1000.0
     );
 
-    // The quantiser: how often two consecutive readings are the same value, and by how much they
-    // move when they are not. A part whose die is 3.9 mg a count at ±8 g shows steps of about four
-    // of the output's 1 mg counts; one that rescales internally shows steps of one.
+    // The quantiser: how often two consecutive readings are the same value, and by how much they move when they are not. A part whose die is 3.9 mg a count at ±8 g shows steps of about four of the output's 1 mg counts; one that rescales internally shows steps of one.
     let mut steps = [0u32; 9];
     let mut pairs = 0u32;
     for axis in 0..3 {
@@ -263,8 +244,7 @@ fn report(index: usize, w: &Window) {
     }
     println!();
 
-    // White noise is flat here and a bar in a rack is not, which is the distinction a single
-    // deviation cannot make.
+    // White noise is flat here and a bar in a rack is not, which is the distinction a single deviation cannot make.
     println!("  band power, share of variance in each band");
     for axis in 0..3 {
         let xs: Vec<f32> = accel.iter().map(|a| a[axis]).collect();
@@ -295,8 +275,7 @@ fn report(index: usize, w: &Window) {
     );
 }
 
-/// The means side by side: the same orientation twice is the check that the run order was what the
-/// session said, and its two rows agreeing is the check that nothing drifted between them.
+/// The means side by side: the same orientation twice is the check that the run order was what the session said, and its two rows agreeing is the check that nothing drifted between them.
 fn means(windows: &[Window]) {
     println!("\nwhat every window's mean was, in m/s² — the axis carrying 1 g is the mount's up");
     for (i, w) in windows.iter().enumerate() {
@@ -377,8 +356,7 @@ fn window_ranges(xs: &[[f32; 3]], samples: &[Sample], axis: usize, dt_ms: i64) -
     out
 }
 
-/// Whether every sample in a run of `STILL_WINDOW` starts is contiguous — the gate sees samples,
-/// not positions, so a window the sampler gapped is one it never evaluated.
+/// Whether every sample in a run of `STILL_WINDOW` starts is contiguous — the gate sees samples, not positions, so a window the sampler gapped is one it never evaluated.
 fn contiguous(samples: &[Sample], start: usize, dt_ms: i64) -> bool {
     samples[start..start + STILL_WINDOW - 1]
         .windows(2)
@@ -395,16 +373,14 @@ fn spread_slice(xs: &[[f32; 3]], axis: usize, start: usize, len: usize) -> f32 {
     hi - lo
 }
 
-/// What share of samples would pass the gate's range test on all three axes at once, and the
-/// longest unbroken run of them — the run `READY_S` counts toward.
+/// What share of samples would pass the gate's range test on all three axes at once, and the longest unbroken run of them — the run `READY_S` counts toward.
 fn quiet_runs(xs: &[[f32; 3]], samples: &[Sample], dt_ms: i64) -> (f32, i64) {
     let mut passed = 0usize;
     let mut total = 0usize;
     let mut run = 0i64;
     let mut longest = 0i64;
     for start in 0..xs.len().saturating_sub(STILL_WINDOW - 1) {
-        // A gapped window ends the run as surely as a wide one: the filter is only asked about
-        // samples that arrived.
+        // A gapped window ends the run as surely as a wide one: the filter is only asked about samples that arrived.
         if !contiguous(samples, start, dt_ms) {
             run = 0;
             continue;
@@ -435,8 +411,7 @@ fn pct(sorted: &[f32], p: f32) -> f32 {
     sorted[i.min(sorted.len() - 1)]
 }
 
-/// Share of variance in five bands, the strongest frequency between 1 and 10 Hz, and the RMS of that
-/// band in m/s². A naive transform: a nine-second window is 450 bins, which is nothing.
+/// Share of variance in five bands, the strongest frequency between 1 and 10 Hz, and the RMS of that band in m/s². A naive transform: a nine-second window is 450 bins, which is nothing.
 fn bands(xs: &[f32], dt_s: f32) -> ([f32; 5], f32, f32) {
     let n = xs.len();
     let mean = xs.iter().sum::<f32>() / n as f32;

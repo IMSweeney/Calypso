@@ -44,8 +44,7 @@ impl Buffers {
     }
 }
 
-/// A raw sample, distinct in every field, so a trace that comes back reordered or rescaled cannot pass. Times are the
-/// uptimes the device would stamp, which the wire turns into offsets from `t0`.
+/// A raw sample, distinct in every field, so a trace that comes back reordered or rescaled cannot pass. Times are the uptimes the device would stamp, which the wire turns into offsets from `t0`.
 fn sample(i: usize) -> Sample {
     Sample {
         t_ms: 1000 + (i as u32) * 10,
@@ -316,8 +315,6 @@ fn a_single_frame_request_is_acknowledged_where_the_app_expects() {
             body: Some(msg::SyncRequest_::Body::Trace(msg::TraceRequest {
                 kind: msg::TraceKind::Computed,
                 rep_uuid: pb::uuid_to_field(&fixture_uuid(3)),
-                chunk_index: 0,
-                all_chunks: true,
             })),
         },
         &mut request,
@@ -358,7 +355,7 @@ fn a_single_frame_request_is_acknowledged_where_the_app_expects() {
 fn a_busy_pipe_does_not_consume_the_trace_cursor() {
     let mut buffers = Buffers::new(TRACE_CHUNK_SAMPLES * 3);
     let mut session = buffers.session();
-    session.start_trace(fixture_uuid(1), 0, TRACE_CHUNK_SAMPLES * 3, None);
+    session.start_trace(fixture_uuid(1), 0, TRACE_CHUNK_SAMPLES * 3);
 
     assert!(session.send_next_trace_chunk(), "the first chunk starts");
     assert!(
@@ -437,8 +434,6 @@ fn a_request_written_by_the_app_arrives_with_an_acknowledgement_to_send() {
     let request = msg::SyncRequest {
         body: Some(msg::SyncRequest_::Body::Trace(msg::TraceRequest {
             rep_uuid: pb::uuid_to_field(&fixture_uuid(9)),
-            all_chunks: true,
-            chunk_index: 0,
             kind: msg::TraceKind::Computed,
         })),
     };
@@ -546,7 +541,7 @@ fn a_trace_stream_survives_the_transfers_it_is_made_of() {
             *slot = point(i);
         }
     }
-    session.start_trace(fixture_uuid(7), 1000, 100, None);
+    session.start_trace(fixture_uuid(7), 1000, 100);
     assert!(session.streaming());
 
     let mut chunks = 0;
@@ -582,8 +577,7 @@ fn a_trace_stream_survives_the_transfers_it_is_made_of() {
     assert!(!session.streaming(), "and the stream is done");
 }
 
-/// The raw trace streams the same way as the plotted one, out of the session's other buffer, and what arrives is what
-/// the device read: the samples a replay is started from.
+/// The raw trace streams the same way as the plotted one, out of the session's other buffer, and what arrives is what the device read: the samples a replay is started from.
 #[test]
 fn a_raw_trace_streams_as_raw_chunks() {
     let mut buffers = Buffers::new(4);
@@ -593,7 +587,7 @@ fn a_raw_trace_streams_as_raw_chunks() {
     for (i, slot) in session.raw_storage().iter_mut().take(100).enumerate() {
         *slot = sample(i);
     }
-    session.start_raw_trace(fixture_uuid(4), 1000, 100, None);
+    session.start_raw_trace(fixture_uuid(4), 1000, 100);
 
     let mut phone = Phone::new();
     let mut now = 0u32;
@@ -638,40 +632,10 @@ fn a_raw_trace_streams_as_raw_chunks() {
 }
 
 #[test]
-fn a_single_chunk_request_sends_the_one_chunk() {
-    let mut buffers = Buffers::new(64);
-    let mut session = buffers.session();
-    for (i, slot) in session.trace_storage().iter_mut().take(48).enumerate() {
-        *slot = point(i);
-    }
-    session.start_trace(fixture_uuid(3), 1000, 48, Some(0));
-
-    assert!(session.send_next_trace_chunk(), "one chunk");
-    let frames = drain(&mut session, MTU);
-    let mut phone = Phone::new();
-    let mut now = 0;
-    let mut got = None;
-    for frame in &frames {
-        now += 10;
-        got = phone.take(&mut session, frame, now).or(got);
-    }
-    match pb::decode_sync(&got.expect("it arrived")).unwrap().body {
-        Some(msg::SyncMessage_::Body::Computed(chunk)) => {
-            assert_eq!(chunk.index, 0);
-            assert_eq!(chunk.samples.len(), TRACE_CHUNK_SAMPLES);
-        }
-        other => panic!("expected a trace chunk, got {other:?}"),
-    }
-    assert!(!session.send_next_trace_chunk(), "and no more");
-    assert!(!session.streaming());
-    assert!(session.is_idle());
-}
-
-#[test]
 fn an_empty_trace_streams_nothing() {
     let mut buffers = Buffers::new(16);
     let mut session = buffers.session();
-    session.start_trace(fixture_uuid(1), 0, 0, None);
+    session.start_trace(fixture_uuid(1), 0, 0);
     assert!(!session.send_next_trace_chunk());
     assert!(!session.streaming());
 }
@@ -683,7 +647,7 @@ fn a_lost_chunk_leaves_the_app_waiting_for_the_rest_of_a_trace() {
     for (i, slot) in session.trace_storage().iter_mut().take(48).enumerate() {
         *slot = point(i);
     }
-    session.start_trace(fixture_uuid(2), 1000, 48, None);
+    session.start_trace(fixture_uuid(2), 1000, 48);
     assert!(session.streaming());
 
     assert!(session.send_next_trace_chunk(), "a chunk");
@@ -731,7 +695,7 @@ fn a_disconnect_forgets_everything_in_flight() {
     assert!(!drain(&mut session, MTU).is_empty());
     assert!(!session.is_idle());
 
-    session.start_trace(fixture_uuid(1), 0, 0, None);
+    session.start_trace(fixture_uuid(1), 0, 0);
 
     session.reset();
 

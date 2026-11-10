@@ -7,14 +7,9 @@ import '../state/device_reports.dart';
 
 /// The latest thing the device said went wrong.
 ///
-/// The device sends a kind and the app owns the sentence ([`DeviceReports`]), so this is
-/// one line and a count: a fault that has happened four times is a device that is still
-/// failing, and one that has happened once may already be over.
+/// The device sends a kind and the app owns the sentence ([`DeviceReports`]), so this is one line and a count: a fault that has happened four times is a device that is still failing, and one that has happened once may already be over.
 ///
-/// Closing it lasts for the kind on screen and until the link comes up again
-/// ([DeviceReports.dismiss]): the device repeats a fault that is still happening once a
-/// second, so a banner a repeat could reopen is a banner that cannot be closed. Every
-/// arrival is in the app's log whether or not it was on screen.
+/// Closing it lasts for the kind on screen and until the link comes up again ([DeviceReports.dismiss]): the device repeats a fault that is still happening once a second, so a banner a repeat could reopen is a banner that cannot be closed. Every arrival is in the app's log whether or not it was on screen.
 class DeviceReportBanner extends StatelessWidget {
   const DeviceReportBanner({
     super.key,

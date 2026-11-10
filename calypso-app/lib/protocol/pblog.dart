@@ -51,31 +51,9 @@ String describeSyncMessage(SyncMessage message) {
       final chunk = message.raw;
       final rep = uuidFromBytes(chunk.repUuid) ?? '?';
       return 'raw rep=$rep chunk=${chunk.index + 1}/${chunk.totalChunks}';
-    case SyncMessage_Body.status:
-      return 'status reps=${message.status.repCount}';
     case SyncMessage_Body.notSet:
       return 'empty';
   }
-}
-
-/// What the IMU's own values say, for a log line: the raw sample the filter is fed, and the attitude it makes
-/// of it. Acceleration is specific force in m/s² (0.01 per LSB, gravity included), the rate is degrees per second
-/// (1/16 per LSB), and the quaternion is unit (1/2^14 per LSB).
-String describeImuState(ImuState state) {
-  const a = 100.0;
-  const g = 16.0;
-  const q = 16384.0;
-  return 'imu t=${state.tUptimeMs} ms '
-      'f=(${(state.ax / a).toStringAsFixed(2)}, '
-      '${(state.ay / a).toStringAsFixed(2)}, '
-      '${(state.az / a).toStringAsFixed(2)}) m/s^2 '
-      'w=(${(state.gx / g).toStringAsFixed(1)}, '
-      '${(state.gy / g).toStringAsFixed(1)}, '
-      '${(state.gz / g).toStringAsFixed(1)}) dps '
-      'q=(${(state.qw / q).toStringAsFixed(3)}, '
-      '${(state.qx / q).toStringAsFixed(3)}, '
-      '${(state.qy / q).toStringAsFixed(3)}, '
-      '${(state.qz / q).toStringAsFixed(3)})';
 }
 
 /// The summaries a dump holds, each dated by the boot that recorded it.

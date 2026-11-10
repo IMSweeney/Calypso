@@ -34,8 +34,7 @@ impl<E> From<pb::Error> for Error<E> {
 /// Append one rep (summary, plotted trace, and the raw trace when one was recorded) to the log.
 ///
 /// The order is part of the format: a rep's summary, then every computed chunk, then every raw chunk.
-/// That is what lets a trace be found from the summary's record id alone, and what makes
-/// [`crate::sync::RepPlace`] three numbers instead of four.
+/// That is what lets a trace be found from the summary's record id alone, and what makes [`crate::sync::RepPlace`] three numbers instead of four.
 ///
 /// `rec_buf` must be at least [`RECORD_BUF_BYTES`]; it is scratch reused for each record.
 /// Returns the number of records written.
@@ -130,17 +129,12 @@ pub fn for_each_summary<'a, N: NorFlash>(
 
 /// How many records past a rep's chunks its walk may look before giving up.
 ///
-/// The chunks follow the summary because `append_rep` writes them together under the log's lock, so this is
-/// headroom for the one record that can legitimately sit among them — nothing, in fact — rather than a budget: it
-/// bounds a walk that would otherwise keep reading after a rep whose chunks are not all there.
+/// The chunks follow the summary because `append_rep` writes them together under the log's lock, so this is headroom for the one record that can legitimately sit among them — nothing, in fact — rather than a budget: it bounds a walk that would otherwise keep reading after a rep whose chunks are not all there.
 const TRACE_WALK_SLACK: u32 = 2;
 
-/// Read one rep's trace back into `out` given where its summary sits in the log: the record after it is the rep's
-/// first chunk, and `chunk_count` chunks follow.
+/// Read one rep's trace back into `out` given where its summary sits in the log: the record after it is the rep's first chunk, and `chunk_count` chunks follow.
 ///
-/// This is the read a trace request takes when the device knows where the rep's records are (the summary stream
-/// recorded it when it read the summary). It gives the same answer as `read_trace` for a walk of a dozen records
-/// instead of the whole log.
+/// This is the read a trace request takes when the device knows where the rep's records are (the summary stream recorded it when it read the summary). It gives the same answer as `read_trace` for a walk of a dozen records instead of the whole log.
 /// Returns the number of trace points recovered (0 if none of the rep's chunks are there any more).
 pub fn read_trace_from<'a, N: NorFlash>(
     log: &mut FlashLog<'a, N>,

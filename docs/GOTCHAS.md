@@ -144,46 +144,40 @@ device about to run out of stack, and the roadmap read it that way. It was
 loads `_stack_start` into `a1` (esp-hal's `ld/sections/stack.x` puts `_stack_start`
 at the *end* of the RWDATA region) and the stack grows down, so a stack pointer's
 distance to `_stack_end` is the space left below it. In use on that build, at that
-moment: 3,130 B.
+moment: a small fraction of it.
 
 **Cause.** The stack is not a sized buffer. `dram_seg` is 128 KB here
 (`0x3ffc0000..0x3ffe0000`); `.data` and `.bss` are placed from the bottom and
 `_stack_start` is pinned to the region's end, so **every static and every heap
 region carved out of DRAM makes the stack smaller** — it is whatever is left over.
-Removing the Wi-Fi init *grew* it from 22,532 to 41,932 bytes, which is the same
-fact seen from the other side. It has to hold `main`'s frame, every poll chain
+Removing the Wi-Fi init *grew* it by most of what Wi-Fi had been taking, which is
+the same fact seen from the other side. It has to hold `main`'s frame, every poll chain
 under it, and the interrupt that switched to this task.
 
-Where the 128 KB goes in the debug build — 88,348 B below the stack, 42,724 B of
-stack:
+Below the stack, in the debug build, the largest single consumer is the
+firmware's own **static heap region** (`heap_allocator!(size: 64 * 1024)` in
+`main`). The rest is `.data` and `.bss` — trouble-host's packet pool, the esp-phy
+tables, esp-rtos' scheduler, esp-hal, xtensa-lx-rt — plus the radio's own statics,
+the embassy task `POOL` that `main`'s future lives in (so it is *not* on the
+stack), and the generated GATT value buffers.
 
-| Bytes | |
-|---|---|
-| 65,536 | the firmware's own **static heap region** (`heap_allocator!(size: 64 * 1024)` in `main`) |
-| 14,552 | `.data` + `.data.wifi`: trouble-host's packet pool (4,036), esp-phy tables (1,944), esp-rtos' scheduler (1,408), esp-hal (2,100), xtensa-lx-rt (492) |
-| 4,000 | radio/BTDM/PHY statics (`vflash_mem` 2,048, esp-radio, esp-phy) |
-| 3,872 | the embassy task `POOL` — where `main`'s future lives, so it is *not* on the stack |
-| 516 | the generated GATT value buffers (246 B each) |
+The static heap is the only one of those that gives back stack one-for-one: the
+reclaimed DRAM region is outside `dram_seg` and costs the stack nothing, and
+regions are filled first-fit in the order `main` registers them, so the surplus at
+the top of the static heap is exactly what the stack does not get.
 
-The first row is 74% of everything the stack competes with, and it is the only
-one that gives back stack one-for-one: the reclaimed DRAM region (98,768 B, at
-`0x3ffe7e30`) is outside `dram_seg` and costs the stack nothing, and regions are
-filled first-fit in the order `main` registers them, so the surplus at the top of
-the static 64 KB is exactly what the stack does not get.
+**The frames, which is what to watch.** The largest by far is `esp-storage`'s
+4 KB `FlashSectorBuffer`, on every flash read, write and erase; in release LTO it
+inlines into `flashlog`'s `read_blocks`, so the name in a frame listing moves
+while the size does not. Next is the `SyncMessage` that the pipe and `pb` build by
+value (`chunk_message`, `encode_summary`, `Session::send_*`, `keep_sending`).
+Then the poll chains — `Join3::poll`, which release has all three poll bodies
+inlined into, and `TaskStorage::poll`, which is `main`'s own. `CalypsoGatt::new_with_config`
+takes a large frame but only at boot, and the largest radio/BTDM/PHY interrupt
+frames land on whatever stack they interrupt.
 
-**The frames, which is what to watch** (debug / release):
-
-| Frame | |
-|---|---|
-| 4,144–4,160 | `esp-storage`'s 4096-byte `FlashSectorBuffer` — **on every flash read, write and erase**; in release LTO inlines it into `flashlog`'s `read_blocks` (4,256 there) |
-| ~2,200 | the `SyncMessage` the pipe and `pb` build by value (`chunk_message`, `encode_summary`, `Session::send_*`, `keep_sending`) |
-| 896 / 4,688 | `Join3::poll` — release has all three poll bodies inlined into it |
-| 1,312 / 2,000 | `TaskStorage::poll`, i.e. `main`'s own poll |
-| 1,712 | `CalypsoGatt::new_with_config`, at boot only |
-| ~1,700 | the largest radio/BTDM/PHY interrupt frames, on whatever stack they interrupt |
-
-So the deepest path is a poll chain plus one of those — ~10–15 KB in release
-against 44 KB — and nothing allocates stack dynamically. **The number to watch is
+So the deepest path is a poll chain plus one of those, well inside the stack in
+release, and nothing allocates stack dynamically. **The number to watch is
 the deepest figure in the log line**, and it is measured rather than calculated:
 `main` paints everything below its stack pointer with `0xA5` before
 `esp_rtos::start`, and `stack_deepest()` scans up from the painted floor for the
@@ -197,7 +191,7 @@ context's frame outlives the paint that wrote over it.
 
 - `main` carries `#[allow(clippy::large_stack_frames)]`, even though the crate
   denies that lint at a 1 KB threshold. Anything large in `main` needs a human
-  eye. A 3 KB array and a 2.2 KB temporary accumulated there without a murmur.
+  eye. Large arrays and large temporaries accumulate there without a murmur.
 - **`Box::new(v)` builds `v` on the stack first** and then moves it, so a large
   value is large stack. Every big buffer here is allocated through `AllocVec` +
   `Box::leak`; `SampleRing` borrows its buffer for the same reason.
@@ -207,8 +201,8 @@ context's frame outlives the paint that wrote over it.
 The `entry a1, N` prologue is a function's stack use (N × 8 bytes), but on this
 toolchain `objdump -d` prints **hex only for `.text`**: GNU objcopy/objdump
 2.47.20260726 with esp-16.2.0 decodes `.rwtext` and the vectors, and nothing at all
-in the 294 KB IROM section. A grep over the listing therefore covers the interrupt
-handlers and misses every Rust function, including the 4,144-byte one above —
+in the IROM section. A grep over the listing therefore covers the interrupt
+handlers and misses every Rust function, including the sector buffer above —
 which is how "the largest frame is 240 units" survived so long.
 
 Disassemble the section as a binary instead, which does work:
@@ -254,24 +248,22 @@ The probes, in boot order:
 panics — and the panic handler used to be `loop {}` with no output.
 
 **Fix / how to read it.** The handler now prints `*** PANIC: ... ***`. The heap is
-two `esp_alloc` regions (98,768 B reclaimed DRAM + 64 KB static) and the buffer
-set is large: sample ring, 10 s rep window, two plotted-trace buffers, record
-scratch, decode scratch, summary batch. The radio takes ~54 KB of it before any
-of that. A raw trace a dev client asks for adds a window's worth of samples — 16 KB —
-allocated on the request rather than at boot, and refused when the heap cannot spare it
-alongside 8 KB of headroom.
+two `esp_alloc` regions — one reclaimed DRAM, one the 64 KB static region above —
+and the buffer set is large: sample ring, 10 s rep window, two plotted-trace buffers, record
+scratch, decode scratch, summary batch. The radio takes most of it before any
+of that. A raw trace a dev client asks for adds a window's worth of samples, allocated
+on the request rather than at boot, and refused when the heap cannot spare it alongside
+the headroom that constant asks for.
 
-The figures to watch, and what they mean:
+The figures to watch, and what they mean: `Radio up, heap free N B` says whether
+the radio was cheap or expensive, and the free figure should then fall at each
+setup stage — the detector, then the sync buffers — in the order the buffers are
+allocated. What matters is the last of them: **under ~8 KB free is a device that
+will not accept a connection.**
 
-| Line | Roughly |
-|---|---|
-| `Radio up, heap free N B` | ~109 KB free after the radio came up. This is the number that says whether the radio was cheap or expensive. |
-| `Rep detector ready, heap free N B` | ~45 KB free. |
-| `Sync buffers ready, heap free N B` | ~22 KB free, measured when the trace buffers were four times their present size. **Under ~8 KB** is a device that will not accept a connection. |
-
-The 30 s sample ring was 36 KB more than the device needs (the detector never
-asks for more than 10 s) and is now 13 s; Wi-Fi was removed and gave back most of
-the radio's 54 KB. Do not grow any of this without reading those numbers.
+The sample ring is sized to what the detector actually asks for (10 s of samples)
+rather than to a round number, and Wi-Fi's removal is what gave the radio's share
+back. Do not grow any of this without reading those figures first.
 
 ## The IMU
 
@@ -306,11 +298,9 @@ from them is an estimate's opinion, and in a mode that does not fuse there is no
 read at all: `linear_acceleration*`, `gravity*` and `quaternion` return `InvalidMode`
 without touching the bus.
 
-**Fix.** The filter estimates the attitude, and the level verdict carries the world's up
-axis back into the sensor's frame with it — the same number the fusion reported, from an
-estimate of the filter's own. The app's `ImuState` quaternion is the filter's for the same
-reason. If an orientation is ever read off a chip again, ask first whether it is a
-measurement or an inference.
+**Fix.** The filter estimates the attitude itself, from the gyroscope pulled onto gravity,
+and every orientation the device reports is that estimate. If an orientation is ever read
+off a chip again, ask first whether it is a measurement or an inference.
 
 ### A gyro bias learned only at rest is not learned during a set
 
@@ -670,8 +660,7 @@ what a device with a read-only name wants, but it keeps the name in a
 initialised with `.init()`, and `static_cell` panics when a cell is initialised
 twice. One table per process is assumed, and a host test suite is many tables in
 one process. (`#[gatt_service]`, which the generated table uses, does the same
-thing with each characteristic's storage — see `tools/gatt-gen/PLAN.md`, errata
-E1.)
+thing with each characteristic's storage.)
 
 **Fix, for the hand-built table.** GAP was built by hand in `calypso_core::ble` —
 four lines, with the device name at `&[CharacteristicProp::Read]` — because using
@@ -965,8 +954,8 @@ a transfer that never started.)
 **Corollary: a poll is traffic too.** The app used to read a characteristic once a second,
 invisible next to that blast, and six of those reads were completing in the same
 millisecond — queued behind the same congested link, in front of the writes the pipe was
-waiting on. A poll keeps one request in flight for that reason, and the one read left (the
-IMU diagnostic) happens once per connection rather than on a clock.
+waiting on. A poll keeps one request in flight for that reason, and today the app polls
+nothing at all: the two characteristics it uses are a write and a subscription.
 
 ### An acknowledgement is also a request for the next message
 

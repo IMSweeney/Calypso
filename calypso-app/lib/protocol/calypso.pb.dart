@@ -302,8 +302,6 @@ class RepSummary extends $pb.GeneratedMessage {
     $core.int? durationMs,
     $core.double? rom,
     $core.double? peakVelocity,
-    $core.double? meanVelocity,
-    $core.double? peakAccel,
     $core.double? rollMinDeg,
     $core.double? rollMaxDeg,
     $core.double? pitchMinDeg,
@@ -323,8 +321,6 @@ class RepSummary extends $pb.GeneratedMessage {
     if (durationMs != null) result.durationMs = durationMs;
     if (rom != null) result.rom = rom;
     if (peakVelocity != null) result.peakVelocity = peakVelocity;
-    if (meanVelocity != null) result.meanVelocity = meanVelocity;
-    if (peakAccel != null) result.peakAccel = peakAccel;
     if (rollMinDeg != null) result.rollMinDeg = rollMinDeg;
     if (rollMaxDeg != null) result.rollMaxDeg = rollMaxDeg;
     if (pitchMinDeg != null) result.pitchMinDeg = pitchMinDeg;
@@ -360,9 +356,6 @@ class RepSummary extends $pb.GeneratedMessage {
     ..aD(5, _omitFieldNames ? '' : 'rom', fieldType: $pb.PbFieldType.OF)
     ..aD(6, _omitFieldNames ? '' : 'peakVelocity',
         fieldType: $pb.PbFieldType.OF)
-    ..aD(7, _omitFieldNames ? '' : 'meanVelocity',
-        fieldType: $pb.PbFieldType.OF)
-    ..aD(8, _omitFieldNames ? '' : 'peakAccel', fieldType: $pb.PbFieldType.OF)
     ..aD(9, _omitFieldNames ? '' : 'rollMinDeg', fieldType: $pb.PbFieldType.OF)
     ..aD(10, _omitFieldNames ? '' : 'rollMaxDeg', fieldType: $pb.PbFieldType.OF)
     ..aD(11, _omitFieldNames ? '' : 'pitchMinDeg',
@@ -440,10 +433,7 @@ class RepSummary extends $pb.GeneratedMessage {
   @$pb.TagNumber(4)
   void clearDurationMs() => $_clearField(4);
 
-  /// Peak-to-peak vertical travel: the range of motion, on Z. Z is the axis the
-  /// fusion pins to gravity; X and Y are the mount's heading and drift with yaw,
-  /// so the largest excursion is not the rep's range of motion and may be the
-  /// estimate's error rather than the bar.
+  /// Peak-to-peak vertical travel: the range of motion, on Z. Z is the axis the fusion pins to gravity; X and Y are the mount's heading and drift with yaw, so the largest excursion is not the rep's range of motion and may be the estimate's error rather than the bar.
   @$pb.TagNumber(5)
   $core.double get rom => $_getN(4);
   @$pb.TagNumber(5)
@@ -462,139 +452,112 @@ class RepSummary extends $pb.GeneratedMessage {
   @$pb.TagNumber(6)
   void clearPeakVelocity() => $_clearField(6);
 
-  @$pb.TagNumber(7)
-  $core.double get meanVelocity => $_getN(6);
-  @$pb.TagNumber(7)
-  set meanVelocity($core.double value) => $_setFloat(6, value);
-  @$pb.TagNumber(7)
-  $core.bool hasMeanVelocity() => $_has(6);
-  @$pb.TagNumber(7)
-  void clearMeanVelocity() => $_clearField(7);
-
-  @$pb.TagNumber(8)
-  $core.double get peakAccel => $_getN(7);
-  @$pb.TagNumber(8)
-  set peakAccel($core.double value) => $_setFloat(7, value);
-  @$pb.TagNumber(8)
-  $core.bool hasPeakAccel() => $_has(7);
-  @$pb.TagNumber(8)
-  void clearPeakAccel() => $_clearField(8);
-
   @$pb.TagNumber(9)
-  $core.double get rollMinDeg => $_getN(8);
+  $core.double get rollMinDeg => $_getN(6);
   @$pb.TagNumber(9)
-  set rollMinDeg($core.double value) => $_setFloat(8, value);
+  set rollMinDeg($core.double value) => $_setFloat(6, value);
   @$pb.TagNumber(9)
-  $core.bool hasRollMinDeg() => $_has(8);
+  $core.bool hasRollMinDeg() => $_has(6);
   @$pb.TagNumber(9)
   void clearRollMinDeg() => $_clearField(9);
 
   @$pb.TagNumber(10)
-  $core.double get rollMaxDeg => $_getN(9);
+  $core.double get rollMaxDeg => $_getN(7);
   @$pb.TagNumber(10)
-  set rollMaxDeg($core.double value) => $_setFloat(9, value);
+  set rollMaxDeg($core.double value) => $_setFloat(7, value);
   @$pb.TagNumber(10)
-  $core.bool hasRollMaxDeg() => $_has(9);
+  $core.bool hasRollMaxDeg() => $_has(7);
   @$pb.TagNumber(10)
   void clearRollMaxDeg() => $_clearField(10);
 
   @$pb.TagNumber(11)
-  $core.double get pitchMinDeg => $_getN(10);
+  $core.double get pitchMinDeg => $_getN(8);
   @$pb.TagNumber(11)
-  set pitchMinDeg($core.double value) => $_setFloat(10, value);
+  set pitchMinDeg($core.double value) => $_setFloat(8, value);
   @$pb.TagNumber(11)
-  $core.bool hasPitchMinDeg() => $_has(10);
+  $core.bool hasPitchMinDeg() => $_has(8);
   @$pb.TagNumber(11)
   void clearPitchMinDeg() => $_clearField(11);
 
   @$pb.TagNumber(12)
-  $core.double get pitchMaxDeg => $_getN(11);
+  $core.double get pitchMaxDeg => $_getN(9);
   @$pb.TagNumber(12)
-  set pitchMaxDeg($core.double value) => $_setFloat(11, value);
+  set pitchMaxDeg($core.double value) => $_setFloat(9, value);
   @$pb.TagNumber(12)
-  $core.bool hasPitchMaxDeg() => $_has(11);
+  $core.bool hasPitchMaxDeg() => $_has(9);
   @$pb.TagNumber(12)
   void clearPitchMaxDeg() => $_clearField(12);
 
   @$pb.TagNumber(13)
-  $core.int get computedLen => $_getIZ(12);
+  $core.int get computedLen => $_getIZ(10);
   @$pb.TagNumber(13)
-  set computedLen($core.int value) => $_setUnsignedInt32(12, value);
+  set computedLen($core.int value) => $_setUnsignedInt32(10, value);
   @$pb.TagNumber(13)
-  $core.bool hasComputedLen() => $_has(12);
+  $core.bool hasComputedLen() => $_has(10);
   @$pb.TagNumber(13)
   void clearComputedLen() => $_clearField(13);
 
   @$pb.TagNumber(14)
-  $core.int get computedChunks => $_getIZ(13);
+  $core.int get computedChunks => $_getIZ(11);
   @$pb.TagNumber(14)
-  set computedChunks($core.int value) => $_setUnsignedInt32(13, value);
+  set computedChunks($core.int value) => $_setUnsignedInt32(11, value);
   @$pb.TagNumber(14)
-  $core.bool hasComputedChunks() => $_has(13);
+  $core.bool hasComputedChunks() => $_has(11);
   @$pb.TagNumber(14)
   void clearComputedChunks() => $_clearField(14);
 
-  /// The rep's wall-clock time, unix milliseconds, or 0 when the device had no
-  /// clock for the boot that recorded it.
+  /// The rep's wall-clock time, unix milliseconds, or 0 when the device had no clock for the boot that recorded it.
   ///
-  /// **Set when a summary is streamed, 0 in the log.** The time is a property of
-  /// the boot, not of the rep, and it is often not known until after the rep has
-  /// been written: a stored summary therefore carries its uptime (`t_start_ms`)
-  /// and the boot's clock travels as its own record (`BootClock`).
+  /// **Set when a summary is streamed, 0 in the log.** The time is a property of the boot, not of the rep, and it is often not known until after the rep has been written: a stored summary therefore carries its uptime (`t_start_ms`) and the boot's clock travels as its own record (`BootClock`).
   @$pb.TagNumber(16)
-  $fixnum.Int64 get tUnixMs => $_getI64(14);
+  $fixnum.Int64 get tUnixMs => $_getI64(12);
   @$pb.TagNumber(16)
-  set tUnixMs($fixnum.Int64 value) => $_setInt64(14, value);
+  set tUnixMs($fixnum.Int64 value) => $_setInt64(12, value);
   @$pb.TagNumber(16)
-  $core.bool hasTUnixMs() => $_has(14);
+  $core.bool hasTUnixMs() => $_has(12);
   @$pb.TagNumber(16)
   void clearTUnixMs() => $_clearField(16);
 
-  /// Where the filter stood where the stored window begins: the whole of its
-  /// memory, so replaying the window from here reproduces the summary instead of
-  /// approximating it. This is what a `RawChunk` trace is re-run from.
+  /// Where the filter stood where the stored window begins: the whole of its memory, so replaying the window from here reproduces the summary instead of approximating it. This is what a `RawChunk` trace is re-run from.
   @$pb.TagNumber(17)
-  RepState get state => $_getN(15);
+  RepState get state => $_getN(13);
   @$pb.TagNumber(17)
   set state(RepState value) => $_setField(17, value);
   @$pb.TagNumber(17)
-  $core.bool hasState() => $_has(15);
+  $core.bool hasState() => $_has(13);
   @$pb.TagNumber(17)
   void clearState() => $_clearField(17);
   @$pb.TagNumber(17)
-  RepState ensureState() => $_ensure(15);
+  RepState ensureState() => $_ensure(13);
 
-  /// What the sensor was set to, and which detection logic closed the rep: what
-  /// the numbers in either trace mean.
+  /// What the sensor was set to, and which detection logic closed the rep: what the numbers in either trace mean.
   @$pb.TagNumber(18)
-  RepConfig get config => $_getN(16);
+  RepConfig get config => $_getN(14);
   @$pb.TagNumber(18)
   set config(RepConfig value) => $_setField(18, value);
   @$pb.TagNumber(18)
-  $core.bool hasConfig() => $_has(16);
+  $core.bool hasConfig() => $_has(14);
   @$pb.TagNumber(18)
   void clearConfig() => $_clearField(18);
   @$pb.TagNumber(18)
-  RepConfig ensureConfig() => $_ensure(16);
+  RepConfig ensureConfig() => $_ensure(14);
 
-  /// The raw trace's size, or both 0 when this device does not record one. The
-  /// counts are the answer to "can I replay this rep"; there is no flag for it,
-  /// because two places to ask is one place to disagree.
+  /// The raw trace's size, or both 0 when this device does not record one. The counts are the answer to "can I replay this rep"; there is no flag for it, because two places to ask is one place to disagree.
   @$pb.TagNumber(19)
-  $core.int get rawLen => $_getIZ(17);
+  $core.int get rawLen => $_getIZ(15);
   @$pb.TagNumber(19)
-  set rawLen($core.int value) => $_setUnsignedInt32(17, value);
+  set rawLen($core.int value) => $_setUnsignedInt32(15, value);
   @$pb.TagNumber(19)
-  $core.bool hasRawLen() => $_has(17);
+  $core.bool hasRawLen() => $_has(15);
   @$pb.TagNumber(19)
   void clearRawLen() => $_clearField(19);
 
   @$pb.TagNumber(20)
-  $core.int get rawChunks => $_getIZ(18);
+  $core.int get rawChunks => $_getIZ(16);
   @$pb.TagNumber(20)
-  set rawChunks($core.int value) => $_setUnsignedInt32(18, value);
+  set rawChunks($core.int value) => $_setUnsignedInt32(16, value);
   @$pb.TagNumber(20)
-  $core.bool hasRawChunks() => $_has(18);
+  $core.bool hasRawChunks() => $_has(16);
   @$pb.TagNumber(20)
   void clearRawChunks() => $_clearField(20);
 }
@@ -712,8 +675,7 @@ class RepConfig extends $pb.GeneratedMessage {
   void clearSampleRateHz() => $_clearField(5);
 
   /// Which detection logic closed this rep (`DETECTOR_VERSION` in `calypso_core::rep`).
-  /// A summary recomputed by newer logic is a different summary, and this is what
-  /// says so rather than leaving two numbers to be compared as if they were one.
+  /// A summary recomputed by newer logic is a different summary, and this is what says so rather than leaving two numbers to be compared as if they were one.
   @$pb.TagNumber(6)
   $core.int get detectorVersion => $_getIZ(5);
   @$pb.TagNumber(6)
@@ -726,8 +688,7 @@ class RepConfig extends $pb.GeneratedMessage {
 
 /// Where the filter stood when a stored window began.
 ///
-/// The state is the filter's whole memory: a filter started from it and fed the
-/// window lands exactly where the one that recorded the rep did.
+/// The state is the filter's whole memory: a filter started from it and fed the window lands exactly where the one that recorded the rep did.
 class RepState extends $pb.GeneratedMessage {
   factory RepState({
     $core.double? vx,
@@ -930,9 +891,7 @@ class RepState extends $pb.GeneratedMessage {
   void clearGyroBiasZ() => $_clearField(13);
 
   /// Whether the bar was already at rest when this was taken. Not a convenience:
-  /// "at rest" is a fact about the last 400 ms, so a replay without it has to earn
-  /// it back and spends its first samples integrating a drift the original had
-  /// already taken out.
+  /// "at rest" is a fact about the last 400 ms, so a replay without it has to earn it back and spends its first samples integrating a drift the original had already taken out.
   @$pb.TagNumber(14)
   $core.bool get settled => $_getBF(13);
   @$pb.TagNumber(14)
@@ -941,197 +900,6 @@ class RepState extends $pb.GeneratedMessage {
   $core.bool hasSettled() => $_has(13);
   @$pb.TagNumber(14)
   void clearSettled() => $_clearField(14);
-}
-
-/// The IMU as the sampler last read it: the raw sample the filter is fed, and the attitude
-/// the filter makes of it.
-///
-/// Read, never notified, and a snapshot rather than a stream: the device republishes it
-/// ten times a second, so a client that wants to watch the sensor polls it.
-/// Fixed point at the same scales a `TraceSample` uses, so a readout can be compared with
-/// what a stored trace carries for the same moment.
-class ImuState extends $pb.GeneratedMessage {
-  factory ImuState({
-    $core.int? tUptimeMs,
-    $core.int? ax,
-    $core.int? ay,
-    $core.int? az,
-    $core.int? qw,
-    $core.int? qx,
-    $core.int? qy,
-    $core.int? qz,
-    $core.int? gx,
-    $core.int? gy,
-    $core.int? gz,
-  }) {
-    final result = ImuState._();
-    if (tUptimeMs != null) result.tUptimeMs = tUptimeMs;
-    if (ax != null) result.ax = ax;
-    if (ay != null) result.ay = ay;
-    if (az != null) result.az = az;
-    if (qw != null) result.qw = qw;
-    if (qx != null) result.qx = qx;
-    if (qy != null) result.qy = qy;
-    if (qz != null) result.qz = qz;
-    if (gx != null) result.gx = gx;
-    if (gy != null) result.gy = gy;
-    if (gz != null) result.gz = gz;
-    return result;
-  }
-
-  ImuState._();
-
-  factory ImuState.fromBuffer($core.List<$core.int> data,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      ImuState()..mergeFromBuffer(data, registry);
-  factory ImuState.fromJson($core.String json,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      ImuState()..mergeFromJson(json, registry);
-
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'ImuState',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
-      createEmptyInstance: ImuState.$_createMessage)
-    ..aI(1, _omitFieldNames ? '' : 'tUptimeMs', fieldType: $pb.PbFieldType.OU3)
-    ..aI(2, _omitFieldNames ? '' : 'ax', fieldType: $pb.PbFieldType.OS3)
-    ..aI(3, _omitFieldNames ? '' : 'ay', fieldType: $pb.PbFieldType.OS3)
-    ..aI(4, _omitFieldNames ? '' : 'az', fieldType: $pb.PbFieldType.OS3)
-    ..aI(5, _omitFieldNames ? '' : 'qw', fieldType: $pb.PbFieldType.OS3)
-    ..aI(6, _omitFieldNames ? '' : 'qx', fieldType: $pb.PbFieldType.OS3)
-    ..aI(7, _omitFieldNames ? '' : 'qy', fieldType: $pb.PbFieldType.OS3)
-    ..aI(8, _omitFieldNames ? '' : 'qz', fieldType: $pb.PbFieldType.OS3)
-    ..aI(9, _omitFieldNames ? '' : 'gx', fieldType: $pb.PbFieldType.OS3)
-    ..aI(10, _omitFieldNames ? '' : 'gy', fieldType: $pb.PbFieldType.OS3)
-    ..aI(11, _omitFieldNames ? '' : 'gz', fieldType: $pb.PbFieldType.OS3)
-    ..hasRequiredFields = false;
-
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ImuState clone() => deepCopy();
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ImuState copyWith(void Function(ImuState) updates) =>
-      super.copyWith((message) => updates(message as ImuState)) as ImuState;
-
-  @$core.override
-  $pb.BuilderInfo get info_ => _i;
-
-  @$core.pragma('dart2js:noInline')
-  @$core.Deprecated('Use ImuState() / ImuState.new instead')
-  static ImuState create() => ImuState._();
-  static $pb.GeneratedMessage $_createMessage() => ImuState._();
-  @$core.override
-  ImuState createEmptyInstance() => ImuState._();
-  @$core.pragma('dart2js:noInline')
-  static ImuState getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ImuState>(ImuState.$_createMessage);
-  static ImuState? _defaultInstance;
-
-  /// When the sampler read it, ms since boot. Read against a client's own idea of when the
-  /// read was issued: a value that stops moving while the rep log keeps growing is a
-  /// stalled sampler.
-  @$pb.TagNumber(1)
-  $core.int get tUptimeMs => $_getIZ(0);
-  @$pb.TagNumber(1)
-  set tUptimeMs($core.int value) => $_setUnsignedInt32(0, value);
-  @$pb.TagNumber(1)
-  $core.bool hasTUptimeMs() => $_has(0);
-  @$pb.TagNumber(1)
-  void clearTUptimeMs() => $_clearField(1);
-
-  /// Specific force, body frame: 0.01 m/s^2 per LSB, gravity included — a still sensor
-  /// reads 1 g up its own up axis. This is the raw accelerometer, not an acceleration.
-  @$pb.TagNumber(2)
-  $core.int get ax => $_getIZ(1);
-  @$pb.TagNumber(2)
-  set ax($core.int value) => $_setSignedInt32(1, value);
-  @$pb.TagNumber(2)
-  $core.bool hasAx() => $_has(1);
-  @$pb.TagNumber(2)
-  void clearAx() => $_clearField(2);
-
-  @$pb.TagNumber(3)
-  $core.int get ay => $_getIZ(2);
-  @$pb.TagNumber(3)
-  set ay($core.int value) => $_setSignedInt32(2, value);
-  @$pb.TagNumber(3)
-  $core.bool hasAy() => $_has(2);
-  @$pb.TagNumber(3)
-  void clearAy() => $_clearField(3);
-
-  @$pb.TagNumber(4)
-  $core.int get az => $_getIZ(3);
-  @$pb.TagNumber(4)
-  set az($core.int value) => $_setSignedInt32(3, value);
-  @$pb.TagNumber(4)
-  $core.bool hasAz() => $_has(3);
-  @$pb.TagNumber(4)
-  void clearAz() => $_clearField(4);
-
-  /// Orientation: 1/2^14 per LSB, order [w, x, y, z]. The filter's attitude, since the
-  /// sensor no longer reports one; kept in the fields it has always occupied because it is
-  /// the same quantity it always was.
-  @$pb.TagNumber(5)
-  $core.int get qw => $_getIZ(4);
-  @$pb.TagNumber(5)
-  set qw($core.int value) => $_setSignedInt32(4, value);
-  @$pb.TagNumber(5)
-  $core.bool hasQw() => $_has(4);
-  @$pb.TagNumber(5)
-  void clearQw() => $_clearField(5);
-
-  @$pb.TagNumber(6)
-  $core.int get qx => $_getIZ(5);
-  @$pb.TagNumber(6)
-  set qx($core.int value) => $_setSignedInt32(5, value);
-  @$pb.TagNumber(6)
-  $core.bool hasQx() => $_has(5);
-  @$pb.TagNumber(6)
-  void clearQx() => $_clearField(6);
-
-  @$pb.TagNumber(7)
-  $core.int get qy => $_getIZ(6);
-  @$pb.TagNumber(7)
-  set qy($core.int value) => $_setSignedInt32(6, value);
-  @$pb.TagNumber(7)
-  $core.bool hasQy() => $_has(6);
-  @$pb.TagNumber(7)
-  void clearQy() => $_clearField(7);
-
-  @$pb.TagNumber(8)
-  $core.int get qz => $_getIZ(7);
-  @$pb.TagNumber(8)
-  set qz($core.int value) => $_setSignedInt32(7, value);
-  @$pb.TagNumber(8)
-  $core.bool hasQz() => $_has(7);
-  @$pb.TagNumber(8)
-  void clearQz() => $_clearField(8);
-
-  /// Angular rate, body frame: 1/16 dps per LSB.
-  @$pb.TagNumber(9)
-  $core.int get gx => $_getIZ(8);
-  @$pb.TagNumber(9)
-  set gx($core.int value) => $_setSignedInt32(8, value);
-  @$pb.TagNumber(9)
-  $core.bool hasGx() => $_has(8);
-  @$pb.TagNumber(9)
-  void clearGx() => $_clearField(9);
-
-  @$pb.TagNumber(10)
-  $core.int get gy => $_getIZ(9);
-  @$pb.TagNumber(10)
-  set gy($core.int value) => $_setSignedInt32(9, value);
-  @$pb.TagNumber(10)
-  $core.bool hasGy() => $_has(9);
-  @$pb.TagNumber(10)
-  void clearGy() => $_clearField(10);
-
-  @$pb.TagNumber(11)
-  $core.int get gz => $_getIZ(10);
-  @$pb.TagNumber(11)
-  set gz($core.int value) => $_setSignedInt32(10, value);
-  @$pb.TagNumber(11)
-  $core.bool hasGz() => $_has(10);
-  @$pb.TagNumber(11)
-  void clearGz() => $_clearField(11);
 }
 
 /// A slice of a rep's plotted trace: as stored in the log, and as sent over BLE.
@@ -1226,12 +994,7 @@ class TraceChunk extends $pb.GeneratedMessage {
   @$pb.TagNumber(4)
   $pb.PbList<TraceComputedPoint> get samples => $_getList(3);
 
-  /// Chunks in the stream this record belongs to. Set only when a trace is being
-  /// streamed over BLE; a record stored in the log leaves it 0, because there the
-  /// summary's `computed_chunks` already describes the trace and the device
-  /// re-chunks to fit the MTU when streaming. Without this the client cannot tell
-  /// "more chunks are coming" from "the device has forgotten this rep and will
-  /// stay silent".
+  /// Chunks in the stream this record belongs to. Set only when a trace is being streamed over BLE; a record stored in the log leaves it 0, because there the summary's `computed_chunks` already describes the trace and the device re-chunks to fit the MTU when streaming. Without this the client cannot tell "more chunks are coming" from "the device has forgotten this rep and will stay silent".
   @$pb.TagNumber(5)
   $core.int get totalChunks => $_getIZ(4);
   @$pb.TagNumber(5)
@@ -1344,25 +1107,15 @@ class RawChunk extends $pb.GeneratedMessage {
   void clearTotalChunks() => $_clearField(5);
 }
 
-/// The device's clock, as of one point in the log: what its uptime zero was worth
-/// on the wall clock from here on.
+/// The device's clock, as of one point in the log: what its uptime zero was worth on the wall clock from here on.
 ///
-/// The device has no RTC, so the only time it can know is the one the client set
-/// (`Time`, `proto/calypso_gatt.proto`). That time belongs in the log rather than
-/// in RAM because it outlives the boot: reps written while the client was
-/// connected keep their time when the device restarts, and a rep that only the RAM
-/// remembers a clock for would lose it.
+/// The device has no RTC, so the only time it can know is the one the client set (`Time`, `proto/calypso_gatt.proto`). That time belongs in the log rather than in RAM because it outlives the boot: reps written while the client was connected keep their time when the device restarts, and a rep that only the RAM remembers a clock for would lose it.
 ///
 /// Written at most twice per boot:
-///   - at mount, with `epoch_s` 0 — a boot's records start here, which is what
-///     stops a boot that never had a clock from being read as the one before it;
-///   - when the client sets the clock, with the epoch. Re-setting it writes another,
-///     and the newest one before a record is the one that dates it.
+///   - at mount, with `epoch_s` 0 — a boot's records start here, which is what stops a boot that never had a clock from being read as the one before it;
+///   - when the client sets the clock, with the epoch. Re-setting it writes another, and the newest one before a record is the one that dates it.
 ///
-/// A record's clock is the newest `BootClock` **at or before it**, which is the
-/// only rule both ends can apply: the device can name its own boot's records by
-/// the ids it has in RAM, and a dump of the log carries no ids at all
-/// (`docs/FIXTURES.md`), so a reader goes by order.
+/// A record's clock is the newest `BootClock` **at or before it**, which is the only rule both ends can apply: the device can name its own boot's records by the ids it has in RAM, and a dump of the log carries no ids at all, so a reader goes by order.
 class BootClock extends $pb.GeneratedMessage {
   factory BootClock({
     $core.int? epochS,
@@ -1421,8 +1174,7 @@ class BootClock extends $pb.GeneratedMessage {
 enum RepRecord_Body { summary, computed, clock, raw, notSet }
 
 /// One log record: a rep summary, one of either trace's chunks, or a clock reading.
-/// Keeping them under one wire type makes the log a single self-describing
-/// stream.
+/// Keeping them under one wire type makes the log a single self-describing stream.
 class RepRecord extends $pb.GeneratedMessage {
   factory RepRecord({
     RepSummary? summary,
@@ -1545,19 +1297,14 @@ class RepRecord extends $pb.GeneratedMessage {
   RawChunk ensureRaw() => $_ensure(3);
 }
 
-/// Sent by the app to request a rep's trace. `chunk_index` is ignored unless
-/// `all_chunks` is false.
+/// Sent by the app to request a rep's trace, which is always the whole of it.
 class TraceRequest extends $pb.GeneratedMessage {
   factory TraceRequest({
     $core.List<$core.int>? repUuid,
-    $core.bool? allChunks,
-    $core.int? chunkIndex,
     TraceKind? kind,
   }) {
     final result = TraceRequest._();
     if (repUuid != null) result.repUuid = repUuid;
-    if (allChunks != null) result.allChunks = allChunks;
-    if (chunkIndex != null) result.chunkIndex = chunkIndex;
     if (kind != null) result.kind = kind;
     return result;
   }
@@ -1577,8 +1324,6 @@ class TraceRequest extends $pb.GeneratedMessage {
       createEmptyInstance: TraceRequest.$_createMessage)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'repUuid', $pb.PbFieldType.OY)
-    ..aOB(2, _omitFieldNames ? '' : 'allChunks')
-    ..aI(3, _omitFieldNames ? '' : 'chunkIndex', fieldType: $pb.PbFieldType.OU3)
     ..aE<TraceKind>(4, _omitFieldNames ? '' : 'kind',
         enumValues: TraceKind.values)
     ..hasRequiredFields = false;
@@ -1614,46 +1359,21 @@ class TraceRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearRepUuid() => $_clearField(1);
 
-  @$pb.TagNumber(2)
-  $core.bool get allChunks => $_getBF(1);
-  @$pb.TagNumber(2)
-  set allChunks($core.bool value) => $_setBool(1, value);
-  @$pb.TagNumber(2)
-  $core.bool hasAllChunks() => $_has(1);
-  @$pb.TagNumber(2)
-  void clearAllChunks() => $_clearField(2);
-
-  @$pb.TagNumber(3)
-  $core.int get chunkIndex => $_getIZ(2);
-  @$pb.TagNumber(3)
-  set chunkIndex($core.int value) => $_setUnsignedInt32(2, value);
-  @$pb.TagNumber(3)
-  $core.bool hasChunkIndex() => $_has(2);
-  @$pb.TagNumber(3)
-  void clearChunkIndex() => $_clearField(3);
-
   @$pb.TagNumber(4)
-  TraceKind get kind => $_getN(3);
+  TraceKind get kind => $_getN(1);
   @$pb.TagNumber(4)
   set kind(TraceKind value) => $_setField(4, value);
   @$pb.TagNumber(4)
-  $core.bool hasKind() => $_has(3);
+  $core.bool hasKind() => $_has(1);
   @$pb.TagNumber(4)
   void clearKind() => $_clearField(4);
 }
 
 /// Turn recording of raw traces on or off, until the device restarts.
 ///
-/// A dev switch, not a setting. A raw trace is the largest thing in the log — a
-/// full-rate nine-second rep is ~19 KB against the plotted trace's ~5 — and it
-/// exists so a session can be replayed offline, not so a release session gets
-/// bigger. It lives here rather than on a characteristic of its own because it is
-/// an operation rather than a value the app reads back: the client that sets it
-/// knows which way it set it, and the device forgets at every boot.
+/// A dev switch, not a setting. A raw trace is the largest thing in the log — a full-rate nine-second rep is ~19 KB against the plotted trace's ~5 — and it exists so a session can be replayed offline, not so a release session gets bigger. It lives here rather than on a characteristic of its own because it is an operation rather than a value the app reads back: the client that sets it knows which way it set it, and the device forgets at every boot.
 ///
-/// **Off at every boot and not persisted.** A switch left on by accident fills the
-/// log at three times the rate for as long as nobody notices; the cost of
-/// remembering it would be a reflash to turn it off.
+/// **Off at every boot and not persisted.** A switch left on by accident fills the log at three times the rate for as long as nobody notices; the cost of remembering it would be a reflash to turn it off.
 class DevMode extends $pb.GeneratedMessage {
   factory DevMode({
     $core.bool? enabled,
@@ -1800,25 +1520,20 @@ class SyncRequest extends $pb.GeneratedMessage {
   DevMode ensureDevMode() => $_ensure(1);
 }
 
-enum SyncMessage_Body { summary, computed, status, raw, notSet }
+enum SyncMessage_Body { summary, computed, raw, notSet }
 
 /// Everything sent device -> app on the sync service, on the pipe.
 ///
-/// A response and a push look alike here, and the client tells them apart by the
-/// body: `computed` or `raw` belongs to the `TraceRequest` that asked for it (its
-/// chunks carry the rep's UUID and the kind that was asked for), while `summary`
-/// arrives because the client subscribed, not because it asked.
+/// A response and a push look alike here, and the client tells them apart by the body: `computed` or `raw` belongs to the `TraceRequest` that asked for it (its chunks carry the rep's UUID and the kind that was asked for), while `summary` arrives because the client subscribed, not because it asked.
 class SyncMessage extends $pb.GeneratedMessage {
   factory SyncMessage({
     RepSummary? summary,
     TraceChunk? computed,
-    SyncStatus? status,
     RawChunk? raw,
   }) {
     final result = SyncMessage._();
     if (summary != null) result.summary = summary;
     if (computed != null) result.computed = computed;
-    if (status != null) result.status = status;
     if (raw != null) result.raw = raw;
     return result;
   }
@@ -1835,7 +1550,6 @@ class SyncMessage extends $pb.GeneratedMessage {
   static const $core.Map<$core.int, SyncMessage_Body> _SyncMessage_BodyByTag = {
     1: SyncMessage_Body.summary,
     2: SyncMessage_Body.computed,
-    3: SyncMessage_Body.status,
     4: SyncMessage_Body.raw,
     0: SyncMessage_Body.notSet
   };
@@ -1843,13 +1557,11 @@ class SyncMessage extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'SyncMessage',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
       createEmptyInstance: SyncMessage.$_createMessage)
-    ..oo(0, [1, 2, 3, 4])
+    ..oo(0, [1, 2, 4])
     ..aOM<RepSummary>(1, _omitFieldNames ? '' : 'summary',
         subBuilder: RepSummary.$_createMessage)
     ..aOM<TraceChunk>(2, _omitFieldNames ? '' : 'computed',
         subBuilder: TraceChunk.$_createMessage)
-    ..aOM<SyncStatus>(3, _omitFieldNames ? '' : 'status',
-        subBuilder: SyncStatus.$_createMessage)
     ..aOM<RawChunk>(4, _omitFieldNames ? '' : 'raw',
         subBuilder: RawChunk.$_createMessage)
     ..hasRequiredFields = false;
@@ -1878,12 +1590,10 @@ class SyncMessage extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
-  @$pb.TagNumber(3)
   @$pb.TagNumber(4)
   SyncMessage_Body whichBody() => _SyncMessage_BodyByTag[$_whichOneof(0)]!;
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
-  @$pb.TagNumber(3)
   @$pb.TagNumber(4)
   void clearBody() => $_clearField($_whichOneof(0));
 
@@ -1909,144 +1619,25 @@ class SyncMessage extends $pb.GeneratedMessage {
   @$pb.TagNumber(2)
   TraceChunk ensureComputed() => $_ensure(1);
 
-  @$pb.TagNumber(3)
-  SyncStatus get status => $_getN(2);
-  @$pb.TagNumber(3)
-  set status(SyncStatus value) => $_setField(3, value);
-  @$pb.TagNumber(3)
-  $core.bool hasStatus() => $_has(2);
-  @$pb.TagNumber(3)
-  void clearStatus() => $_clearField(3);
-  @$pb.TagNumber(3)
-  SyncStatus ensureStatus() => $_ensure(2);
-
   @$pb.TagNumber(4)
-  RawChunk get raw => $_getN(3);
+  RawChunk get raw => $_getN(2);
   @$pb.TagNumber(4)
   set raw(RawChunk value) => $_setField(4, value);
   @$pb.TagNumber(4)
-  $core.bool hasRaw() => $_has(3);
+  $core.bool hasRaw() => $_has(2);
   @$pb.TagNumber(4)
   void clearRaw() => $_clearField(4);
   @$pb.TagNumber(4)
-  RawChunk ensureRaw() => $_ensure(3);
+  RawChunk ensureRaw() => $_ensure(2);
 }
 
-class SyncStatus extends $pb.GeneratedMessage {
-  factory SyncStatus({
-    $core.int? repCount,
-    $core.List<$core.int>? oldestRepUuid,
-    $core.List<$core.int>? newestRepUuid,
-    $core.bool? traceUnavailable,
-  }) {
-    final result = SyncStatus._();
-    if (repCount != null) result.repCount = repCount;
-    if (oldestRepUuid != null) result.oldestRepUuid = oldestRepUuid;
-    if (newestRepUuid != null) result.newestRepUuid = newestRepUuid;
-    if (traceUnavailable != null) result.traceUnavailable = traceUnavailable;
-    return result;
-  }
-
-  SyncStatus._();
-
-  factory SyncStatus.fromBuffer($core.List<$core.int> data,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      SyncStatus()..mergeFromBuffer(data, registry);
-  factory SyncStatus.fromJson($core.String json,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      SyncStatus()..mergeFromJson(json, registry);
-
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'SyncStatus',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
-      createEmptyInstance: SyncStatus.$_createMessage)
-    ..aI(1, _omitFieldNames ? '' : 'repCount', fieldType: $pb.PbFieldType.OU3)
-    ..a<$core.List<$core.int>>(
-        2, _omitFieldNames ? '' : 'oldestRepUuid', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(
-        3, _omitFieldNames ? '' : 'newestRepUuid', $pb.PbFieldType.OY)
-    ..aOB(4, _omitFieldNames ? '' : 'traceUnavailable')
-    ..hasRequiredFields = false;
-
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SyncStatus clone() => deepCopy();
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SyncStatus copyWith(void Function(SyncStatus) updates) =>
-      super.copyWith((message) => updates(message as SyncStatus)) as SyncStatus;
-
-  @$core.override
-  $pb.BuilderInfo get info_ => _i;
-
-  @$core.pragma('dart2js:noInline')
-  @$core.Deprecated('Use SyncStatus() / SyncStatus.new instead')
-  static SyncStatus create() => SyncStatus._();
-  static $pb.GeneratedMessage $_createMessage() => SyncStatus._();
-  @$core.override
-  SyncStatus createEmptyInstance() => SyncStatus._();
-  @$core.pragma('dart2js:noInline')
-  static SyncStatus getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SyncStatus>(SyncStatus.$_createMessage);
-  static SyncStatus? _defaultInstance;
-
-  @$pb.TagNumber(1)
-  $core.int get repCount => $_getIZ(0);
-  @$pb.TagNumber(1)
-  set repCount($core.int value) => $_setUnsignedInt32(0, value);
-  @$pb.TagNumber(1)
-  $core.bool hasRepCount() => $_has(0);
-  @$pb.TagNumber(1)
-  void clearRepCount() => $_clearField(1);
-
-  @$pb.TagNumber(2)
-  $core.List<$core.int> get oldestRepUuid => $_getN(1);
-  @$pb.TagNumber(2)
-  set oldestRepUuid($core.List<$core.int> value) => $_setBytes(1, value);
-  @$pb.TagNumber(2)
-  $core.bool hasOldestRepUuid() => $_has(1);
-  @$pb.TagNumber(2)
-  void clearOldestRepUuid() => $_clearField(2);
-
-  @$pb.TagNumber(3)
-  $core.List<$core.int> get newestRepUuid => $_getN(2);
-  @$pb.TagNumber(3)
-  set newestRepUuid($core.List<$core.int> value) => $_setBytes(2, value);
-  @$pb.TagNumber(3)
-  $core.bool hasNewestRepUuid() => $_has(2);
-  @$pb.TagNumber(3)
-  void clearNewestRepUuid() => $_clearField(3);
-
-  /// A requested trace has been overwritten by the ring, whichever kind was asked for.
-  @$pb.TagNumber(4)
-  $core.bool get traceUnavailable => $_getBF(3);
-  @$pb.TagNumber(4)
-  set traceUnavailable($core.bool value) => $_setBool(3, value);
-  @$pb.TagNumber(4)
-  $core.bool hasTraceUnavailable() => $_has(3);
-  @$pb.TagNumber(4)
-  void clearTraceUnavailable() => $_clearField(4);
-}
-
-/// What the device says when something goes wrong, pushed on the `Reports`
-/// characteristic (`proto/calypso_gatt.proto`).
+/// What the device says when something goes wrong, pushed on the `Reports` characteristic (`proto/calypso_gatt.proto`).
 ///
-/// **A kind and nothing else.** The device's own sentence stays in its console
-/// log; the app turns the kind into words. Text was the other shape considered
-/// and it loses: a sentence long enough to be useful does not fit the payload
-/// every link can carry, so it would have to be truncated to whatever the
-/// current link takes, and a sentence that differs by link is one the app cannot
-/// label, count or recognise. The detail underneath a kind (which flash error,
-/// which rep) is what a serial console is for.
+/// **A kind and nothing else.** The device's own sentence stays in its console log; the app turns the kind into words. Text was the other shape considered and it loses: a sentence long enough to be useful does not fit the payload every link can carry, so it would have to be truncated to whatever the current link takes, and a sentence that differs by link is one the app cannot label, count or recognise. The detail underneath a kind (which flash error, which rep) is what a serial console is for.
 ///
-/// These are **events, not state**, which is why the characteristic is
-/// notify-only: a fault is reported when it happens, there is no "and it is fine
-/// now", and nothing reads a latest one back — a latch the device has to call
-/// current is a state it cannot know. A client that was not subscribed hears
-/// nothing, so the device holds what it raised while nobody was listening and
-/// sends it when a subscriber appears.
+/// These are **events, not state**, which is why the characteristic is notify-only: a fault is reported when it happens, there is no "and it is fine now", and nothing reads a latest one back — a latch the device has to call current is a state it cannot know. A client that was not subscribed hears nothing, so the device holds what it raised while nobody was listening and sends it when a subscriber appears.
 ///
-/// The app owns every sentence, so a kind names a **class** of failure and not
-/// an incident: adding detail on the device side must not change which kind it
-/// reports. The app counts what arrives.
+/// The app owns every sentence, so a kind names a **class** of failure and not an incident: adding detail on the device side must not change which kind it reports. The app counts what arrives.
 class Report extends $pb.GeneratedMessage {
   factory Report({
     ReportKind? kind,

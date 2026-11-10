@@ -5,105 +5,21 @@ Where Calypso is and what is left. Feature documentation lives in
 
 ## Done
 
-- **Sampling and rep detection** — 100 Hz IMU sampling, RAM ring, rep detector,
-  ZUPT-anchored trace and summary stats. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
-- **Per-rep storage** — a flash log ring holds each rep's summary and trace, and
-  survives power loss. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
-- **Raw IMU, filtered in firmware** — the device reads the BNO055's accelerometer and
-  gyroscope registers and computes its own attitude, gravity and offsets instead of
-  trusting the chip's fusion. Recording is gated on that filter having settled on a
-  still window — one second of stillness, no calibration ritual. Dev mode stores a
-  rep's window at full rate for replay. See [docs/RAW_IMU.md](docs/RAW_IMU.md).
-  **Not yet run on hardware**: the swap is the A/B, and it is what stage 4 opens.
-- **BLE sync** — summaries auto-stream to a subscriber, traces stream on request,
-  per-rep UUIDs identify reps across reboots. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
-- **A chunked pipe over one characteristic each way** — messages larger than one
-  value are framed, chunked and reassembled by both ends, so a stored trace chunk
-  is one transfer rather than three points per notification. Written and tested on
-  both ends, and exercised end to end by a real session — every trace whole, none
-  abandoned — but no controlled bench session yet (see Open).
-- **A generated BLE interface** — `proto/calypso_gatt.proto` declares the service
-  and its characteristics; `gatt-gen` writes the device's table
-  (`calypso-core/src/gatt.rs`) and the app's typed client
-  (`calypso-app/lib/gatt/gatt_client.dart`), both committed and both naming the
-  command that regenerates them, since nothing checks them against the schema.
-  **Not yet checked on hardware.**
-- **A summary stream that has nothing to read does not read** — the batch remembers
-  what the log looked like when it was collected, so a caught-up subscriber no longer
-  makes the device walk every record once a second; and a trace request is a walk of
-  that rep's own records, from a place the summary scan recorded, rather than of the
-  whole log. Both walks were holding the sampler off its tick for seconds (see
-  [docs/GOTCHAS.md](docs/GOTCHAS.md)). The fallback for a rep the device has no place
-  for is still the walk. **Not yet re-run on hardware**, which is what would close
-  [*A rep's timeline has a hole in it*](#firmware).
-- **Client app** — sync, the archive of record, rep list, 3D bar-path plot, the
-  device's faults, BLE transport, all testable without hardware.
-- **Bench mode** — `cargo run --features fake-reps` stores a synthetic rep every
-  30 s, exercising the whole device → log → BLE → app path without lifting. See
-  [calypso-esp32/README.md](calypso-esp32/README.md).
-- **Device time** — the app writes the device's clock on every connection, so a rep
-  carries the time it happened rather than the time the app heard about it: the log
-  keeps each boot's epoch as its own record, the device dates every summary it
-  streams, and the list is ordered and labelled by that. A boot the app never
-  reached has no clock, and its reps are never offered. **Not yet run on
-  hardware.** See [docs/APP_SYNC.md](docs/APP_SYNC.md).
-- **Diagnostics that can be read back** — the app logs every BLE message to a
-  rotating file, the firmware's boot log carries the heap and stack figures, and the
-  IMU's own last sample — specific force, the attitude the filter computed, and when
-  the sampler read it — is a `read` on its own characteristic, in the fixed point a
-  stored trace carries. The app reads it once per connection and logs it (nothing on screen shows
-  it yet), and any BLE client can read it. **Not yet run on hardware.** See
-  [docs/APP_SYNC.md](docs/APP_SYNC.md).
-- **The device's own faults reach the app** — a failed mount, a rep that could not be
-  stored, an IMU that stopped answering, a transfer the link dropped: each is now a
-  `Report` kind pushed on its own characteristic, raised once a second however often it
-  happens, and shown as a banner the person holding the phone can act on. Anything
-  raised while nothing was subscribed is sent when the app connects, so a boot that
-  went wrong before the app arrived still says so. **Not yet run on hardware.** See
-  [docs/APP_SYNC.md](docs/APP_SYNC.md).
-- **A day at a time** — the rep list opens on today and an arrow either side walks it
-  back a day per press, headed by the date, so the archive is browsable instead of
-  only the current day being reachable. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
-- **A rep is out and back** — the detector closes a rep on the return, not where the bar
-  rests, so a bench rep held at lockout is captured as one rep instead of split into a
-  drive and a lowering (or lost). A one-way push that pauses (an unrack) is dropped
-  rather than merged into the next stroke, as long as that stroke goes the same way;
-  the set that starts with a lowering is below. See
-  [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
-- **A rep is two strokes between turns** — the detector finds the turning points from the
-  bar's *vertical* velocity and measures the signed vertical travel between them, so the travel check
-  is part of detection instead of a test afterwards: a leg under `MIN_ROM_M` can never
-  pair, and a stroke that stalls mid-drive is one rep with its whole travel rather than a
-  rep cut short or lost. Chosen over the momentum detector on measurement — 0 cells where
-  it stored a rep the old one rejected across 5,292 map cells, no new false positive on
-  the non-rep sweep, and ROM at least as close to the travel actually moved. On the one
-  real capture it agrees with the detector it replaces on every stored window whose own
-  sample times can be replayed at all — 3 spans each — and the windows where they differ
-  are the ones with a 2.2 s jump or a catch-up burst inside them
-  ([docs/GOTCHAS.md](docs/GOTCHAS.md)). It costs one thing, accepted knowingly: a return
-  too gentle to reach `VEL_MIN` never turns, so it is not detected (below). See
-  [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
-- **A turn is the acceleration's, not the integral's** — the bar reverses where its vertical
-  acceleration does, and that is a reading: it swings ten metres per second squared either
-  side of a turn however far the integrated velocity has drifted. Which way a leg went comes
-  from the turn that ended it, not from the travel, for the same reason. The vertical speed
-  keeps its say for a stroke too gentle to move the acceleration. Measured on the first
-  hand-held set this project has recorded: four reps out of four from a window that arrived
-  carrying 15 m/s of the filter's own drift, where the previous rule stored none — with the
-  detectability maps unchanged and 95.4% of 5,292 cells storing one rep, from 95.2%. See
-  [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
-- **A stored rep is measured from its own turns** — the replay puts its velocity back to zero at
-  every instant a cue names the bar's speed zero at (an onset, and a turn the acceleration
-  named), and ROM is measured over the rep's span rather than the plot window. That is what the
-  travel a rep reports is bounded by: the drift the window arrived carrying no longer reaches it,
-  so the two hand-held windows in the capture that read 3.8–9.2 m for bars that travelled a few
-  tenths now read 0.4–3.9 m, and they read the same replayed from their own state as from rest.
-  Detection is untouched — the same 5,292 cells store the same reps and the non-rep sweep is
-  identical — while ROM against the travel asked for on synthetic motion moved: closer on the
-  bench's slices, a point or two further out on the deadlift's and the squat's, because a synthetic
-  rep arrives with no drift and an anchor can only add its own timing error. What is left of the
-  1–4 m is the attitude residue integrating inside one leg, which is the filter's. See
-  [docs/REP_TRACKING.md](docs/REP_TRACKING.md) and [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
+- **Sampling and rep detection** — 100 Hz IMU sampling, a RAM ring, a detector, and a ZUPT-anchored trace and summary per rep. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
+- **Per-rep storage** — a flash log ring holds each rep's summary and trace across power loss. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
+- **Raw IMU, filtered in firmware** — the device reads the BNO055's accelerometer and gyroscope and computes its own attitude, gravity and offsets rather than trusting the chip's fusion, and recording waits on that filter settling on a still window. **Not yet run on hardware.** See [docs/RAW_IMU.md](docs/RAW_IMU.md).
+- **BLE sync** — summaries auto-stream to a subscriber, traces stream on request, and per-rep UUIDs identify a rep across reboots. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
+- **A chunked pipe over one characteristic each way** — a message larger than one value is framed, chunked and reassembled by both ends, so a stored trace chunk is one transfer. No controlled bench session yet. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
+- **A generated BLE interface** — `proto/calypso_gatt.proto` declares the service and its characteristics, and `gatt-gen` writes both ends' code from it, committed rather than generated at build time. See [tools/gatt-gen/README.md](tools/gatt-gen/README.md).
+- **Bench mode** — a `fake-reps` build stores a synthetic rep every 30 s, exercising device to log to BLE to app without lifting. See [calypso-esp32/README.md](calypso-esp32/README.md).
+- **Device time** — the app sets the device's clock on every connection, the log keeps each boot's epoch, and the list is ordered and labelled by that time. **Not yet run on hardware.** See [docs/APP_SYNC.md](docs/APP_SYNC.md).
+- **The device's own faults reach the app** — a failed mount, a rep that could not be stored, an unreadable trace or a dropped transfer arrives as a `Report` kind and is shown as a banner. **Not yet run on hardware.** See [docs/APP_SYNC.md](docs/APP_SYNC.md).
+- **Diagnostics that can be read back** — the app logs every BLE message to a rotating file, and the firmware's boot log carries the heap and stack figures. See [calypso-app/README.md](calypso-app/README.md).
+- **A day at a time** — the rep list opens on today, and an arrow either side walks it back a day per press. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
+- **A rep is out and back** — the detector closes a rep on the return rather than where the bar rests, and drops a one-way push that pauses. See [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
+- **A rep is two strokes between turns** — the detector finds the turns from the bar's vertical velocity and measures the signed travel between them, so the travel check is part of detection rather than a test afterwards. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
+- **A turn is the acceleration's, not the integral's** — the bar reverses where its vertical acceleration does, which is a reading and cannot drift, and which way a leg went comes from the turn that ended it. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
+- **A stored rep is measured from its own turns** — the replay puts its velocity back to zero at every instant a cue names, and ROM is measured over the rep's span rather than the plot window. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
 
 ## Open
 
@@ -180,10 +96,11 @@ Where Calypso is and what is left. Feature documentation lives in
 ### BLE link stability
 
 - [ ] **The link drops while idle.** Four drops in one session, each preceded by
-      nothing but the IMU characteristic being polled, ~1.2 s before CoreBluetooth reported
-      `The connection has timed out unexpectedly`. The flood that was there then is gone (see
+      nothing but the IMU characteristic being polled — a read a second that has since gone
+      with the characteristic — ~1.2 s before CoreBluetooth reported `The connection has
+      timed out unexpectedly`. The flood that was there then is gone (see
       [docs/GOTCHAS.md](docs/GOTCHAS.md), "An acknowledgement is also a request for the next
-      message"); what is left is a read a second. The flash experiment is readable from
+      message"). The flash experiment is readable from
       the device's log alone now: a millisecond stamp on every line, both ends and
       the duration of every erase and write, and the reason a disconnect gives —
       `Connection Timeout` is the supervision timer expiring over a radio that
@@ -256,22 +173,6 @@ Where Calypso is and what is left. Feature documentation lives in
       instead of long — measured on that capture, five of fourteen fall under `MIN_ROM_M`
       and are lost; treat a gapped window as unusable and lose the rep outright; or fix
       the holes above and leave the integration alone.
-- [ ] **The summary stats disagree on real motion.** `mean_velocity` is the mean
-      of the *raw* speed while `peak_velocity` is the peak of the *detrended* one,
-      so a mean above the peak means a large DC component rather than a maths bug —
-      and real reps have it, on the order of five times over. Either make the two
-      comparable or document the difference.
-
-### Protocol gaps
-
-- [ ] **A request has no reply.** `SyncStatus` is defined and encodable in core,
-      but the firmware never sends it, so "this trace is no longer in the log" is
-      answered by the client timing out. A `SyncRequest` the device will not serve
-      (not subscribed, rep already gone, unknown request) is logged on the device
-      and silent to the app. Either reply with something that names what it
-      answers — a request id, or a status body — or drop `SyncStatus` and accept
-      the timeout.
-
 ### Battery level
 
 - [ ] **Read the cell over the STEMMA bus, not off the charger's divider.** The

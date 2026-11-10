@@ -21,13 +21,11 @@ pub const OUTPUT_FILE: &str = "gatt_client.dart";
 /// What the generated Dart needs to know about the crate it lands in.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// The import the generated protobuf classes arrive through, written as Dart
-    /// writes it, e.g. `../protocol/calypso.pb.dart`.
+    /// The import the generated protobuf classes arrive through, written as Dart writes it, e.g. `../protocol/calypso.pb.dart`.
     pub messages_import: String,
     /// The prefix those classes are imported under, e.g. `pb`.
     pub messages_prefix: String,
-    /// Backing buffer of a pipe characteristic: the largest chunk that goes in
-    /// one notification.
+    /// Backing buffer of a pipe characteristic: the largest chunk that goes in one notification.
     pub pipe_chunk_max: usize,
     /// Largest message a pipe may carry.
     pub pipe_msg_max: usize,
@@ -105,18 +103,14 @@ pub fn generate(gatt: &Gatt, config: &Config) -> Result<Output, Error> {
     })
 }
 
-/// What the schema asks the generated file to be able to do, so that it declares
-/// only what it uses: an interface method nobody calls is one every
-/// implementation has to stub.
+/// What the schema asks the generated file to be able to do, so that it declares only what it uses: an interface method nobody calls is one every implementation has to stub.
 #[derive(Default)]
 struct Needs {
     subscribe: bool,
     values: bool,
     write: bool,
     read: bool,
-    /// The bare kinds a codec helper is needed for, per direction: a value read off a characteristic is decoded,
-    /// one written to it is encoded, and a kind used one way must not emit the other — an unused `_decodeU32` is
-    /// an analyzer warning in every app that generates this file.
+    /// The bare kinds a codec helper is needed for, per direction: a value read off a characteristic is decoded, one written to it is encoded, and a kind used one way must not emit the other — an unused `_decodeU32` is an analyzer warning in every app that generates this file.
     bare_read: BTreeSet<Bare>,
     bare_written: BTreeSet<Bare>,
     utf8: bool,
@@ -205,9 +199,7 @@ fn emit_link(out: &mut String, needs: &Needs) {
     out.push_str("}\n");
 }
 
-/// Little-endian codecs for the bare kinds the schema uses. A bare value is raw
-/// bytes on the wire (so a stock client reads what it expects), which is why the
-/// encoding is spelled out here instead of coming from the message classes.
+/// Little-endian codecs for the bare kinds the schema uses. A bare value is raw bytes on the wire (so a stock client reads what it expects), which is why the encoding is spelled out here instead of coming from the message classes.
 fn emit_bare_codecs(out: &mut String, needs: &Needs) {
     for bare in needs.bare_read.union(&needs.bare_written) {
         let Some((width, getter)) = bare_helper(*bare) else {
@@ -227,8 +219,7 @@ fn emit_bare_codecs(out: &mut String, needs: &Needs) {
                 "int _decode{name}(Uint8List bytes) =>\n    ByteData.sublistView(bytes).{get}(0, Endian.little);"
             ));
         }
-        // One blank line between the members of a kind and one before whatever follows: the file is committed as
-        // `dart format` leaves it, so the spacing has to be the formatter's from here.
+        // One blank line between the members of a kind and one before whatever follows: the file is committed as `dart format` leaves it, so the spacing has to be the formatter's from here.
         let _ = write!(
             out,
             "\n// `gatt.{name}`: {width} raw bytes, little endian.\n{}\n",
@@ -239,8 +230,7 @@ fn emit_bare_codecs(out: &mut String, needs: &Needs) {
 
 /// The `ByteData` accessor for a bare kind that needs one, and its width.
 ///
-/// The kinds Dart expresses directly — `Uint8List.fromList([value])` for a byte,
-/// `utf8` for a string — have none.
+/// The kinds Dart expresses directly — `Uint8List.fromList([value])` for a byte, `utf8` for a string — have none.
 fn bare_helper(bare: Bare) -> Option<(usize, &'static str)> {
     match bare {
         Bare::U16 => Some((2, "Uint16")),
@@ -315,14 +305,11 @@ fn emit_members(out: &mut String, characteristic: &Characteristic, config: &Conf
     let encode = encode_expression(characteristic, config, "value");
 
     if characteristic.is_subscribable() {
-        // Both of these are `=>` members, and the formatter lays one out in one of three
-        // ways: on the same line, broken after `=>`, or a call chain one link per line.
+        // Both of these are `=>` members, and the formatter lays one out in one of three ways: on the same line, broken after `=>`, or a call chain one link per line.
         // Pick the first that fits. The file is committed and `dart format
-        // --set-exit-if-changed` is a gate on it, so this has to be what the formatter
-        // would have done, not merely something it would accept.
+        // --set-exit-if-changed` is a gate on it, so this has to be what the formatter would have done, not merely something it would accept.
         let getter = format!("  Stream<{value}> get {name}Updates =>");
-        // The continuation lines are the formatter's own indent: six spaces under a
-        // member's `=>`, and the chain broken there by one more.
+        // The continuation lines are the formatter's own indent: six spaces under a member's `=>`, and the chain broken there by one more.
         let chain = format!("_link.values({uuid_field}).map((bytes) => {decode});");
         let links = format!("_link\n      .values({uuid_field})\n      .map((bytes) => {decode});");
         let updates = if getter.len() + 1 + chain.len() <= MAX_WIDTH {
@@ -365,13 +352,9 @@ fn emit_members(out: &mut String, characteristic: &Characteristic, config: &Conf
     }
 
     if characteristic.is_written() {
-        // A characteristic that offers both is written with a response, because
-        // that is the form which reports failure; the device can be asked for the
-        // cheaper one by dropping WRITE from its declaration.
+        // A characteristic that offers both is written with a response, because that is the form which reports failure; the device can be asked for the cheaper one by dropping WRITE from its declaration.
         let with_response = characteristic.props.contains(&Prop::Write);
-        // The file is committed as `dart format` leaves it, and the formatter lays a
-        // `=>` body out one of three ways: on the same line, on the next line, or
-        // argument per line when even that is too wide. Pick the first that fits.
+        // The file is committed as `dart format` leaves it, and the formatter lays a `=>` body out one of three ways: on the same line, on the next line, or argument per line when even that is too wide. Pick the first that fits.
         let call = format!(
             "_link.write(serviceUuid, {uuid_field}, {encode}, withResponse: {with_response})"
         );
@@ -514,8 +497,7 @@ fn emit_pipes(out: &mut String, gatt: &Gatt, config: &Config) {
     }
 }
 
-/// The service a pipe's characteristics belong to: the validator pairs two
-/// characteristics of one service.
+/// The service a pipe's characteristics belong to: the validator pairs two characteristics of one service.
 fn service_uuid<'a>(gatt: &'a Gatt, characteristic: &Characteristic) -> &'a str {
     gatt.services
         .iter()
@@ -546,9 +528,7 @@ fn dart_codecs(inbound: &Option<String>, outbound: &Option<String>, _config: &Co
     format!("\n\n{request}\n\n{response}")
 }
 
-/// One direction's pair of codecs, laid out the way `dart format` leaves it: the
-/// file is committed, so the repo's own `dart format --set-exit-if-changed` has to
-/// pass on what the emitter writes.
+/// One direction's pair of codecs, laid out the way `dart format` leaves it: the file is committed, so the repo's own `dart format --set-exit-if-changed` has to pass on what the emitter writes.
 fn codec_pair(what: &str, message: Option<&str>) -> String {
     let name = pascal_case(what);
     let (ty, decode) = match message {
@@ -556,10 +536,7 @@ fn codec_pair(what: &str, message: Option<&str>) -> String {
         None => ("Uint8List".to_string(), "bytes".to_string()),
     };
 
-    // Each line is built with a trailing space after `=>`: that space is the
-    // separator when the body follows on the same line, and has to go when it does
-    // not. `dart format` strips trailing whitespace, and this file is committed as
-    // whatever `dart format` leaves, so the wrap has to strip it here.
+    // Each line is built with a trailing space after `=>`: that space is the separator when the body follows on the same line, and has to go when it does not. `dart format` strips trailing whitespace, and this file is committed as whatever `dart format` leaves, so the wrap has to strip it here.
     let encode_line = format!("  static Uint8List encode{name}({ty} message) => ");
     let encode = if encode_line.len() + "message.writeToBuffer();".len() <= MAX_WIDTH {
         format!("{encode_line}message.writeToBuffer();")

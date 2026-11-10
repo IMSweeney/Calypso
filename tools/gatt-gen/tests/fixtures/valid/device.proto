@@ -1,5 +1,4 @@
-// The spec's example schema (SPEC.md 5.3), with perm dropped: nothing in the
-// device stack can enforce it, so setting it only produces a warning.
+// The spec's example schema (SPEC.md 5.3), with perm dropped: nothing in the device stack can enforce it, so setting it only produces a warning.
 syntax = "proto3";
 
 package fixture;
@@ -57,8 +56,7 @@ service Device {
     };
   }
 
-  // A plain write, outside any pipe: the write flavour is the client's choice
-  // and this is what chooses it.
+  // A plain write, outside any pipe: the write flavour is the client's choice and this is what chooses it.
   rpc Beep(gatt.U8) returns (google.protobuf.Empty) {
     option (gatt.characteristic) = {
       uuid: "6e400005-b5a3-f393-e0a9-e50e24dcca9e"

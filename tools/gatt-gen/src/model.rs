@@ -59,8 +59,7 @@ impl Prop {
     }
 }
 
-/// A link security requirement. `trouble-host` 0.5 has no per-characteristic permissions, so the generator warns rather than pretending (see `PLAN.md`
-/// errata E2).
+/// A link security requirement. `trouble-host` 0.5 has no per-characteristic permissions, so the generator warns rather than pretending.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Perm {
     None,

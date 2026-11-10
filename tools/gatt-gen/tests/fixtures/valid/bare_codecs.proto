@@ -1,8 +1,4 @@
-// The bare kinds that need a codec helper (`gatt.U8` and `gatt.Bool` are written out
-// where they are used), one per direction the generator emits one for. A value read off
-// a characteristic is decoded and one written to it is encoded, so a kind used only one
-// way must emit only that half: the other is an unused element in every app that
-// generates the file.
+// The bare kinds that need a codec helper (`gatt.U8` and `gatt.Bool` are written out where they are used), one per direction the generator emits one for. A value read off a characteristic is decoded and one written to it is encoded, so a kind used only one way must emit only that half: the other is an unused element in every app that generates the file.
 syntax = "proto3";
 
 package fixture;
@@ -32,8 +28,7 @@ service Bare {
     };
   }
 
-  // A short name and a short codec: the one write whose call still fits on the line
-  // after `=>`, which is the other layout the emitted file has to get right.
+  // A short name and a short codec: the one write whose call still fits on the line after `=>`, which is the other layout the emitted file has to get right.
   rpc Tap(gatt.U16) returns (google.protobuf.Empty) {
     option (gatt.characteristic) = {
       uuid: "6e400014-b5a3-f393-e0a9-e50e24dcca9e"

@@ -68,8 +68,7 @@ Future<void> pumpList(
 /// The same epoch the fixtures are dated from: a device stamps every summary it sends, so a fake one does too.
 const int deviceEpochMs = 1_767_225_600_000;
 
-/// The clock the screen is "today" by: the instant the fixtures and the fake device's summaries are dated from, so
-/// their reps are today's. A screen on the real clock would be a day those reps are not on.
+/// The clock the screen is "today" by: the instant the fixtures and the fake device's summaries are dated from, so their reps are today's. A screen on the real clock would be a day those reps are not on.
 DateTime fixtureNow() => DateTime.fromMillisecondsSinceEpoch(deviceEpochMs);
 
 /// The label a rep at [unixMs] should carry: the local time of day, to the second.
@@ -138,7 +137,6 @@ Uint8List summaryMessage(String uuid, {int unixMs = deviceEpochMs}) =>
 
 void main() {
   _bleWiring();
-  _calibrationHint();
   _dayBoundary();
   _liveSummaries();
   _traceStates();
@@ -176,8 +174,7 @@ void main() {
   testWidgets('a rep is listed where it happened, however late it arrived', (
     tester,
   ) async {
-    // A catch-up after a week apart arrives in one burst, and nothing says the burst is in order. What places a
-    // rep is the time the device put on it, not the order the app happened to hear about it.
+    // A catch-up after a week apart arrives in one burst, and nothing says the burst is in order. What places a rep is the time the device put on it, not the order the app happened to hear about it.
     final link = FakeBleLink();
     final device = FakeDevice(link);
     final ble = BleTransport(
@@ -296,31 +293,6 @@ void main() {
       source: fixtureTransport('empty'),
     );
     expect(find.byType(ListTile), findsNWidgets(3));
-  });
-}
-
-void _calibrationHint() {
-  testWidgets('nothing is claimed before connecting', (tester) async {
-    final link = FakeBleLink();
-    final ble = BleTransport(
-      link,
-      traceTimeout: const Duration(milliseconds: 50),
-    );
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: RepListScreen(
-          archive: MemoryArchive(),
-          ble: ble,
-          fixture: '',
-          clock: fixtureNow,
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.textContaining('IMU not calibrated'), findsNothing);
-    expect(find.text('No reps yet'), findsOneWidget);
   });
 }
 
@@ -462,8 +434,7 @@ void _dayBoundary() {
   testWidgets('a seeded fixture opens on the day its session happened', (
     tester,
   ) async {
-    // The build is showing a recording rather than living in the day it is run: opening on today would put the
-    // session behind a page the forward arrow cannot reach.
+    // The build is showing a recording rather than living in the day it is run: opening on today would put the session behind a page the forward arrow cannot reach.
     DateTime later() => DateTime.fromMillisecondsSinceEpoch(
       deviceEpochMs + const Duration(days: 30).inMilliseconds,
     );
@@ -591,7 +562,7 @@ void _traceStates() {
     await tester.pumpAndSettle();
     expect(find.text('no trace'), findsOneWidget);
 
-    // The calibration poll runs while connected: close the link so it does not outlive the tree (docs/GOTCHAS.md).
+    // Close the link, so its timers do not outlive the tree.
     await ble.close();
   });
 
@@ -650,8 +621,7 @@ void _bleWiring() {
     }
     expect(find.text('Connected'), findsOneWidget);
 
-    // The device says a rep could not be saved: what it sends is a kind, so the sentence
-    // on screen is the app's (`state/device_reports.dart`).
+    // The device says a rep could not be saved: what it sends is a kind, so the sentence on screen is the app's (`state/device_reports.dart`).
     device.sendReport(pb.ReportKind.REPORT_KIND_REP_NOT_STORED);
     await tester.pump();
 

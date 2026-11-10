@@ -292,8 +292,7 @@ pub struct Sender {
     message_len: usize,
     /// Chunks sent and not yet acknowledged.
     in_flight: u8,
-    /// Whether a transfer is in progress. Tracked separately from `message_len`
-    /// because an empty message is a message.
+    /// Whether a transfer is in progress. Tracked separately from `message_len` because an empty message is a message.
     active: bool,
     /// Set once the END chunk has gone out.
     end_sent: bool,
@@ -325,7 +324,7 @@ impl Sender {
 
     /// Whether the message in flight stopped only because the window is full: there is more of it to send, and the acknowledgement that makes room is what lets it out.
     ///
-    /// This is the caller's cue to *flush the message again* rather than to start anything new — a message wider than the window is sent in waves, and a send path that only ever flushes a message when it starts one leaves the rest of the wave in the buffer for ever (see `docs/GOTCHAS.md`).
+    /// This is the caller's cue to *flush the message again* rather than to start anything new — a message wider than the window is sent in waves, and a send path that only ever flushes a message when it starts one leaves the rest of the wave in the buffer for ever.
     pub fn awaiting_ack(&self) -> bool {
         self.active && !self.end_sent && self.in_flight >= self.window
     }

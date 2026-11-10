@@ -29,8 +29,7 @@ const int _crc = 2;
 /// The ATT header a notification or a write costs: opcode and a two-byte handle.
 const int _attHeader = 3;
 
-/// The largest window a cumulative acknowledgement can describe with a `u8`
-/// sequence number.
+/// The largest window a cumulative acknowledgement can describe with a `u8` sequence number.
 const int maxWindow = 127;
 
 /// The largest chunk any link is asked to carry: a characteristic's storage is a constant on the device, so the frame has a ceiling of its own.

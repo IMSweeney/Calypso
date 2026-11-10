@@ -87,8 +87,7 @@ fn pump(message: &[u8], mtu: usize, max_message: usize, faults: Faults) -> Outco
                         .expect("it still fits");
                     sender.note_progress(now);
                 }
-                // Nothing moved, so the progress clock is deliberately *not*
-                // restarted: the stall timeout is the only thing that ends this.
+                // Nothing moved, so the progress clock is deliberately *not* restarted: the stall timeout is the only thing that ends this.
                 continue;
             }
         };

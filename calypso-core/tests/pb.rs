@@ -9,8 +9,6 @@ fn sample_summary() -> msg::RepSummary {
         duration_ms: 1455,
         rom: 0.412,
         peak_velocity: -0.71,
-        mean_velocity: 0.19,
-        peak_accel: 2.61,
         roll_min_deg: -1.25,
         roll_max_deg: 2.4,
         pitch_min_deg: -0.8,
@@ -172,8 +170,6 @@ fn trace_request_round_trips_in_its_envelope() {
     let request = msg::TraceRequest {
         kind: msg::TraceKind::Computed,
         rep_uuid: pb::uuid_to_field(&fixture_uuid(42)),
-        all_chunks: true,
-        chunk_index: 0,
     };
     let n = pb::encode_trace_request(&request, &mut buf).unwrap();
 
@@ -188,7 +184,6 @@ fn trace_request_round_trips_in_its_envelope() {
         pb::uuid_from_field(&decoded.rep_uuid),
         Some(fixture_uuid(42))
     );
-    assert!(decoded.all_chunks);
 
     assert_eq!(pb::decode_trace_request(&[]), Err(pb::Error::Empty));
 }
@@ -209,8 +204,7 @@ fn sync_message_carries_a_summary() {
 
 #[test]
 fn chunk_container_capacity_matches_the_constant() {
-    // Both trace kinds carry the same bound: `build.rs` configures it per message and the log's
-    // record buffer is sized against it.
+    // Both trace kinds carry the same bound: `build.rs` configures it per message and the log's record buffer is sized against it.
     let computed: heapless::Vec<msg::TraceComputedPoint, TRACE_CHUNK_SAMPLES> =
         msg::TraceChunk::default().samples;
     let raw: heapless::Vec<msg::TraceRawPoint, TRACE_CHUNK_SAMPLES> =

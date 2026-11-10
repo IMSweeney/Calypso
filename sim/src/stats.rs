@@ -1,17 +1,10 @@
 //! A coverage report for the detector — phases 1, 3 and 4 in one pass.
 //!
-//! A coverage report answers "how much of the program did the tests reach" by counting what it
-//! touched. This answers the same question about the detector's parameter space: how much of the
-//! rep grid comes back as the one rep it asked for, how much of the non-rep grid comes back as
-//! nothing, and how many sets come back whole. The analogy stops at the number — **the grid is
-//! ours**, so a percentage moves when the grid does, and only two runs over the same grid compare.
+//! A coverage report answers "how much of the program did the tests reach" by counting what it touched. This answers the same question about the detector's parameter space: how much of the rep grid comes back as the one rep it asked for, how much of the non-rep grid comes back as nothing, and how many sets come back whole. The analogy stops at the number — **the grid is ours**, so a percentage moves when the grid does, and only two runs over the same grid compare.
 //!
-//! What does not need a denominator is the run: the contiguous stretch of one-rep cells through a
-//! class's nominal, printed in the knob's own units (0.10 .. 0.29 m, not 71 % of cells). That is the
-//! boundary the maps are drawn to find, and it is a number a tuning change can move in a direction.
+//! What does not need a denominator is the run: the contiguous stretch of one-rep cells through a class's nominal, printed in the knob's own units (0.10 .. 0.29 m, not 71 % of cells). That is the boundary the maps are drawn to find, and it is a number a tuning change can move in a direction.
 //!
-//! The cells come from [`crate::map`] and [`crate::false_positive`], the sets from
-//! [`crate::motion::probe_sets`], so the report cannot measure a grid the maps do not draw.
+//! The cells come from [`crate::map`] and [`crate::false_positive`], the sets from [`crate::motion::probe_sets`], so the report cannot measure a grid the maps do not draw.
 
 use calypso_core::pb::msg;
 
@@ -25,16 +18,14 @@ use crate::motion::{probe_sets, TRACE_POINTS};
 pub struct Interval {
     pub lo: f32,
     pub hi: f32,
-    /// The run reaches the first (or the last) grid point, so the boundary lies outside the sweep
-    /// and the number is a lower bound on how far the behaviour holds.
+    /// The run reaches the first (or the last) grid point, so the boundary lies outside the sweep and the number is a lower bound on how far the behaviour holds.
     pub open_lo: bool,
     pub open_hi: bool,
     pub points: usize,
 }
 
 impl Interval {
-    /// `[0.10 .. 0.29] m`: square brackets where the sweep ended before the detector did, round
-    /// where the next point out is not one rep.
+    /// `[0.10 .. 0.29] m`: square brackets where the sweep ended before the detector did, round where the next point out is not one rep.
     pub fn label(&self, knob: &Knob) -> String {
         format!(
             "{}{} .. {}{} {}",
@@ -62,8 +53,7 @@ impl Error {
     }
 }
 
-/// The contiguous run of one-rep cells through `(i, j)` along the x knob. `None` if that cell is
-/// not one rep: the run is the class's own behaviour, and a nominal that misses has none.
+/// The contiguous run of one-rep cells through `(i, j)` along the x knob. `None` if that cell is not one rep: the run is the class's own behaviour, and a nominal that misses has none.
 pub fn run_along_x(slice: &Slice, i: usize, j: usize) -> Option<Interval> {
     run(
         &slice.x.values,
@@ -165,7 +155,7 @@ pub fn print_report() {
 
     println!();
     println!("The same cells are drawn by --example detector_map -- <bench|deadlift|squat> and");
-    println!("--example false_positive_map; --example set_probe prints each stored rep of a set.");
+    println!("--example false_positive_map; the sets below are the same measurement as numbers.");
 }
 
 fn detectability() {

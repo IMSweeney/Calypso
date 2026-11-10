@@ -1,11 +1,8 @@
-//! Pins for the `Set` generator: a set is the unrack, several reps, and the re-rack assembled
-//! into one stream, so these are the invariants about how several motions *coexist* — the thing
-//! a single-rep scenario cannot express.
+//! Pins for the `Set` generator: a set is the unrack, several reps, and the re-rack assembled into one stream, so these are the invariants about how several motions *coexist* — the thing a single-rep scenario cannot express.
 
 use calypso_sim::motion::{stored_set, Push, Rep, Set};
 
-/// A comfortable set (rest between every rep) comes back as its reps, in time order, with each
-/// ROM reading its travel.
+/// A comfortable set (rest between every rep) comes back as its reps, in time order, with each ROM reading its travel.
 #[test]
 fn a_set_of_five_comes_back_as_five_in_order() {
     let set = Set {
@@ -33,13 +30,9 @@ fn a_set_of_five_comes_back_as_five_in_order() {
     }
 }
 
-/// A set nobody pauses through still splits into its reps. The reversal-based close is what makes
-/// this possible — a detector that waited for rest would merge the whole set into one span and
-/// throw it away. This is the count that matters.
+/// A set nobody pauses through still splits into its reps. The reversal-based close is what makes this possible — a detector that waited for rest would merge the whole set into one span and throw it away. This is the count that matters.
 ///
-/// Note the one thing *not* pinned here: the later reps' ROMs read high (~9% over travel), because
-/// the velocity has not settled to zero between reps. That is a fidelity issue, not a detection one,
-/// and is left as a number for the maps to show rather than pinned here.
+/// Note the one thing *not* pinned here: the later reps' ROMs read high (~9% over travel), because the velocity has not settled to zero between reps. That is a fidelity issue, not a detection one, and is left as a number for the maps to show rather than pinned here.
 #[test]
 fn a_no_rest_set_still_splits_into_five() {
     let mut rep = Rep::bench();
@@ -59,8 +52,7 @@ fn a_no_rest_set_still_splits_into_five() {
     );
 }
 
-/// The motion that is not a rep — the unrack and the re-rack — is not stored, even when it sits
-/// right next to a rep. Only the rep comes back.
+/// The motion that is not a rep — the unrack and the re-rack — is not stored, even when it sits right next to a rep. Only the rep comes back.
 #[test]
 fn the_unrack_and_rerack_are_not_stored() {
     let push = Push {
@@ -97,10 +89,7 @@ fn a_lone_unrack_is_not_a_rep() {
     assert!(stored_set(&set).is_empty());
 }
 
-/// An unrack big enough to open a span must not merge into the first rep. The push in
-/// `the_unrack_and_rerack_are_not_stored` is too small to open one; a real lift-off does,
-/// and a detector that waited for its rest would run it into the first drive and store a
-/// bogus heavier rep instead of the rep.
+/// An unrack big enough to open a span must not merge into the first rep. The push in `the_unrack_and_rerack_are_not_stored` is too small to open one; a real lift-off does, and a detector that waited for its rest would run it into the first drive and store a bogus heavier rep instead of the rep.
 #[test]
 fn a_substantial_unrack_is_not_merged_into_the_first_rep() {
     for travel in [0.15, 0.20] {

@@ -1,29 +1,16 @@
-// Calypso wire format: rep records stored in the device flash log, and the
-// BLE sync protocol between the device and the phone app.
+// Calypso wire format: rep records stored in the device flash log, and the BLE sync protocol between the device and the phone app.
 //
-// This file is the single source of truth for both sides. The device builds
-// Rust types from it with `micropb` (see `calypso-core/build.rs`); the app
-// generates its own classes from the same file.
+// This file is the single source of truth for both sides. The device builds Rust types from it with `micropb` (see `calypso-core/build.rs`); the app generates its own classes from the same file.
 // The device's types are built from this file on every build, so they cannot go stale; the app's Dart classes are committed, so re-run `calypso-app/tool/gen_proto.sh` and commit them after changing this file.
 //
 // Fixed-point scales (see `calypso_core::sampler`):
-//   - accel: 0.01 m/s^2 per LSB, and it is **specific force**: gravity is included, so a
-//     still sensor reads 1 g up its own up axis (BNO055 native register scale)
+//   - accel: 0.01 m/s^2 per LSB, and it is **specific force**: gravity is included, so a still sensor reads 1 g up its own up axis (BNO055 native register scale)
 //   - gyro:  1/16 dps per LSB (BNO055 native register scale)
-//   - quat:  1/2^14 per LSB, order [w, x, y, z], where a fixed-point attitude is carried
-// Positions/velocities are metres and metres per second (float).
+//   - quat:  1/2^14 per LSB, order [w, x, y, z], where a fixed-point attitude is carried Positions/velocities are metres and metres per second (float).
 //
-// Storage layout: each rep is one `RepSummary` record followed by its
-// `TraceChunk` records (the plotted trace) and, on a build that records them, its
-// `RawChunk` records (the replayable one) — all carrying the same `rep_uuid` — and
-// a boot's clock is a `BootClock` record between them.
+// Storage layout: each rep is one `RepSummary` record followed by its `TraceChunk` records (the plotted trace) and, on a build that records them, its `RawChunk` records (the replayable one) — all carrying the same `rep_uuid` — and a boot's clock is a `BootClock` record between them.
 //
-// Rep identity is a **v4 UUID, minted on the device when the rep closes**. It is
-// random rather than a counter or a timestamp because a rep can be recorded
-// before the client has ever set the device's clock, so an identity derived from
-// time would have to have a second form for those; and because random ids need no
-// coordination between devices. The price is that UUIDs do not sort — a rep's
-// place in time comes from `RepSummary.t_unix_ms` instead.
+// Rep identity is a **v4 UUID, minted on the device when the rep closes**. It is random rather than a counter or a timestamp because a rep can be recorded before the client has ever set the device's clock, so an identity derived from time would have to have a second form for those; and because random ids need no coordination between devices. The price is that UUIDs do not sort — a rep's place in time comes from `RepSummary.t_unix_ms` instead.
 
 syntax = "proto3";
 
@@ -31,23 +18,13 @@ package calypso;
 
 // --- The two traces -------------------------------------------------------
 //
-// A rep carries **two** traces, because it has two consumers that want opposite
-// things and one message could only serve one of them badly.
+// A rep carries **two** traces, because it has two consumers that want opposite things and one message could only serve one of them badly.
 //
-// `TraceComputed` is for the plot: where the bar went and which way the sensor
-// faced, decimated to a fixed budget. It is derived data, and the device derives it
-// once, at the moment the rep closes, from the same window the summary came from.
+// `TraceComputed` is for the plot: where the bar went and which way the sensor faced, decimated to a fixed budget. It is derived data, and the device derives it once, at the moment the rep closes, from the same window the summary came from.
 //
-// `TraceRaw` is for replay: what the sensor actually read, at full rate and never
-// decimated, so the filter and the detector can run over it again and the summary be
-// re-derived from it. A device records it only while a client has asked it to
-// (`DevMode`), because a full-rate trace is the largest thing in the log.
+// `TraceRaw` is for replay: what the sensor actually read, at full rate and never decimated, so the filter and the detector can run over it again and the summary be re-derived from it. A device records it only while a client has asked it to (`DevMode`), because a full-rate trace is the largest thing in the log.
 //
-// Both cover the same window and share one time origin: `t_offset_ms` is
-// milliseconds from the rep's first sample, so `RepSummary.t_start_ms + t_offset_ms`
-// is a sample's uptime in either of them, and the two can be drawn against each
-// other. The raw trace starts at that origin — it keeps every sample — while the
-// plotted one starts wherever its decimation grid first lands.
+// Both cover the same window and share one time origin: `t_offset_ms` is milliseconds from the rep's first sample, so `RepSummary.t_start_ms + t_offset_ms` is a sample's uptime in either of them, and the two can be drawn against each other. The raw trace starts at that origin — it keeps every sample — while the plotted one starts wherever its decimation grid first lands.
 
 // One point of a rep's plotted path.
 message TraceComputedPoint {
@@ -78,45 +55,29 @@ message RepSummary {
   uint32 t_start_ms = 2;
   uint32 t_end_ms = 3;
   uint32 duration_ms = 4;
-  // Peak-to-peak vertical travel: the range of motion, on Z. Z is the axis the
-  // fusion pins to gravity; X and Y are the mount's heading and drift with yaw,
-  // so the largest excursion is not the rep's range of motion and may be the
-  // estimate's error rather than the bar.
+  // Peak-to-peak vertical travel: the range of motion, on Z. Z is the axis the fusion pins to gravity; X and Y are the mount's heading and drift with yaw, so the largest excursion is not the rep's range of motion and may be the estimate's error rather than the bar.
   float rom = 5;
   float peak_velocity = 6;
-  float mean_velocity = 7;
-  float peak_accel = 8;
+  reserved 7, 8;  // was `mean_velocity` and `peak_accel`: nothing read them, and a mean of raw speed is not comparable with a peak of detrended speed
+  reserved "mean_velocity", "peak_accel";
   float roll_min_deg = 9;
   float roll_max_deg = 10;
   float pitch_min_deg = 11;
   float pitch_max_deg = 12;
   uint32 computed_len = 13;     // plotted points across all `TraceChunk` records
   uint32 computed_chunks = 14;  // `TraceChunk` records following this summary
-  // Field 15 was `flags`, a bitfield. It is not needed: its one live bit was
-  // "the trace was decimated", which at a fixed budget is true of every rep long
-  // enough to be worth plotting and is derivable from `computed_len`,
-  // `duration_ms` and `config.sample_rate_hz` anyway. The calibrated bit went
-  // with fusion mode — there is no level to report any more.
+  // Field 15 was `flags`, a bitfield. It is not needed: its one live bit was "the trace was decimated", which at a fixed budget is true of every rep long enough to be worth plotting and is derivable from `computed_len`, `duration_ms` and `config.sample_rate_hz` anyway. The calibrated bit went with fusion mode — there is no level to report any more.
   reserved 15;      // was `flags`
   reserved "flags";
-  // The rep's wall-clock time, unix milliseconds, or 0 when the device had no
-  // clock for the boot that recorded it.
+  // The rep's wall-clock time, unix milliseconds, or 0 when the device had no clock for the boot that recorded it.
   //
-  // **Set when a summary is streamed, 0 in the log.** The time is a property of
-  // the boot, not of the rep, and it is often not known until after the rep has
-  // been written: a stored summary therefore carries its uptime (`t_start_ms`)
-  // and the boot's clock travels as its own record (`BootClock`).
+  // **Set when a summary is streamed, 0 in the log.** The time is a property of the boot, not of the rep, and it is often not known until after the rep has been written: a stored summary therefore carries its uptime (`t_start_ms`) and the boot's clock travels as its own record (`BootClock`).
   uint64 t_unix_ms = 16;
-  // Where the filter stood where the stored window begins: the whole of its
-  // memory, so replaying the window from here reproduces the summary instead of
-  // approximating it. This is what a `RawChunk` trace is re-run from.
+  // Where the filter stood where the stored window begins: the whole of its memory, so replaying the window from here reproduces the summary instead of approximating it. This is what a `RawChunk` trace is re-run from.
   RepState state = 17;
-  // What the sensor was set to, and which detection logic closed the rep: what
-  // the numbers in either trace mean.
+  // What the sensor was set to, and which detection logic closed the rep: what the numbers in either trace mean.
   RepConfig config = 18;
-  // The raw trace's size, or both 0 when this device does not record one. The
-  // counts are the answer to "can I replay this rep"; there is no flag for it,
-  // because two places to ask is one place to disagree.
+  // The raw trace's size, or both 0 when this device does not record one. The counts are the answer to "can I replay this rep"; there is no flag for it, because two places to ask is one place to disagree.
   uint32 raw_len = 19;
   uint32 raw_chunks = 20;
 }
@@ -129,15 +90,13 @@ message RepConfig {
   uint32 gyro_bandwidth_hz = 4;
   uint32 sample_rate_hz = 5;
   // Which detection logic closed this rep (`DETECTOR_VERSION` in `calypso_core::rep`).
-  // A summary recomputed by newer logic is a different summary, and this is what
-  // says so rather than leaving two numbers to be compared as if they were one.
+  // A summary recomputed by newer logic is a different summary, and this is what says so rather than leaving two numbers to be compared as if they were one.
   uint32 detector_version = 6;
 }
 
 // Where the filter stood when a stored window began.
 //
-// The state is the filter's whole memory: a filter started from it and fed the
-// window lands exactly where the one that recorded the rep did.
+// The state is the filter's whole memory: a filter started from it and fed the window lands exactly where the one that recorded the rep did.
 message RepState {
   float vx = 1;  // world-frame velocity, m/s
   float vy = 2;
@@ -153,40 +112,8 @@ message RepState {
   float gyro_bias_y = 12;
   float gyro_bias_z = 13;
   // Whether the bar was already at rest when this was taken. Not a convenience:
-  // "at rest" is a fact about the last 400 ms, so a replay without it has to earn
-  // it back and spends its first samples integrating a drift the original had
-  // already taken out.
+  // "at rest" is a fact about the last 400 ms, so a replay without it has to earn it back and spends its first samples integrating a drift the original had already taken out.
   bool settled = 14;
-}
-
-// The IMU as the sampler last read it: the raw sample the filter is fed, and the attitude
-// the filter makes of it.
-//
-// Read, never notified, and a snapshot rather than a stream: the device republishes it
-// ten times a second, so a client that wants to watch the sensor polls it.
-// Fixed point at the same scales a `TraceSample` uses, so a readout can be compared with
-// what a stored trace carries for the same moment.
-message ImuState {
-  // When the sampler read it, ms since boot. Read against a client's own idea of when the
-  // read was issued: a value that stops moving while the rep log keeps growing is a
-  // stalled sampler.
-  uint32 t_uptime_ms = 1;
-  // Specific force, body frame: 0.01 m/s^2 per LSB, gravity included — a still sensor
-  // reads 1 g up its own up axis. This is the raw accelerometer, not an acceleration.
-  sint32 ax = 2;
-  sint32 ay = 3;
-  sint32 az = 4;
-  // Orientation: 1/2^14 per LSB, order [w, x, y, z]. The filter's attitude, since the
-  // sensor no longer reports one; kept in the fields it has always occupied because it is
-  // the same quantity it always was.
-  sint32 qw = 5;
-  sint32 qx = 6;
-  sint32 qy = 7;
-  sint32 qz = 8;
-  // Angular rate, body frame: 1/16 dps per LSB.
-  sint32 gx = 9;
-  sint32 gy = 10;
-  sint32 gz = 11;
 }
 
 // A slice of a rep's plotted trace: as stored in the log, and as sent over BLE.
@@ -195,12 +122,7 @@ message TraceChunk {
   uint32 index = 2;              // 0-based chunk index
   uint32 first_t_offset_ms = 3;  // t_offset_ms of the first sample
   repeated TraceComputedPoint samples = 4;
-  // Chunks in the stream this record belongs to. Set only when a trace is being
-  // streamed over BLE; a record stored in the log leaves it 0, because there the
-  // summary's `computed_chunks` already describes the trace and the device
-  // re-chunks to fit the MTU when streaming. Without this the client cannot tell
-  // "more chunks are coming" from "the device has forgotten this rep and will
-  // stay silent".
+  // Chunks in the stream this record belongs to. Set only when a trace is being streamed over BLE; a record stored in the log leaves it 0, because there the summary's `computed_chunks` already describes the trace and the device re-chunks to fit the MTU when streaming. Without this the client cannot tell "more chunks are coming" from "the device has forgotten this rep and will stay silent".
   uint32 total_chunks = 5;
 }
 
@@ -213,32 +135,21 @@ message RawChunk {
   uint32 total_chunks = 5;  // as `TraceChunk`
 }
 
-// The device's clock, as of one point in the log: what its uptime zero was worth
-// on the wall clock from here on.
+// The device's clock, as of one point in the log: what its uptime zero was worth on the wall clock from here on.
 //
-// The device has no RTC, so the only time it can know is the one the client set
-// (`Time`, `proto/calypso_gatt.proto`). That time belongs in the log rather than
-// in RAM because it outlives the boot: reps written while the client was
-// connected keep their time when the device restarts, and a rep that only the RAM
-// remembers a clock for would lose it.
+// The device has no RTC, so the only time it can know is the one the client set (`Time`, `proto/calypso_gatt.proto`). That time belongs in the log rather than in RAM because it outlives the boot: reps written while the client was connected keep their time when the device restarts, and a rep that only the RAM remembers a clock for would lose it.
 //
 // Written at most twice per boot:
-//   - at mount, with `epoch_s` 0 — a boot's records start here, which is what
-//     stops a boot that never had a clock from being read as the one before it;
-//   - when the client sets the clock, with the epoch. Re-setting it writes another,
-//     and the newest one before a record is the one that dates it.
+//   - at mount, with `epoch_s` 0 — a boot's records start here, which is what stops a boot that never had a clock from being read as the one before it;
+//   - when the client sets the clock, with the epoch. Re-setting it writes another, and the newest one before a record is the one that dates it.
 //
-// A record's clock is the newest `BootClock` **at or before it**, which is the
-// only rule both ends can apply: the device can name its own boot's records by
-// the ids it has in RAM, and a dump of the log carries no ids at all
-// (`docs/FIXTURES.md`), so a reader goes by order.
+// A record's clock is the newest `BootClock` **at or before it**, which is the only rule both ends can apply: the device can name its own boot's records by the ids it has in RAM, and a dump of the log carries no ids at all, so a reader goes by order.
 message BootClock {
   uint32 epoch_s = 1; // unix seconds at that boot's uptime zero; 0 = not known
 }
 
 // One log record: a rep summary, one of either trace's chunks, or a clock reading.
-// Keeping them under one wire type makes the log a single self-describing
-// stream.
+// Keeping them under one wire type makes the log a single self-describing stream.
 message RepRecord {
   oneof body {
     RepSummary summary = 1;
@@ -250,20 +161,11 @@ message RepRecord {
 
 // --- BLE sync -------------------------------------------------------------
 //
-// Two characteristics carry this protocol, one in each direction: `requests`
-// (app -> device, a `SyncRequest`) and `messages` (device -> app, a
-// `SyncMessage`). One of each, so a new operation is a new arm of these oneofs
-// rather than a new characteristic and a new UUID.
+// Two characteristics carry this protocol, one in each direction: `requests` (app -> device, a `SyncRequest`) and `messages` (device -> app, a `SyncMessage`). One of each, so a new operation is a new arm of these oneofs rather than a new characteristic and a new UUID.
 //
-// Setting the clock is deliberately *not* an arm of `SyncRequest`. It is a state
-// the app writes once per boot, like the calibration a client reads, and on the
-// pipe it would queue behind the summaries it is meant to be there for — the
-// device holds them until it has a clock (see `BootClock`).
+// Setting the clock is deliberately *not* an arm of `SyncRequest`. It is a state the app writes once per boot, and on the pipe it would queue behind the summaries it is meant to be there for — the device holds them until it has a clock (see `BootClock`).
 //
-// Recording a rep's raw trace **is** an arm, and the difference is what it holds
-// up: dev mode decides what *future* reps store, so a message that queues behind a
-// few summaries costs nothing, where the clock's would have delayed the very
-// summaries it was needed for.
+// Recording a rep's raw trace **is** an arm, and the difference is what it holds up: dev mode decides what *future* reps store, so a message that queues behind a few summaries costs nothing, where the clock's would have delayed the very summaries it was needed for.
 
 // Which of a rep's two traces a request is about.
 enum TraceKind {
@@ -271,27 +173,19 @@ enum TraceKind {
   TRACE_KIND_RAW = 1;       // the replayable one, if this device recorded it
 }
 
-// Sent by the app to request a rep's trace. `chunk_index` is ignored unless
-// `all_chunks` is false.
+// Sent by the app to request a rep's trace, which is always the whole of it.
 message TraceRequest {
   bytes rep_uuid = 1;
-  bool all_chunks = 2;
-  uint32 chunk_index = 3;
+  reserved 2, 3;  // was `all_chunks` and `chunk_index`: a chunk is not a trace, and nothing asked for one
+  reserved "all_chunks", "chunk_index";
   TraceKind kind = 4;
 }
 
 // Turn recording of raw traces on or off, until the device restarts.
 //
-// A dev switch, not a setting. A raw trace is the largest thing in the log — a
-// full-rate nine-second rep is ~19 KB against the plotted trace's ~5 — and it
-// exists so a session can be replayed offline, not so a release session gets
-// bigger. It lives here rather than on a characteristic of its own because it is
-// an operation rather than a value the app reads back: the client that sets it
-// knows which way it set it, and the device forgets at every boot.
+// A dev switch, not a setting. A raw trace is the largest thing in the log — a full-rate nine-second rep is ~19 KB against the plotted trace's ~5 — and it exists so a session can be replayed offline, not so a release session gets bigger. It lives here rather than on a characteristic of its own because it is an operation rather than a value the app reads back: the client that sets it knows which way it set it, and the device forgets at every boot.
 //
-// **Off at every boot and not persisted.** A switch left on by accident fills the
-// log at three times the rate for as long as nobody notices; the cost of
-// remembering it would be a reflash to turn it off.
+// **Off at every boot and not persisted.** A switch left on by accident fills the log at three times the rate for as long as nobody notices; the cost of remembering it would be a reflash to turn it off.
 message DevMode {
   bool enabled = 1;
 }
@@ -306,98 +200,57 @@ message SyncRequest {
 
 // Everything sent device -> app on the sync service, on the pipe.
 //
-// A response and a push look alike here, and the client tells them apart by the
-// body: `computed` or `raw` belongs to the `TraceRequest` that asked for it (its
-// chunks carry the rep's UUID and the kind that was asked for), while `summary`
-// arrives because the client subscribed, not because it asked.
+// A response and a push look alike here, and the client tells them apart by the body: `computed` or `raw` belongs to the `TraceRequest` that asked for it (its chunks carry the rep's UUID and the kind that was asked for), while `summary` arrives because the client subscribed, not because it asked.
 message SyncMessage {
+  // Field 3 was `status`, a reply that was never sent: a request the device cannot serve is silent.
+  reserved 3;
+  reserved "status";
   oneof body {
     RepSummary summary = 1;  // auto-streamed as reps are recorded
     TraceChunk computed = 2; // the plotted trace, in response to TraceRequest
-    SyncStatus status = 3;
     RawChunk raw = 4;        // the raw trace, in response to TraceRequest
   }
 }
 
-message SyncStatus {
-  uint32 rep_count = 1;         // reps currently in the log ring
-  bytes oldest_rep_uuid = 2;    // reps fall off the ring when it wraps
-  bytes newest_rep_uuid = 3;
-  // A requested trace has been overwritten by the ring, whichever kind was asked for.
-  bool trace_unavailable = 4;
-}
-
 // --- Diagnostics ----------------------------------------------------------
 
-// What the device says when something goes wrong, pushed on the `Reports`
-// characteristic (`proto/calypso_gatt.proto`).
+// What the device says when something goes wrong, pushed on the `Reports` characteristic (`proto/calypso_gatt.proto`).
 //
-// **A kind and nothing else.** The device's own sentence stays in its console
-// log; the app turns the kind into words. Text was the other shape considered
-// and it loses: a sentence long enough to be useful does not fit the payload
-// every link can carry, so it would have to be truncated to whatever the
-// current link takes, and a sentence that differs by link is one the app cannot
-// label, count or recognise. The detail underneath a kind (which flash error,
-// which rep) is what a serial console is for.
+// **A kind and nothing else.** The device's own sentence stays in its console log; the app turns the kind into words. Text was the other shape considered and it loses: a sentence long enough to be useful does not fit the payload every link can carry, so it would have to be truncated to whatever the current link takes, and a sentence that differs by link is one the app cannot label, count or recognise. The detail underneath a kind (which flash error, which rep) is what a serial console is for.
 //
-// These are **events, not state**, which is why the characteristic is
-// notify-only: a fault is reported when it happens, there is no "and it is fine
-// now", and nothing reads a latest one back — a latch the device has to call
-// current is a state it cannot know. A client that was not subscribed hears
-// nothing, so the device holds what it raised while nobody was listening and
-// sends it when a subscriber appears.
+// These are **events, not state**, which is why the characteristic is notify-only: a fault is reported when it happens, there is no "and it is fine now", and nothing reads a latest one back — a latch the device has to call current is a state it cannot know. A client that was not subscribed hears nothing, so the device holds what it raised while nobody was listening and sends it when a subscriber appears.
 //
-// The app owns every sentence, so a kind names a **class** of failure and not
-// an incident: adding detail on the device side must not change which kind it
-// reports. The app counts what arrives.
+// The app owns every sentence, so a kind names a **class** of failure and not an incident: adding detail on the device side must not change which kind it reports. The app counts what arrives.
 message Report {
   ReportKind kind = 1;
 }
 
-// The classes of failure that reach the phone. Each is something a person
-// holding the phone can act on, or can at least be told about in a sentence;
+// The classes of failure that reach the phone. Each is something a person holding the phone can act on, or can at least be told about in a sentence;
 // the firmware's own log has the rest.
 enum ReportKind {
   REPORT_KIND_UNSPECIFIED = 0;
-  // The rep log did not mount, or could not be read: nothing this boot is
-  // stored, and nothing will ever be offered to sync. A bad partition table or
-  // a flash that will not answer leaves this device a sensor with no record
-  // (docs/GOTCHAS.md).
+  // The rep log did not mount, or could not be read: nothing this boot is stored, and nothing will ever be offered to sync. A bad partition table or a flash that will not answer leaves this device a sensor with no record.
   REPORT_KIND_LOG_UNUSABLE = 1;
-  // A rep closed and could not be written: the trace is lost, and no summary
-  // will arrive for it either.
+  // A rep closed and could not be written: the trace is lost, and no summary will arrive for it either.
   REPORT_KIND_REP_NOT_STORED = 2;
-  // A rep was detected but its samples were no longer in the ring, so it was
-  // dropped before it could be computed. A rep the app will never see.
+  // A rep was detected but its samples were no longer in the ring, so it was dropped before it could be computed. A rep the app will never see.
   REPORT_KIND_REP_WINDOW_UNAVAILABLE = 3;
   // The sampler could not read the IMU: nothing is recorded while this lasts.
   // Reported at most once a second however many reads fail.
   REPORT_KIND_IMU_READ_FAILED = 4;
-  // The IMU's stored calibration profile did not apply, or did not persist.
-  // Reps are recorded, but the profile the app last saved is not what is
-  // running.
-  REPORT_KIND_CALIBRATION_PROFILE = 5;
-  // The client set the clock and the device kept it in RAM only: this boot's
-  // reps are dated, a later boot's log has no record of the epoch.
+  reserved 5;  // was `REPORT_KIND_CALIBRATION_PROFILE`: there is no calibration any more
+  // The client set the clock and the device kept it in RAM only: this boot's reps are dated, a later boot's log has no record of the epoch.
   REPORT_KIND_CLOCK_NOT_PERSISTED = 6;
-  // The pipe gave up on a message the app is waiting for (three attempts, no
-  // acknowledgement). The app's own transfer timeout says the same thing a few
-  // seconds later.
+  // The pipe gave up on a message the app is waiting for (three attempts, no acknowledgement). The app's own transfer timeout says the same thing a few seconds later.
   REPORT_KIND_TRANSFER_ABANDONED = 7;
-  // The app asked for something this device will not serve: a body it does not
-  // know, a request it cannot decode, or a trace asked for with nothing
-  // subscribed. Always an app firmware-mismatch rather than a device fault.
+  // The app asked for something this device will not serve: a body it does not know, a request it cannot decode, or a trace asked for with nothing subscribed. Always an app firmware-mismatch rather than a device fault.
   REPORT_KIND_REQUEST_REFUSED = 8;
-  // A requested trace could not be read back out of the log. The app is
-  // waiting on it and will time out.
+  // A requested trace could not be read back out of the log. The app is waiting on it and will time out.
   REPORT_KIND_TRACE_UNREADABLE = 9;
   // A notification the device tried to send failed on the link.
   REPORT_KIND_NOTIFY_FAILED = 10;
-  // The radio's own machinery failed: the HCI runner errored, or advertising
-  // could not be started. The device may be invisible or unreachable.
+  // The radio's own machinery failed: the HCI runner errored, or advertising could not be started. The device may be invisible or unreachable.
   REPORT_KIND_RADIO_FAILED = 11;
-  // The sampler stopped long enough to leave a gap in its timeline. A rep that
-  // spans the gap was measured across motion nobody saw, so its travel can read
-  // long, and a rep that happened inside the gap was never seen at all.
+  // The sampler stopped long enough to leave a gap in its timeline. A rep that spans the gap was measured across motion nobody saw, so its travel can read long, and a rep that happened inside the gap was never seen at all.
   REPORT_KIND_SAMPLER_HOLE = 12;
 }

@@ -5,10 +5,7 @@
 //! The image is what the bootloader hands back for the partition:
 //! `espflash read-flash 0x190000 0x270000 <image.bin>` (the offsets are `calypso-esp32/partitions.csv`).
 //!
-//! This mounts the image with the firmware's own log and walks it with the firmware's own record decoder, so what it
-//! counts is what the device would serve — including the records a torn write or a bad CRC makes unreadable, which a
-//! reader of the raw bytes would happily count. Mounting can erase — a head sector whose tail is corrupt sends the
-//! ring on to the next one — but that happens to this copy in memory, never to the device.
+//! This mounts the image with the firmware's own log and walks it with the firmware's own record decoder, so what it counts is what the device would serve — including the records a torn write or a bad CRC makes unreadable, which a reader of the raw bytes would happily count. Mounting can erase — a head sector whose tail is corrupt sends the ring on to the next one — but that happens to this copy in memory, never to the device.
 
 use std::env;
 use std::fs;
@@ -85,8 +82,7 @@ enum Output {
     None,
     /// Each rep's trace as `t_ms, x, y, z, ax, ay, az`, so a plot is of what the device stored.
     Csv(String),
-    /// The reps as a `.pblog` — the format `docs/FIXTURES.md` describes — so a rep the device recorded can
-    /// become a fixture. `prefix` is a hex uuid prefix, or every rep when absent.
+    /// The reps as a `.pblog`, the format the app's fixture reader takes, so a rep the device recorded can become a fixture. `prefix` is a hex uuid prefix, or every rep when absent.
     Dump {
         path: String,
         prefix: Option<String>,
@@ -161,16 +157,13 @@ fn main() {
     let mut clocks = 0usize;
     let mut summaries = 0usize;
     let mut chunks = 0usize;
-    // The epoch of the boot the walk is in: a rep's time is this boot's epoch plus its uptime, the rule a reader of
-    // a dump applies.
+    // The epoch of the boot the walk is in: a rep's time is this boot's epoch plus its uptime, the rule a reader of a dump applies.
     let mut epoch_s: u32 = 0;
     let mut boots = 0usize;
     // Every rep's uuid, so the traces can be read back once the walk is done with the log.
     let mut reps: Vec<(RepUuid, String)> = Vec::new();
 
-    // A boot's records start at its mount clock, so a clock at 0 is where a boot begins and the newest epoch after it
-    // dates the reps that follow. Counting clock records as boots would count each boot twice over: the client's
-    // set is a second record in the same boot.
+    // A boot's records start at its mount clock, so a clock at 0 is where a boot begins and the newest epoch after it dates the reps that follow. Counting clock records as boots would count each boot twice over: the client's set is a second record in the same boot.
     println!("\nlog, oldest first:");
     println!("  {:<6} {:<8} detail", "id", "what");
     store::for_each_record(&mut log, &mut buf, &mut rec, |id, record| {
@@ -200,8 +193,7 @@ fn main() {
                 } else {
                     utc(u64::from(epoch_s) * 1000 + u64::from(s.t_start_ms))
                 };
-                // The velocity the window is replayed from: `compute_rep` integrates it forward, so a
-                // window whose state already carries speed reads travel that the bar never did.
+                // The velocity the window is replayed from: `compute_rep` integrates it forward, so a window whose state already carries speed reads travel that the bar never did.
                 let v0 = magnitude([s.state.vx, s.state.vy, s.state.vz]);
                 println!(
                     "  {id:<6} {:<8} {} {} ms  rom {:.2} m  v0 {:.1} m/s  {} pts{}  {stamp}",
@@ -232,9 +224,7 @@ fn main() {
     );
     println!("=> {summaries} reps stored on the device");
 
-    // Read each trace back through the firmware's own reader, and say how evenly it is sampled: a rep whose window
-    // has a hole in it is a window whose motion was not measured, and that shows up as a wide step between two
-    // points rather than anywhere in the summary.
+    // Read each trace back through the firmware's own reader, and say how evenly it is sampled: a rep whose window has a hole in it is a window whose motion was not measured, and that shows up as a wide step between two points rather than anywhere in the summary.
     let mut points = [TracePoint::ZERO; 512];
     for (uuid, prefix) in &reps {
         let mut out = TraceBuf::new(&mut points);
@@ -266,8 +256,7 @@ fn main() {
             let mut out_text = format!("# {prefix}\n");
             for i in 0..n {
                 let p = out.get(i).unwrap();
-                // Time, position, and the two angles the attitude implies. The plotted trace carries no
-                // raw reading; that is the rep's raw trace, which only a dev build records.
+                // Time, position, and the two angles the attitude implies. The plotted trace carries no raw reading; that is the rep's raw trace, which only a dev build records.
                 let (roll, pitch) = roll_pitch_deg(p.quat.map(|q| q as f32 / QUAT_SCALE as f32));
                 out_text.push_str(&format!(
                     "{}, {:.4}, {:.4}, {:.4}, {:.1}, {:.1}\n",
@@ -293,12 +282,9 @@ fn main() {
     }
 }
 
-/// Write the chosen reps as a `.pblog`: each one's summary and its chunks, in log order, behind the clock
-/// record that dates them.
+/// Write the chosen reps as a `.pblog`: each one's summary and its chunks, in log order, behind the clock record that dates them.
 ///
-/// The clock is not optional. A stored summary carries its uptime, not a time (`proto/calypso.proto`), so a
-/// fixture without its boot's epoch is a rep that cannot be dated — and the app resolves the time from the
-/// records in front of it, not from the file's name.
+/// The clock is not optional. A stored summary carries its uptime, not a time (`proto/calypso.proto`), so a fixture without its boot's epoch is a rep that cannot be dated — and the app resolves the time from the records in front of it, not from the file's name.
 fn dump(log: &mut FlashLog<Image>, buf: &mut [u8], path: &str, prefix: Option<&str>) {
     let mut out: Vec<u8> = Vec::new();
     // The newest clock that dates the reps that follow it. A clock at 0 is a boot opening, not a time.

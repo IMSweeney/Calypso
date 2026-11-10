@@ -1,37 +1,18 @@
-//! The attitude filter: the sensor's accelerometer and gyroscope in, a linear acceleration and an
-//! attitude out.
+//! The attitude filter: the sensor's accelerometer and gyroscope in, a linear acceleration and an attitude out.
 //!
 //! The accelerometer measures **specific force**: gravity plus whatever the sensor is doing. Its
-//! *direction* is gravity whenever the bar's own acceleration is small compared with `g`, which is
-//! true for a barbell even mid-stroke: a vertical stroke's acceleration is along gravity and does
-//! not tilt the measured direction at all.
+//! *direction* is gravity whenever the bar's own acceleration is small compared with `g`, which is true for a barbell even mid-stroke: a vertical stroke's acceleration is along gravity and does not tilt the measured direction at all.
 //!
-//! So the attitude is a complementary filter. The gyro carries it through rotation, and the
-//! accelerometer pulls it toward the measured gravity at all times — fast when the bar is still,
-//! slowly while it moves. Pulling only while still is what a first version did, and a gyro bias of
-//! a degree per second then walks the vertical several degrees across a set. A tilted vertical
-//! leaks `g·sin(tilt)` into the horizontal, and integrating that is a bar that appears to travel
-//! metres sideways.
+//! So the attitude is a complementary filter. The gyro carries it through rotation, and the accelerometer pulls it toward the measured gravity at all times — fast when the bar is still, slowly while it moves. Pulling only while still is what a first version did, and a gyro bias of a degree per second then walks the vertical several degrees across a set. A tilted vertical leaks `g·sin(tilt)` into the horizontal, and integrating that is a bar that appears to travel metres sideways.
 //!
-//! **Stillness is a separate question.** The accelerometer cannot tell a still bar from one
-//! crossing zero acceleration at its fastest point, so "has stopped changing" is not enough.
-//! Still means the reading has held at 1 g, with the offset taken out, for long enough that a slow
-//! stroke cannot be what is being seen. That is the gate for the accelerometer's offset and the
-//! zero-velocity update; it is not the gate for believing gravity.
+//! **Stillness is a separate question.** The accelerometer cannot tell a still bar from one crossing zero acceleration at its fastest point, so "has stopped changing" is not enough.
+//! Still means the reading has held at 1 g, with the offset taken out, for long enough that a slow stroke cannot be what is being seen. That is the gate for the accelerometer's offset and the zero-velocity update; it is not the gate for believing gravity.
 //!
-//! **The gyro's offset is a question for the accelerometer.** A bias turns the attitude while
-//! gravity stays put in the sensor's frame; a real rotation moves gravity through it. That
-//! difference is what lets a set learn the bias between reps, where it is never still long enough
-//! to be called at rest.
+//! **The gyro's offset is a question for the accelerometer.** A bias turns the attitude while gravity stays put in the sensor's frame; a real rotation moves gravity through it. That difference is what lets a set learn the bias between reps, where it is never still long enough to be called at rest.
 //!
-//! **What is not observable.** Yaw, because there is no magnetometer; it drifts and nothing here
-//! can stop it. An accelerometer offset is indistinguishable from a tilt, so its sideways part
-//! stays in the attitude as a couple of degrees and cancels out of the linear acceleration
-//! exactly.
+//! **What is not observable.** Yaw, because there is no magnetometer; it drifts and nothing here can stop it. An accelerometer offset is indistinguishable from a tilt, so its sideways part stays in the attitude as a couple of degrees and cancels out of the linear acceleration exactly.
 //!
-//! **Velocity drifts; stillness bounds it.** Integrating acceleration cannot know its own error,
-//! so velocity is only trustworthy between two still moments. Every rest sets it to zero, which is
-//! what a bar on a rack or at the bottom of a set is doing anyway.
+//! **Velocity drifts; stillness bounds it.** Integrating acceleration cannot know its own error, so velocity is only trustworthy between two still moments. Every rest sets it to zero, which is what a bar on a rack or at the bottom of a set is doing anyway.
 
 use crate::sampler::Sample;
 
@@ -46,22 +27,18 @@ pub const STILL_WINDOW: usize = 40;
 pub const STILL_SPREAD: f32 = 0.15;
 /// How far the specific force may sit from 1 g, with the offset taken out, while the bar rests.
 ///
-/// This is what tells a slow stroke from a still bar: a long gentle lift changes the reading's
-/// magnitude where its spread cannot see it.
+/// This is what tells a slow stroke from a still bar: a long gentle lift changes the reading's magnitude where its spread cannot see it.
 const STILL_GRAVITY: f32 = 0.12;
 /// Angular rate (rad/s) under which the sensor is not turning: 2 dps.
 const STILL_RATE_DPS: f32 = 2.0;
 /// The same while the gyro's offset is still unknown, in dps.
 ///
-/// A resting gyro reads its own offset, so the tight bound above cannot decide whether it has
-/// stopped before that offset has been learned.
+/// A resting gyro reads its own offset, so the tight bound above cannot decide whether it has stopped before that offset has been learned.
 const STILL_RATE_BOOT_DPS: f32 = 5.0;
 
 /// Per-axis spread of the measured gravity *direction* under which the sensor is not turning.
 ///
-/// A gyro bias and a vertical stroke both leave gravity pointing the same way in the sensor's
-/// frame, so the bias can be learned during a set; a real rotation moves that direction, which is
-/// what keeps a roll from being mistaken for a bias.
+/// A gyro bias and a vertical stroke both leave gravity pointing the same way in the sensor's frame, so the bias can be learned during a set; a real rotation moves that direction, which is what keeps a roll from being mistaken for a bias.
 const DIRECTION_SPREAD: f32 = 0.01;
 
 /// How long the reading must be quiet before the attitude is taken to know which way is down.
@@ -69,24 +46,20 @@ pub const READY_S: f32 = 1.0;
 
 /// How long the reading must hold at 1 g before the bar counts as at rest.
 ///
-/// A slow stroke spends a third of a second crossing zero acceleration at its fastest point,
-/// where it reads 1 g and barely changes; only a rest that goes on can be told from that.
+/// A slow stroke spends a third of a second crossing zero acceleration at its fastest point, where it reads 1 g and barely changes; only a rest that goes on can be told from that.
 const SETTLE_S: f32 = 0.4;
 
 /// Time constant of the attitude's pull toward measured gravity while the bar is still.
 const ATT_TAU_STILL_S: f32 = 1.0;
 /// The same while the bar is moving.
 ///
-/// Slow enough that a stroke's own horizontal acceleration — a bench's bar path, a swing — is
-/// averaged rather than followed, fast enough that a changing gyro bias cannot walk the vertical.
+/// Slow enough that a stroke's own horizontal acceleration — a bench's bar path, a swing — is averaged rather than followed, fast enough that a changing gyro bias cannot walk the vertical.
 const ATT_TAU_MOVING_S: f32 = 10.0;
 /// Time constant of the accelerometer's offset while the filter is still booting.
 const BOOT_TAU_S: f32 = 0.25;
-/// The same once it is known: temperature moves it over minutes, while a slow stroke's shoulder
-/// looks like a constant reading for a third of a second.
+/// The same once it is known: temperature moves it over minutes, while a slow stroke's shoulder looks like a constant reading for a third of a second.
 const TRACK_TAU_S: f32 = 2.0;
-/// Time constant of the gyro's offset, learned whenever gravity is not moving in the sensor's
-/// frame.
+/// Time constant of the gyro's offset, learned whenever gravity is not moving in the sensor's frame.
 const GYRO_TAU_S: f32 = 0.25;
 /// Time constant over which velocity is pulled back to zero while the bar is still.
 const V_TAU_S: f32 = 0.5;
@@ -140,8 +113,7 @@ pub struct Filtered {
     pub state: FusionState,
 }
 
-/// The filter. One of these runs for as long as the device is up, and another replays a stored
-/// window from its recorded state.
+/// The filter. One of these runs for as long as the device is up, and another replays a stored window from its recorded state.
 #[derive(Debug, Clone)]
 pub struct Fusion {
     state: FusionState,
@@ -242,9 +214,7 @@ impl Fusion {
                 self.ready = true;
             }
         } else {
-            // From then on the gyro carries it and the accelerometer only pulls: hard while the
-            // bar is still, gently while it moves. Gently is enough, because gravity's direction
-            // is not corrupted by a vertical stroke.
+            // From then on the gyro carries it and the accelerometer only pulls: hard while the bar is still, gently while it moves. Gently is enough, because gravity's direction is not corrupted by a vertical stroke.
             let tau = if still {
                 ATT_TAU_STILL_S
             } else {
@@ -253,10 +223,7 @@ impl Fusion {
             self.pull_toward_gravity(&raw, dt / tau);
         }
 
-        // The accelerometer's offset is learned from a reading that has stopped changing, since
-        // that is the one thing an offset cannot fake. The gyro's is learned whenever gravity is
-        // not moving in the sensor's frame: a bias and a vertical stroke both leave it still, and
-        // a real rotation moves it, so a set teaches the gyro without ever being called at rest.
+        // The accelerometer's offset is learned from a reading that has stopped changing, since that is the one thing an offset cannot fake. The gyro's is learned whenever gravity is not moving in the sensor's frame: a bias and a vertical stroke both leave it still, and a real rotation moves it, so a set teaches the gyro without ever being called at rest.
         let tau = if self.ready { TRACK_TAU_S } else { BOOT_TAU_S };
         if dt > 0.0 && quiet {
             self.learn_accel_offset(&raw, dt, tau);
@@ -271,8 +238,7 @@ impl Fusion {
         let f_world = rotate_by_quat(self.state.attitude, f);
         let linear_accel = [f_world[0], f_world[1], f_world[2] - GRAVITY];
 
-        // Before gravity's direction is known there is no frame to integrate in. After it, the
-        // velocity is the integral, and a bar at rest is where that integral is put back to zero.
+        // Before gravity's direction is known there is no frame to integrate in. After it, the velocity is the integral, and a bar at rest is where that integral is put back to zero.
         if dt > 0.0 && self.ready {
             for k in 0..3 {
                 self.state.velocity[k] += linear_accel[k] * dt;
@@ -294,8 +260,7 @@ impl Fusion {
 
     /// Whether the reading has stopped changing and the sensor has stopped turning.
     ///
-    /// The width is of the **raw** reading, because measuring it after the offset is taken out
-    /// would put the estimate inside its own input.
+    /// The width is of the **raw** reading, because measuring it after the offset is taken out would put the estimate inside its own input.
     fn is_quiet(&mut self, raw: &[f32; 3], rate: &[f32; 3]) -> bool {
         self.still_buf[self.still_head] = *raw;
         self.still_head = (self.still_head + 1) % STILL_WINDOW;
@@ -328,8 +293,7 @@ impl Fusion {
         if angle <= 1.0e-6 {
             return;
         }
-        // At a half turn the cross product vanishes and any axis across `up` is as good as
-        // another: the sensor is upside down, and which way it faces after that is yaw.
+        // At a half turn the cross product vanishes and any axis across `up` is as good as another: the sensor is upside down, and which way it faces after that is yaw.
         let axis = if magnitude(err) > 1.0e-3 {
             unit(err)
         } else {
@@ -350,8 +314,7 @@ impl Fusion {
         self.state.attitude = normalize(quat_mul(self.state.attitude, turn));
     }
 
-    /// Whether gravity has stopped moving in the sensor's frame, which is what the gyro's own
-    /// offset is learned from.
+    /// Whether gravity has stopped moving in the sensor's frame, which is what the gyro's own offset is learned from.
     fn direction_is_quiet(&self) -> bool {
         if self.still_len < STILL_WINDOW {
             return false;
@@ -405,8 +368,7 @@ pub fn rotate_by_quat(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Roll and pitch (degrees) from a unit quaternion. Yaw is not reported: it drifts without a
-/// magnetometer.
+/// Roll and pitch (degrees) from a unit quaternion. Yaw is not reported: it drifts without a magnetometer.
 pub fn roll_pitch_deg(q: [f32; 4]) -> (f32, f32) {
     let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
     let roll = atan2f(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y));
