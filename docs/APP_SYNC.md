@@ -287,9 +287,14 @@ turned off when the link goes away because the device's stream ends with it.
 - **It travels on the pipe**, like a trace request, rather than on a characteristic
   of its own — see [the interface](#the-devices-ble-interface) for why an operation
   is not a state.
-- **Nothing is stored on the device.** The samples exist on the phone or nowhere:
-  the log is untouched, and a rep stored while dev mode is on is still plotted-only
-  (`raw_chunks` is 0).
+- **Nothing is detected or stored while it is on.** A detected rep ends in a flash
+  write, and on this device that write runs on the sampling task — a hole in the
+  stream, at every rep, in the one thing the switch exists to keep continuous. So the
+  detector is paused for as long as the stream runs and starts again from rest when it
+  ends. A session recorded through dev mode therefore has no reps in it: the recording
+  is the only record of that set.
+- **The samples exist on the phone or nowhere.** The log is untouched, and so is
+  everything the detector would have written to it.
 - **The app's recording is a `.pblog` of its own**, at
   `imu/imu-<date>-<time>.pblog` under the app's data directory: a `BootClock` record
   made from the phone's clock at the first chunk, then one `RepRecord.imu` per chunk.

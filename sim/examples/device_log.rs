@@ -331,6 +331,10 @@ fn dump(log: &mut FlashLog<Image>, buf: &mut [u8], path: &str, prefix: Option<&s
                     out.extend_from_slice(payload);
                 }
             }
+            // A live IMU chunk is the phone's record type: the device's log has nowhere to put one, so a log that holds this is not this device's log.
+            Ok(calypso_core::pb::Record::Imu(_)) => {
+                println!("  dump: a live IMU chunk is not a device record")
+            }
             Err(e) => println!("  dump: a record does not decode: {e:?}"),
         }
     })

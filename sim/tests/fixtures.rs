@@ -42,6 +42,8 @@ fn dump_round_trips_every_record() {
             Record::Summary(s) => summaries.push(s),
             Record::Computed(t) => chunks.push(t),
             Record::Raw(_) => {}
+            // A live chunk is the phone's record type: a device dump that holds one is not the dump this test wrote.
+            Record::Imu(_) => panic!("a device dump cannot hold a live IMU chunk"),
             Record::Clock(c) => clocks.push(c),
         }
     }

@@ -778,6 +778,8 @@ async fn main(spawner: Spawner) -> ! {
             // The detector runs inline at 100 Hz: it's a few comparisons per sample, and a closed rep does one trace computation.
             let mut fusion = Fusion::new();
             let mut detector = Detector::new();
+            // Whether the detector is being asked at all. The live stream turns it off (`DevMode`), because the flash write a closed rep ends in pauses this loop and puts a hole in the stream.
+            let mut detecting = true;
             let mut reps: u32 = 0;
             let mut n: u32 = 0;
             let mut last_t_ms: Option<u32> = None;
@@ -800,6 +802,19 @@ async fn main(spawner: Spawner) -> ! {
             loop {
                 ticker.next().await;
                 let t_ms = boot.elapsed().as_millis() as u32;
+                // Dev mode's switch is this loop's too: while the stream runs there is no detector, and its state goes with it. What it would otherwise carry across the pause is fiction — a leg left open would close as one rep spanning the whole stream.
+                let streaming = STREAM_IMU.load(Ordering::Relaxed);
+                if streaming == detecting {
+                    detecting = !streaming;
+                    detector.restart(t_ms);
+                    if detecting {
+                        info!("dev mode off: the detector starts again from rest");
+                    } else {
+                        info!(
+                            "dev mode on: the detector is paused, so no rep is stored while the stream runs"
+                        );
+                    }
+                }
                 // A hole is invisible in the numbers it distorts: `compute_rep` bridges it as one integration step, so a rep measured across it reports travel that never happened.
                 // Logged where it is made, on the same clock as the flash and link lines, because the cause is whichever of them was running.
                 if let Some(last) = last_t_ms {
@@ -927,8 +942,8 @@ async fn main(spawner: Spawner) -> ! {
                     } else {
                         None
                     }
-                } else if fusion.ready() {
-                    // The filter is fed every sample, so its offsets and its attitude keep up with the sensor; only the detector is gated, and it starts from a real rest whenever the gate opens.
+                } else if fusion.ready() && detecting {
+                    // The filter is fed every sample, so its offsets and its attitude keep up with the sensor; only the detector is gated, and it starts from a real rest whenever the gate opens. The live stream is the other gate: a rep found while it runs would end in the flash write that leaves a hole in it.
                     detector
                         .update(&filtered)
                         .map(|rep| (rep.span, Some((rep.from_ms, rep.state)), Some(rep.turns)))
@@ -1064,12 +1079,13 @@ async fn main(spawner: Spawner) -> ! {
                     }
                 }
 
-                // Refill the erased reserve while nothing is being stroked or recorded: the erase parks the chip for ~45 ms, and this is the one moment in the session where that costs no samples.
+                // Refill the erased reserve while nothing is being stroked or recorded: the erase parks the chip for ~45 ms, and this is the one moment in the session where that costs no samples. Never while a stream is running, though nothing would be consuming the reserve then either: the erase is still a hole in the one thing the client asked for.
                 //
                 // One sector a tick, because a tick's worth of the sampler is all this loop is willing to hand over, and the try lock because a sync walk holds the store for seconds and the sampler will not wait for it.
                 if !reserve_done
                     && append_ms.is_none()
                     && recording.is_none()
+                    && !streaming
                     && !detector.leg_open()
                     && fusion.still_for_s() >= RESERVE_STILL_S
                     && let Ok(mut guard) = store.try_lock()
@@ -1106,17 +1122,27 @@ async fn main(spawner: Spawner) -> ! {
                     let b = fusion.state().accel_bias;
                     // Centimetres per second squared, because defmt has no precision hint and whole numbers read better than raw floats.
                     let a = calypso_core::fusion::magnitude(filtered.linear_accel);
-                    let speed = detector.speed();
-                    info!(
-                        "detector: bias ({}, {}, {}) cm/s², |a| {} cm/s², |v| {} cm/s, legs {}, open {}",
-                        (b[0] * 100.0) as i32,
-                        (b[1] * 100.0) as i32,
-                        (b[2] * 100.0) as i32,
-                        (a * 100.0) as i32,
-                        (speed * 100.0) as i32,
-                        detector.legs(),
-                        detector.leg_open()
-                    );
+                    // Paused, the detector's numbers are the ones from before the stream and would read as if nothing had moved since, so the line says which it is instead.
+                    if detecting {
+                        info!(
+                            "detector: bias ({}, {}, {}) cm/s², |a| {} cm/s², |v| {} cm/s, legs {}, open {}",
+                            (b[0] * 100.0) as i32,
+                            (b[1] * 100.0) as i32,
+                            (b[2] * 100.0) as i32,
+                            (a * 100.0) as i32,
+                            (detector.speed() * 100.0) as i32,
+                            detector.legs(),
+                            detector.leg_open()
+                        );
+                    } else {
+                        info!(
+                            "detector: paused for the stream, bias ({}, {}, {}) cm/s², |a| {} cm/s²",
+                            (b[0] * 100.0) as i32,
+                            (b[1] * 100.0) as i32,
+                            (b[2] * 100.0) as i32,
+                            (a * 100.0) as i32
+                        );
+                    }
                 }
 
                 let ready = fusion.ready();

@@ -377,6 +377,14 @@ impl Detector {
         }
     }
 
+    /// Start again from nothing at `t_ms`, as if nothing before it had been seen, with `t_ms` the moment the detector is about to be asked about again.
+    ///
+    /// The device pauses the detector while it streams its samples (`DevMode`), because a closed rep ends in a flash write and a flash write on the sampling task is a hole in the stream. What would carry across that pause is fiction: a leg left open would close as one rep spanning the whole stream, and a step measured from the last sample before it would integrate the pause as motion. So the state goes, and the step into that next sample is zero-length rather than the gap.
+    pub fn restart(&mut self, t_ms: u32) {
+        *self = Self::new();
+        self.prev_t_ms = t_ms;
+    }
+
     /// Legs completed since the detector started.
     pub fn legs(&self) -> u32 {
         self.legs

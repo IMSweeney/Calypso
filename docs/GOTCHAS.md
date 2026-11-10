@@ -576,6 +576,27 @@ trace is not that sample set. So `sim/tests/real_capture.rs` pins what the bytes
 identity, completeness, timeline, date — and a detector is still judged on synthetic
 motion and on a live stream.
 
+### A detected rep is a hole in the live stream
+
+**Symptom.** A recording taken while the device is detecting has a gap of a few tens of
+milliseconds at each rep's close: a jump in `t_offset_ms` inside a chunk, or a
+chunk-to-chunk step past 80 ms — with `seq` unbroken and no `sampler hole` in the boot
+log, because nothing was dropped and nothing passed 500 ms.
+
+**Cause.** Closing a rep is `compute_rep` plus a flash write, and both run in the
+sampler's own loop. The firmware is one task — sampler, BLE and housekeeping are branches
+of one `join3` — so moving the write to the BLE branch would move the gap, not remove it:
+same core, same task, and on ESP32 the write parks whoever issues it. The firmware
+measures the pause as `append_ms`, which is the number a `sampler hole` line would show
+if it were longer than the report's 500 ms threshold.
+
+**Fix.** `DevMode` pauses the detector: while the stream runs nothing closes a rep, so
+nothing writes flash. The detector is restarted from rest when the stream ends, because
+a leg left open across the pause would close as one rep spanning the whole stream, and a
+step measured from the sample before it would integrate the pause as motion. The erased
+reserve is not refilled during a stream either — an erase parks the chip ~45 ms, and it
+would be a hole in the one thing the client asked for.
+
 ## The radio
 
 ### The BLE controller has its own task and stack

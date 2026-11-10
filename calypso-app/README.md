@@ -92,12 +92,15 @@ BLE is the only writer so far, at two levels, both under the `ble` logger:
 
 - `UniversalBleLink` logs `raw` — every value the radio delivered, before the
   transport's per-characteristic streams filtered it, plus each scan result and
-  connection change;
+  connection change. The live IMU stream is the exception: its line carries the
+  length and not the bytes, because a dozen notifications a second of hex was four
+  fifths of the log during a recording;
 - `BleTransport` logs the session (`scanning`, `connecting`, `subscribed`,
   `connected`, `connection lost`) and each message it handled (`rx`, `tx`).
 
 Bytes at the seam, and words above it: `describeMessage` (`lib/logging/loggers.dart`)
-prints the frames, and the transport prints what it made of them.
+prints the frames, and the transport prints what it made of them. One line per value:
+`raw 0000ca24-… 137B` is a live IMU chunk saying nothing but how big it was.
 
 ```
 2026-10-18T20:41:03.482119 INFO    ble subscribed to 0000ca21-b0cd-11ec-871f-d45ddf138840

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:calypso/logging/loggers.dart';
 import 'package:calypso/logging/setup.dart';
 import 'package:calypso/gatt/gatt_client.dart';
 import 'package:calypso/protocol/calypso.pb.dart' as pb;
@@ -233,6 +234,30 @@ void main() {
       messages.where((m) => m.startsWith('tx ${SyncClient.requestsUuid} ')),
       isNotEmpty,
       reason: 'the request the app sent, and the frames it went out as',
+    );
+  });
+
+  test('a value is logged as its bytes, except the live IMU stream', () {
+    final value = pb.ImuChunk(
+      firstTMs: 173143,
+      sampleRateHz: 100,
+      seq: 53,
+      samples: [
+        pb.TraceRawPoint(tOffsetMs: 0, ax: 20, ay: -999, az: 31, gx: 1),
+      ],
+    ).writeToBuffer();
+    final hex = value.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+
+    expect(
+      describeMessage('rx', SyncClient.messagesUuid, value),
+      'rx ${SyncClient.messagesUuid} ${value.length}B $hex',
+    );
+    expect(
+      describeMessage('raw', SyncClient.imuUuid, value),
+      'raw ${SyncClient.imuUuid} ${value.length}B',
+      reason:
+          'a dozen notifications a second are recorded elsewhere, and their '
+          'hex was most of the file',
     );
   });
 }

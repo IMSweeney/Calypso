@@ -1486,6 +1486,8 @@ class TraceRequest extends $pb.GeneratedMessage {
 ///
 /// A dev switch, not a setting. The stream is every sample the sampler takes, sent as `ImuChunk` notifications on `Sync.Imu`; it is for watching a sensor or recording a session on the phone, not for a release session, and nothing about it is stored on the device. It lives here rather than on a characteristic of its own because it is an operation rather than a value the app reads back: the client that sets it knows which way it set it, and the device forgets at every boot.
 ///
+/// **Nothing is detected or stored while it is on.** A detected rep ends in a flash write, and the write is a pause in the sampling: it would be a hole in the stream the switch exists to make continuous, at every rep. The switch therefore turns the detector off for as long as the stream runs and starts it again from rest when the stream ends.
+///
 /// **Off at every boot and not persisted.** A switch left on spends the link and the phone's battery for as long as nobody notices; the cost of remembering it would be a reflash to turn it off.
 ///
 /// A record-mode build still stores raw traces per rep in the log (`RawChunk`); that is a build flag, not this switch.
