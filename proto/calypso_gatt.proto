@@ -17,12 +17,12 @@ import "google/protobuf/empty.proto";
 //
 // The two pipe characteristics belong to one **pipe** (`pipe: "sync"`): neither carries a whole message in one value. A message is cut into chunks, each framed and carried in one write or one notification, and reassembled at the other end — `tools/gatt-gen/SPEC.md` §7 describes the protocol, and `tools/gatt-pipe` is the runtime both ends drive it with. That is what a trace travels as: one `TraceChunk` per transfer, a few notifications each, instead of the device re-cutting a trace into three-point notifications. The size of a chunk and of a message are the generator's (`tool/gen_gatt.sh`), not this file's: a pipe has no `max_len`, because it sizes transfers rather than values.
 //
-// The other two characteristics carry **values**, not transfers: the clock the app writes (`max_len` is what a single write carries), and the device's own faults, which are pushed.
+// The other characteristics carry **values**, not transfers: the clock the app writes (`max_len` is what a single write carries), the device's own faults, and the live IMU stream.
 // A state has no event to be pushed on, and a push would have to be sent whenever it might have changed — which on a pipe that carries one message at a time means it competes with the summaries.
 //
 // Anything the app *does* rather than reads goes on the pipe as an arm of `SyncRequest` (`DevMode`), so the table does not grow a characteristic per operation.
 //
-// The faults are the exception that proves it: they *are* events, so they are pushed, and they carry one small value because an event the sender has to be paced through is one that can be lost behind the very transfer it is reporting (`Report`).
+// The faults and the IMU stream are the exceptions that prove it: they *are* events, so they are pushed. A fault carries one small value because an event the sender has to be paced through is one that can be lost behind the very transfer it is reporting (`Report`). The IMU stream is the other side of the same rule: it is sampled 100 times a second, and the pipe's acknowledgement for each transfer would put a round trip between the sensor and the phone, so it has a characteristic of its own and no acknowledgement at all. What it loses to a slow host it says through `first_t_ms` and `seq` rather than by waiting.
 
 service Sync {
   option (gatt.service) = {
@@ -72,6 +72,19 @@ service Sync {
       uuid: "0000ca21-b0cd-11ec-871f-d45ddf138840"
       props: [NOTIFY]
       pipe: "sync"
+    };
+  }
+
+  // The live IMU stream: one `ImuChunk` of full-rate samples per notification while `DevMode` is on.
+  //
+  // **Not on the pipe**, deliberately. A pipe transfer ends with an acknowledgement, so a stream paced by one would have a round trip in front of every batch and would hold the summaries behind it; the samples arrive at a fixed rate whether or not the previous batch has been believed. A notification with no acknowledgement is the right shape for telemetry, and `first_t_ms` plus `seq` let the app see what it missed.
+  //
+  // `max_len` 244 is one notification at a 247-byte MTU, which is what the app asks for. The device cuts each chunk to that buffer, so a link that negotiated less would truncate it — the app is the only client that subscribes, and it asks for the MTU before subscribing.
+  rpc Imu(google.protobuf.Empty) returns (ImuChunk) {
+    option (gatt.characteristic) = {
+      uuid: "0000ca24-b0cd-11ec-871f-d45ddf138840"
+      props: [NOTIFY]
+      max_len: 244
     };
   }
 }

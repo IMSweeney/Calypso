@@ -52,8 +52,9 @@ flutter build ipa --release --export-method app-store --dart-define=FIXTURE=
 - **The phone needs firmware from the same schema.** The app refuses a device whose
   GATT table is not the one it was built from (`_offersSync`, and `_strangersIn` for
   the other direction), and the firmware's advertised address carries the schema
-  hash. A tester with an older flash gets "not all five characteristics" rather than
-  a half-working sync, so the notes should say which firmware the build goes with.
+  hash. A tester with an older flash gets "not every characteristic this app needs"
+  rather than a half-working sync, so the notes should say which firmware the build goes
+  with.
 - **Testers need a physical device**, for the reason above.
 - `Info.plist` already answers Apple's export-compliance question
   (`ITSAppUsesNonExemptEncryption`), so an upload does not sit in "Missing

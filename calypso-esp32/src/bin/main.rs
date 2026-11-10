@@ -15,8 +15,9 @@ use core::cell::RefCell;
 use defmt::{error, info, warn};
 use embassy_executor::Spawner;
 use embassy_futures::join::join3;
-use embassy_futures::select::{Either, select};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_futures::select::{Either3, select3};
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex as AsyncMutex;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use embedded_storage::ReadStorage;
@@ -39,7 +40,9 @@ use bno055::{AccBandwidth, AccGRange, BNO055OperationMode};
 use calypso_core::clock::{self, Boots};
 use calypso_core::flashlog::{self, FlashLog};
 use calypso_core::fusion::{Fusion, FusionState};
-use calypso_core::gatt::{CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncReportsValue};
+use calypso_core::gatt::{
+    CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncImuValue, SyncReportsValue,
+};
 use calypso_core::pb::msg;
 use calypso_core::pipe::{self, Session, Stalled};
 use calypso_core::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, compute_rep};
@@ -78,10 +81,23 @@ const L2CAP_CHANNELS_MAX: usize = 2;
 /// The BLE device name: a compile-time constant, and read-only over GATT.
 const DEVICE_NAME: &str = "Calypso";
 
-/// Whether a client has armed dev mode this boot: every rep stored from here on keeps its raw trace as well as its plotted one.
+/// Whether a client has armed the live IMU stream this boot: every sample goes out on `Sync.Imu` as it is read.
 ///
-/// Off at every boot and never persisted (`msg::DevMode` says why): a switch left on fills the log three times as fast, and a switch remembered would cost a reflash to turn off. On from the first sample in a record-mode build, because the raw trace is the whole of what that build is for and no client is there to ask for it.
-static DEV_MODE: AtomicBool = AtomicBool::new(RECORD_MODE);
+/// Off at every boot and never persisted (`msg::DevMode` says why): a switch left on spends the link and the phone's battery, and a switch remembered would cost a reflash to turn it off. It is independent of [`RECORD_MODE`], which is a build that stores raw windows in the log and needs no client at all.
+static STREAM_IMU: AtomicBool = AtomicBool::new(false);
+
+/// Samples in one live chunk: what fits one 244-byte notification, and therefore what the sampler sends at a time.
+const LIVE_CHUNK_SAMPLES: usize = calypso_core::pb::IMU_CHUNK_SAMPLES;
+type LiveChunk = heapless::Vec<Sample, LIVE_CHUNK_SAMPLES>;
+
+/// The sampler's chunks waiting for the radio: four seconds of 100 Hz data, so a stalled notification does not stop the sampler.
+///
+/// A chunk is eight samples, 132 bytes with its length, so this is ~6.5 KB. When it fills, the sampler drops the whole chunk and counts it rather than blocking: a stream with a hole in it beats a sampler with a hole in it, and the next chunk's `first_t_ms` says where the hole is.
+const LIVE_QUEUE_CHUNKS: usize = 50;
+static LIVE_IMU: Channel<CriticalSectionRawMutex, LiveChunk, LIVE_QUEUE_CHUNKS> = Channel::new();
+
+/// Samples the sampler had to drop because [`LIVE_IMU`] was full, since the radio last looked.
+static LIVE_DROPPED: AtomicU32 = AtomicU32::new(0);
 
 /// The wall clock the client last set: unix seconds at this boot's uptime zero, or 0 while nothing has set one.
 ///
@@ -110,6 +126,9 @@ const FAKE_REPS: bool = cfg!(feature = "fake-reps");
 ///
 /// The opposite question to [`FAKE_REPS`]: that one exercises the path with motion that never happened, and this one captures motion that did, whether or not anything in it was a rep — which is the only evidence a session that stored nothing can leave behind. The filter still runs, because its offsets and its attitude are half of what a capture is read for; only the decision that a window is worth keeping is taken away from the detector.
 const RECORD_MODE: bool = cfg!(feature = "record-mode");
+
+/// Whether a rep is stored with its raw window in the log: the record-mode build's whole purpose, and nothing else's.
+const STORE_RAW: bool = RECORD_MODE;
 
 /// A build asks for one bench behaviour, not two: a device that both fabricated reps and recorded windows would tell a reader nothing about which of them a stored record was.
 const _: () = assert!(!(FAKE_REPS && RECORD_MODE));
@@ -334,7 +353,7 @@ async fn main(spawner: Spawner) -> ! {
     if RECORD_MODE {
         // Said once and loudly, for the reason fake-reps says its own: a device recording whatever it hears must not be mistaken for one detecting reps, and the log is where a session is read back from.
         warn!(
-            "record mode: no detector; {} ms of raw samples every {} ms, dev mode on from boot",
+            "record mode: no detector; {} ms of raw samples every {} ms, stored with each window",
             RECORD_WINDOW_MS, RECORD_PERIOD_MS
         );
     }
@@ -445,6 +464,9 @@ async fn main(spawner: Spawner) -> ! {
         characteristic: &gatt.sync.messages,
         payload: notify_payload,
     };
+    // The live stream's message and the value it is notified as, reused for every chunk: both are too big to build in the BLE task's frame at 12.5 Hz, and neither outlives the connection it is sent on.
+    let live_msg: &'static mut msg::ImuChunk = Box::leak(Box::new(msg::ImuChunk::default()));
+    let live_value: &'static mut SyncImuValue = Box::leak(Box::new(SyncImuValue::default()));
     info!("Sync buffers ready, heap free {} B", esp_alloc::HEAP.free());
     info!("Starting BLE stack");
     // What the setup above is holding before the tasks start: the total moves whenever a static does, so measure rather than assume.
@@ -517,12 +539,33 @@ async fn main(spawner: Spawner) -> ! {
                 let start = Instant::now();
                 batch.reset();
                 sync.session.reset();
+                // A stream starts with the connection: nothing queued for the one before it is this link's data, and a drop from that link is not this one's.
+                LIVE_IMU.clear();
+                LIVE_DROPPED.store(0, Ordering::Relaxed);
+                let mut live_seq = 0u32;
+                // A notification failure is a link failure, not a reason to log 12 times a second.
+                let mut live_failed = false;
+                let mut housekeeping = Ticker::every(Duration::from_secs(1));
 
                 loop {
-                    // Service GATT events, and once a second do what is the second's business: who is listening, a stalled transfer, what goes out to a subscriber, and any report owed.
-                    let event = match select(conn.next(), Timer::after(Duration::from_secs(1))).await {
-                        Either::First(event) => event,
-                        Either::Second(()) => {
+                    // Service GATT events, once a second do what is the second's business, and send each live chunk as the sampler makes it.
+                    // The live stream is a future of its own rather than a timer: it wakes only when there is a notification's worth of samples, so a device with dev mode off costs nothing here.
+                    let event = match select3(conn.next(), housekeeping.next(), LIVE_IMU.receive()).await {
+                        Either3::First(event) => event,
+                        Either3::Third(chunk) => {
+                            stream_live_chunk(
+                                &gatt,
+                                &conn,
+                                chunk,
+                                live_msg,
+                                live_value,
+                                &mut live_seq,
+                                &mut live_failed,
+                            )
+                            .await;
+                            continue;
+                        }
+                        Either3::Second(()) => {
                             let now = now_ms(start);
                                         // Who is listening, asked of the server rather than inferred from a notify result, because a notify result says nothing (see `is_subscribed`). Once a tick is often enough to say when it changes.
                             let listening =
@@ -578,6 +621,11 @@ async fn main(spawner: Spawner) -> ! {
                             }
                             // Beside the pipe's own sending, and outside its `subscribed`: a fault is owed to whoever subscribed to `Reports`, not to the summaries' subscriber.
                             push_report(&gatt, &conn, now).await;
+                            // A full queue is a stalled radio, and the sampler has been dropping samples for as long as it lasted. Once a second is often enough to see it without becoming the next stall.
+                            let dropped = LIVE_DROPPED.swap(0, Ordering::Relaxed);
+                            if dropped > 0 {
+                                warn!("imu stream: {} samples dropped (radio behind)", dropped);
+                            }
                             continue;
                         }
                     };
@@ -585,6 +633,11 @@ async fn main(spawner: Spawner) -> ! {
                         GattConnectionEvent::Disconnected { reason } => {
                             // The device's own view of why, where the phone has only a string: `Err(Connection Timeout)` is the link's supervision timer running out with nothing heard from the peer — a starved radio — and `Err(Remote User Terminated Connection)` is the peer letting go.
                             info!("BLE disconnected: {}", defmt::Debug2Format(&reason));
+                            // The stream lasts as long as the link that asked for it; the sampler otherwise fills the queue for nobody until the next client arrives.
+                            if STREAM_IMU.swap(false, Ordering::Relaxed) {
+                                info!("dev mode off: the IMU stream ended with the link");
+                            }
+                            LIVE_IMU.clear();
                             break;
                         }
                         // How long the link tolerates hearing nothing: the number a flash window has to be read against.
@@ -641,11 +694,13 @@ async fn main(spawner: Spawner) -> ! {
                                     };
                                     // The dev switch is an operation rather than a question, so it is answered with a log line rather than with a message.
                                     if let Some(enabled) = dev_mode(&request) {
-                                        DEV_MODE.store(enabled, Ordering::Relaxed);
+                                        STREAM_IMU.store(enabled, Ordering::Relaxed);
+                                        // Whatever was queued belongs to the stream that just ended, and half a chunk is not a chunk.
+                                        LIVE_IMU.clear();
                                         if enabled {
-                                            info!("dev mode on: every rep from here keeps its raw trace as well");
+                                            info!("dev mode on: streaming IMU samples on the Imu characteristic");
                                         } else {
-                                            info!("dev mode off: reps store the plotted trace only");
+                                            info!("dev mode off: the IMU stream is stopped");
                                         }
                                     } else {
                                         let Some(request) = trace_request(&request) else {
@@ -728,6 +783,8 @@ async fn main(spawner: Spawner) -> ! {
             let mut last_t_ms: Option<u32> = None;
             // The first poll of the sensor can land before it has written its registers.
             let mut first_sample = true;
+            // The live stream's open chunk: samples go in until it holds a notification's worth, then it goes to the radio.
+            let mut live_chunk = LiveChunk::new();
             // Said once, in bench mode, so a session cannot be mistaken for a real one.
             let mut logged_fake_reps = false;
             // Whether the filter had settled, logged only when it changes, so "paused until the filter knows which way is down" is printed when it becomes true rather than 3,600 times an hour.
@@ -790,6 +847,20 @@ async fn main(spawner: Spawner) -> ! {
                         warn!("first sample read no acceleration, so it was not a reading: discarded");
                         continue;
                     }
+                }
+                // The live stream: whole chunks only, so every notification is one `ImuChunk` and a partial chunk waits for the next sample. Disabling the stream clears the partial, so turning it back on does not send samples from before it was off.
+                if STREAM_IMU.load(Ordering::Relaxed) {
+                    if live_chunk.push(sample).is_err() {
+                        // A full chunk is sent below, so this cannot happen; if it does, the sample is dropped rather than the sampler stalled.
+                        LIVE_DROPPED.fetch_add(1, Ordering::Relaxed);
+                    } else if live_chunk.len() == LIVE_CHUNK_SAMPLES {
+                        let chunk = core::mem::replace(&mut live_chunk, LiveChunk::new());
+                        if LIVE_IMU.try_send(chunk).is_err() {
+                            LIVE_DROPPED.fetch_add(LIVE_CHUNK_SAMPLES as u32, Ordering::Relaxed);
+                        }
+                    }
+                } else {
+                    live_chunk.clear();
                 }
                 samples.borrow_mut().push(sample);
                 let filtered = fusion.update(&sample);
@@ -927,10 +998,8 @@ async fn main(spawner: Spawner) -> ! {
                                 SAMPLER_CONFIG
                             };
                             sum.set_config(calypso_core::pb::config_message(&config));
-                            // A dev session keeps what the sensor read on top of what it plotted: the plotted trace is what a screen draws, and only the raw one can be replayed. Same window, so the two cover the same rep.
-                            let raw = DEV_MODE
-                                .load(Ordering::Relaxed)
-                                .then_some(&rep_window[..copied]);
+                            // A record-mode build keeps what the sensor read on top of what it plotted: the plotted trace is what a screen draws, and only the raw one can be replayed. Same window, so the two cover the same rep. A client's dev mode streams those samples live instead of storing them.
+                            let raw = STORE_RAW.then_some(&rep_window[..copied]);
                             // Persist the rep (summary + trace chunks). This happens right after the rest debounce, i.e. while the sensor is at rest, so the tens of ms an erase takes here can't land in the middle of a rep.
                             let (stored, locked_at) = {
                                 let mut guard = store.lock().await;
@@ -1776,7 +1845,7 @@ fn read_raw_from_log(
 
 /// Give the session the buffer a raw trace is streamed from, if it has none yet.
 ///
-/// A window of full-rate samples is the largest thing a session can be asked to hold, and only a client in dev mode asks for it, so it is allocated on the first request rather than at boot. The heap check is the radio's: the two share one heap, and a device left too short of it stops accepting connections.
+/// A window of full-rate samples is the largest thing a session can be asked to hold, and only a client reading a record-mode build's capture asks for it, so it is allocated on the first request rather than at boot. The heap check is the radio's: the two share one heap, and a device left too short of it stops accepting connections.
 #[inline(never)]
 fn ensure_raw_storage(sync: &mut Sync<'_>) {
     if !sync.session.raw_storage().is_empty() {
@@ -2183,6 +2252,40 @@ async fn keep_sending(
         return;
     }
     stream_new_summaries(store, rec_buf, rec, batch, sync, conn, cursor).await;
+}
+
+/// Send one live IMU chunk, if dev mode is on and the app is listening.
+///
+/// **Not on the pipe.** A pipe transfer ends with an acknowledgement, and a stream paced by one would have a round trip in front of every 80 ms of samples; a notification is unacknowledged at ATT, so the sampler's rate is what the stream runs at. Loss is visible rather than corrected: the next chunk's `first_t_ms` and `seq` say where the gap is.
+///
+/// A failed notification is logged once per connection rather than twice a second: the link is gone or the peer's buffers are, and neither is a reason to fill the console.
+async fn stream_live_chunk(
+    gatt: &CalypsoGatt<'_>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
+    chunk: LiveChunk,
+    message: &mut msg::ImuChunk,
+    value: &mut SyncImuValue,
+    seq: &mut u32,
+    failed: &mut bool,
+) {
+    if !STREAM_IMU.load(Ordering::Relaxed) || !is_subscribed(gatt, conn, gatt.sync.imu.cccd_handle)
+    {
+        return;
+    }
+    calypso_core::pb::fill_imu_chunk(message, *seq, &chunk);
+    if !value.encode_into(message) {
+        warn!("imu stream: a chunk did not fit its characteristic");
+        return;
+    }
+    if gatt.sync.imu.notify(conn, value).await.is_err() {
+        if !*failed {
+            warn!("imu stream: notify failed on the link");
+            *failed = true;
+        }
+        return;
+    }
+    *failed = false;
+    *seq = seq.wrapping_add(1);
 }
 
 /// A decoded-record scratch on the heap.

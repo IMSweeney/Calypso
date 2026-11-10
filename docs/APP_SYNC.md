@@ -17,6 +17,7 @@ Service `0000ca20-b0cd-11ec-871f-d45ddf138840` — advertised, so a scan can fil
 | `0000ca22-…` | write-without-response | everything the app asks for: chunks of a `SyncRequest`, and the acknowledgements of what the device sent |
 | `0000ca25-…` | notify | the device's own faults, as a `Report` |
 | `0000ca23-…` | write | the device's clock, as unix seconds — the app sets it on every connection |
+| `0000ca24-…` | notify | the live IMU stream, as one `ImuChunk` per notification |
 
 **One characteristic each way for messages, and that is the design.** The body of the
 message says what it is — a `summary` or a `trace` chunk — so nothing here
@@ -42,13 +43,30 @@ turns up an hour later.
 The clock is the other one, and the same argument the other way round: it is a state
 the app **writes**, once per device boot. On the pipe it would queue behind the
 summaries it exists to date, because the device holds this boot's summaries until it
-has a clock — see [Time](#time). It is required at connect like the rest — a device
-missing any of them is refused, by name, before anything is read or written — and
-the clock and the faults are the two whose absence would otherwise be silent.
+has a clock — see [Time](#time). The clock and the faults are required at connect like
+the pipe's two ends — a device missing any of the four is refused, by name, before
+anything is read or written — and they are the two whose absence would otherwise be
+silent.
 
-The table is therefore four characteristics — one pipe each way, and two values —
-and every one of them is something the app acts on. A diagnostic that only the log
-reads is what the console is for.
+The table is therefore five characteristics — one pipe each way, two values, and the
+live IMU stream — and every one of them is something the app acts on. A diagnostic that
+only the log reads is what the console is for.
+
+### The live IMU stream
+
+`Imu` is a notify-only characteristic carrying one `ImuChunk` per notification: eight
+samples at the fixed-point scales a stored raw trace uses, with `first_t_ms` and `seq`
+to place each chunk in the stream. It is **not on the pipe**, because a pipe transfer is
+finished by an acknowledgement; a live stream paced by one would put a round trip in
+front of every 80 ms of samples and would hold the summaries behind it. A notification
+is unacknowledged at ATT, so the sampler's rate is what the stream runs at, and what the
+host drops shows up as a gap in `first_t_ms`/`seq` rather than as silence.
+
+The device sends only while `DevMode` is on and the characteristic is subscribed. The
+stream ends with either the switch or the link. It is 12.5 notifications a second, 100
+samples a second — every sample the sampler takes — and the characteristic is sized at
+244 bytes, one notification at the 247-byte MTU the app asks for before subscribing.
+It is **optional at connect**: a firmware build from before it still syncs.
 
 GAP is the other service: `0x2A00` (the device name) and `0x2A01` (the appearance),
 both **read only**. The name is a compile-time constant in the firmware. The
@@ -247,30 +265,39 @@ the device streams the whole trace in response, one chunk per transfer:
   arrival works, a repeated index replaces the earlier one, and chunks for another
   rep are ignored. `missingIndices()` reports gaps so a single chunk can be
   re-requested.
-- **The raw trace is the whole window at full rate**, so it is several times the
-  plotted one: about 19 KB for a nine-second rep against 5 KB, and 8 to 21 chunks
-  rather than 3. It exists to be replayed rather than drawn, which is also why the
-  device holds it differently — the plotted trace is read into the session's buffer,
-  and the raw one needs a buffer of its own, allocated on the first raw request
-  rather than at boot.
+- **The raw trace is the whole window at full rate** when a record-mode build
+  stored one, so it is several times the plotted one: about 19 KB for a nine-second
+  rep against 5 KB, and 8 to 21 chunks rather than 3. It exists to be replayed
+  rather than drawn, which is also why the device holds it differently — the plotted
+  trace is read into the session's buffer, and the raw one needs a buffer of its own,
+  allocated on the first raw request rather than at boot.
 
 ### Dev mode
 
-Raw traces are **recorded only while a client asks for them**. The client writes a
-`SyncRequest`'s `dev_mode` arm with `enabled`, and from then on every rep the device
-stores keeps its raw trace too; `enabled: false` stops it.
+Dev mode **streams the IMU live** instead of storing raw traces in the log. The client
+writes a `SyncRequest`'s `dev_mode` arm with `enabled`, and from then on every sample
+the sampler takes goes out on `Imu` while that characteristic is subscribed;
+`enabled: false` stops it, as does losing the link. The app's record button in the rep
+list is that caller: one tap starts the stream, the next stops it, and the button is
+turned off when the link goes away because the device's stream ends with it.
 
 - **An operation, not a value.** Nothing reads it back, and the device forgets it at
-  every boot rather than persisting it: a switch left on by accident fills the log
-  three times as fast, and forgetting it costs a reflash rather than a discovery.
+  every boot rather than persisting it: a switch left on spends the link and the
+  phone's battery, and forgetting it costs a reflash rather than a discovery.
 - **It travels on the pipe**, like a trace request, rather than on a characteristic
   of its own — see [the interface](#the-devices-ble-interface) for why an operation
   is not a state.
-- **The raw trace is recorded per boot, from the moment it is set.** Reps stored
-  before it are plotted-only, and they say so: `raw_chunks` is 0.
-- **What the samples are is [`RAW_IMU.md`](RAW_IMU.md)'s subject.** Until the chip is
-  read raw, the sampler's samples carry no angular rate, so a trace recorded now
-  exercises the path rather than replaying faithfully.
+- **Nothing is stored on the device.** The samples exist on the phone or nowhere:
+  the log is untouched, and a rep stored while dev mode is on is still plotted-only
+  (`raw_chunks` is 0).
+- **The app's recording is a `.pblog` of its own**, at
+  `imu/imu-<date>-<time>.pblog` under the app's data directory: a `BootClock` record
+  made from the phone's clock at the first chunk, then one `RepRecord.imu` per chunk.
+  It is the same framed record stream the device's log is, so the same reader reads
+  it, and a session that captured nothing is deleted rather than left behind.
+- **A record-mode build still stores raw windows in the log.** That is a build flag,
+  not the client switch, and it is what a capture for the fixture set comes from.
+- **What the samples are is [`RAW_IMU.md`](RAW_IMU.md)'s subject.**
 
 ## The archive
 

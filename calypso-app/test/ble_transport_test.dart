@@ -115,6 +115,7 @@ void main() {
       expect(link.subscribed, [
         SyncClient.messagesUuid,
         SyncClient.reportsUuid,
+        SyncClient.imuUuid,
       ]);
       expect(transport.status.status, BleStatus.connected);
       expect(transport.status.deviceId, 'device-1');
@@ -131,6 +132,7 @@ void main() {
       'discoverServices',
       'subscribe:${SyncClient.messagesUuid}',
       'subscribe:${SyncClient.reportsUuid}',
+      'subscribe:${SyncClient.imuUuid}',
     ]);
     expect(link.discovered, ['device-1']);
     expect(transport.status.status, BleStatus.connected);
@@ -491,6 +493,45 @@ void main() {
     await transport.disconnect();
   });
 
+  test('dev mode is an operation the app writes on the pipe', () async {
+    final link = FakeBleLink();
+    final device = FakeDevice(link);
+    final transport = await connectedTransport(link);
+
+    await transport.setDevMode(true);
+
+    final request = pb.SyncRequest.fromBuffer(device.requests.single);
+    expect(request.devMode.enabled, isTrue);
+    await transport.disconnect();
+  });
+
+  test('live IMU chunks arrive on their own characteristic', () async {
+    final link = FakeBleLink();
+    FakeDevice(link);
+    final transport = await connectedTransport(link);
+    final chunks = <pb.ImuChunk>[];
+    final sub = transport.watchImu().listen(chunks.add);
+
+    link.notify(
+      SyncClient.imuUuid,
+      pb.ImuChunk(
+        firstTMs: 1000,
+        sampleRateHz: 100,
+        seq: 7,
+        samples: [
+          pb.TraceRawPoint(tOffsetMs: 10, ax: 981, ay: -2, az: 12, gx: 16),
+        ],
+      ).writeToBuffer(),
+    );
+    await pumpEventQueue();
+
+    expect(chunks.single.seq, 7);
+    expect(chunks.single.firstTMs, 1000);
+    expect(chunks.single.samples.single.ax, 981);
+    await sub.cancel();
+    await transport.disconnect();
+  });
+
   test('the device\'s own faults arrive as sentences', () async {
     final link = FakeBleLink();
     final device = FakeDevice(link);
@@ -563,7 +604,7 @@ void main() {
     final transport = await connectedTransport(link);
 
     expect(transport.status.status, BleStatus.failed);
-    expect(transport.status.error, contains('not all five'));
+    expect(transport.status.error, contains('not every characteristic'));
     expect(transport.status.error, contains(SyncClient.reportsUuid));
     expect(link.subscribed, isEmpty);
   });

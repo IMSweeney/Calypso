@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:calypso/model/uuid.dart';
 import 'package:fixnum/fixnum.dart';
 import 'package:calypso/protocol/calypso.pb.dart' as pb;
+import 'package:calypso/protocol/pblog.dart';
 import 'package:calypso/state/ble_status.dart';
 import 'package:calypso/store/memory_archive.dart';
 import 'package:calypso/gatt/gatt_client.dart';
@@ -46,6 +47,14 @@ FixtureTransport fixtureTransport(String name) => FixtureTransport.fromBytes(
   Uint8List.fromList(File('assets/fixtures/$name.pblog').readAsBytesSync()),
 );
 
+/// One live chunk as the device notifies it: a sample at the fixed-point scale a raw trace uses.
+Uint8List imuChunk(int seq, {int firstTMs = 5000}) => pb.ImuChunk(
+  firstTMs: firstTMs,
+  sampleRateHz: 100,
+  seq: seq,
+  samples: [pb.TraceRawPoint(tOffsetMs: 10, ax: 981, ay: -2, az: 12, gx: 16)],
+).writeToBuffer();
+
 Future<void> pumpList(
   WidgetTester tester, {
   required String fixture,
@@ -83,6 +92,7 @@ Future<(FakeBleLink, FakeDevice, BleTransport)> connectedList(
   WidgetTester tester, {
   RepArchive? archive,
   DateTime Function() clock = fixtureNow,
+  Directory? historyDirectory,
 }) async {
   final link = FakeBleLink();
   final device = FakeDevice(link);
@@ -97,6 +107,7 @@ Future<(FakeBleLink, FakeDevice, BleTransport)> connectedList(
         ble: ble,
         fixture: '',
         clock: clock,
+        historyDirectory: historyDirectory,
       ),
     ),
   );
@@ -661,6 +672,11 @@ void _bleWiring() {
 
     expect(find.text('No reps yet'), findsOneWidget);
     expect(find.text('No device'), findsOneWidget);
+    expect(
+      find.byTooltip('Record the IMU stream'),
+      findsNothing,
+      reason: 'there is no device to record from',
+    );
 
     await tester.tap(find.text('Connect'));
     await tester.pump();
@@ -673,7 +689,11 @@ void _bleWiring() {
 
     expect(find.text('Connected'), findsOneWidget);
     expect(link.scans.single, [SyncClient.serviceUuid]);
-    expect(link.subscribed, [SyncClient.messagesUuid, SyncClient.reportsUuid]);
+    expect(link.subscribed, [
+      SyncClient.messagesUuid,
+      SyncClient.reportsUuid,
+      SyncClient.imuUuid,
+    ]);
     expect(find.text('Disconnect'), findsOneWidget);
 
     await tester.tap(find.text('Disconnect'));
@@ -682,5 +702,103 @@ void _bleWiring() {
     }
     expect(ble.status.status, BleStatus.disconnected);
     expect(find.text('Disconnected'), findsOneWidget);
+    expect(
+      find.byTooltip('Record the IMU stream'),
+      findsNothing,
+      reason: 'the device ends the stream with the link',
+    );
   });
+
+  testWidgets('the record button toggles the device\'s dev mode', (
+    tester,
+  ) async {
+    final directory = Directory.systemTemp.createTempSync('calypso-record-');
+    addTearDown(() => directory.deleteSync(recursive: true));
+    final (_, device, _) = await connectedList(
+      tester,
+      historyDirectory: directory,
+    );
+
+    await tester.tap(find.byTooltip('Record the IMU stream'));
+    await tester.pumpAndSettle();
+
+    expect(
+      pb.SyncRequest.fromBuffer(device.requests.single).devMode.enabled,
+      isTrue,
+    );
+    expect(find.byTooltip('Stop recording the IMU stream'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Stop recording the IMU stream'));
+    await tester.pumpAndSettle();
+
+    expect(
+      pb.SyncRequest.fromBuffer(device.requests.last).devMode.enabled,
+      isFalse,
+    );
+    expect(find.byTooltip('Record the IMU stream'), findsOneWidget);
+  });
+
+  testWidgets('recording writes the live chunks to a pblog', (tester) async {
+    final directory = Directory.systemTemp.createTempSync('calypso-record-');
+    addTearDown(() => directory.deleteSync(recursive: true));
+    final (link, _, _) = await connectedList(
+      tester,
+      historyDirectory: directory,
+    );
+
+    await tester.tap(find.byTooltip('Record the IMU stream'));
+    await tester.pumpAndSettle();
+
+    link.notify(SyncClient.imuUuid, imuChunk(0));
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Stop recording the IMU stream'));
+    await tester.pumpAndSettle();
+
+    final files = Directory(
+      '${directory.path}/imu',
+    ).listSync().whereType<File>().toList();
+    expect(files, hasLength(1));
+    final dump = readDump(files.single.readAsBytesSync());
+    expect(dump.records.map((r) => r.whichBody()), [
+      pb.RepRecord_Body.clock,
+      pb.RepRecord_Body.imu,
+    ]);
+    expect(dump.records.last.imu.samples.single.ax, 981);
+  });
+
+  testWidgets(
+    'leaving the screen stops the stream and keeps what was recorded',
+    (tester) async {
+      final directory = Directory.systemTemp.createTempSync('calypso-record-');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final (link, device, _) = await connectedList(
+        tester,
+        historyDirectory: directory,
+      );
+
+      await tester.tap(find.byTooltip('Record the IMU stream'));
+      await tester.pumpAndSettle();
+      link.notify(SyncClient.imuUuid, imuChunk(0));
+      await tester.pump();
+
+      await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+      await tester.pump();
+
+      expect(
+        pb.SyncRequest.fromBuffer(device.requests.last).devMode.enabled,
+        isFalse,
+        reason: 'the device streams until something tells it to stop',
+      );
+      final files = Directory(
+        '${directory.path}/imu',
+      ).listSync().whereType<File>().toList();
+      expect(
+        readDump(
+          files.single.readAsBytesSync(),
+        ).records.map((r) => r.whichBody()),
+        [pb.RepRecord_Body.clock, pb.RepRecord_Body.imu],
+      );
+    },
+  );
 }

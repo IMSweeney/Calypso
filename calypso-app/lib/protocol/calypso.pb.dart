@@ -542,7 +542,7 @@ class RepSummary extends $pb.GeneratedMessage {
   @$pb.TagNumber(18)
   RepConfig ensureConfig() => $_ensure(14);
 
-  /// The raw trace's size, or both 0 when this device does not record one. The counts are the answer to "can I replay this rep"; there is no flag for it, because two places to ask is one place to disagree.
+  /// The raw trace's size, or both 0 when this device does not store one. The counts are the answer to "can I replay this rep"; there is no flag for it, because two places to ask is one place to disagree.
   @$pb.TagNumber(19)
   $core.int get rawLen => $_getIZ(15);
   @$pb.TagNumber(19)
@@ -1006,6 +1006,8 @@ class TraceChunk extends $pb.GeneratedMessage {
 }
 
 /// A slice of a rep's raw trace: the same framing, at full rate.
+///
+/// Stored in the log by a record-mode build, and read back only by a client that asks for `TRACE_KIND_RAW`.
 class RawChunk extends $pb.GeneratedMessage {
   factory RawChunk({
     $core.List<$core.int>? repUuid,
@@ -1107,6 +1109,98 @@ class RawChunk extends $pb.GeneratedMessage {
   void clearTotalChunks() => $_clearField(5);
 }
 
+/// A slice of the live IMU stream: what the sampler read, sent while it reads it.
+///
+/// One notification is one chunk, so the number of samples a chunk carries is the device's choice and is bounded by the characteristic's `max_len`. The stream has no acknowledgement: a notification is best-effort at the host, and `first_t_ms` plus `seq` are what let the client see a gap instead of silently interpolating one.
+///
+/// This is the same sample format as `RawChunk`, at the same fixed-point scales, but it is not a rep: the stream runs from the moment `DevMode` is enabled until it is disabled or the link drops, and it has no UUID, window, or total. The phone app's record button writes each one into a `.pblog` as a `RepRecord.imu`, behind the `BootClock` that dates the boot.
+class ImuChunk extends $pb.GeneratedMessage {
+  factory ImuChunk({
+    $core.int? firstTMs,
+    $core.int? sampleRateHz,
+    $core.int? seq,
+    $core.Iterable<TraceRawPoint>? samples,
+  }) {
+    final result = ImuChunk._();
+    if (firstTMs != null) result.firstTMs = firstTMs;
+    if (sampleRateHz != null) result.sampleRateHz = sampleRateHz;
+    if (seq != null) result.seq = seq;
+    if (samples != null) result.samples.addAll(samples);
+    return result;
+  }
+
+  ImuChunk._();
+
+  factory ImuChunk.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      ImuChunk()..mergeFromBuffer(data, registry);
+  factory ImuChunk.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      ImuChunk()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ImuChunk',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
+      createEmptyInstance: ImuChunk.$_createMessage)
+    ..aI(1, _omitFieldNames ? '' : 'firstTMs', fieldType: $pb.PbFieldType.OU3)
+    ..aI(2, _omitFieldNames ? '' : 'sampleRateHz',
+        fieldType: $pb.PbFieldType.OU3)
+    ..aI(3, _omitFieldNames ? '' : 'seq', fieldType: $pb.PbFieldType.OU3)
+    ..pPM<TraceRawPoint>(4, _omitFieldNames ? '' : 'samples',
+        subBuilder: TraceRawPoint.$_createMessage)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ImuChunk clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ImuChunk copyWith(void Function(ImuChunk) updates) =>
+      super.copyWith((message) => updates(message as ImuChunk)) as ImuChunk;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ImuChunk() / ImuChunk.new instead')
+  static ImuChunk create() => ImuChunk._();
+  static $pb.GeneratedMessage $_createMessage() => ImuChunk._();
+  @$core.override
+  ImuChunk createEmptyInstance() => ImuChunk._();
+  @$core.pragma('dart2js:noInline')
+  static ImuChunk getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ImuChunk>(ImuChunk.$_createMessage);
+  static ImuChunk? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.int get firstTMs => $_getIZ(0);
+  @$pb.TagNumber(1)
+  set firstTMs($core.int value) => $_setUnsignedInt32(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasFirstTMs() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearFirstTMs() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.int get sampleRateHz => $_getIZ(1);
+  @$pb.TagNumber(2)
+  set sampleRateHz($core.int value) => $_setUnsignedInt32(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasSampleRateHz() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearSampleRateHz() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.int get seq => $_getIZ(2);
+  @$pb.TagNumber(3)
+  set seq($core.int value) => $_setUnsignedInt32(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasSeq() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearSeq() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $pb.PbList<TraceRawPoint> get samples => $_getList(3);
+}
+
 /// The device's clock, as of one point in the log: what its uptime zero was worth on the wall clock from here on.
 ///
 /// The device has no RTC, so the only time it can know is the one the client set (`Time`, `proto/calypso_gatt.proto`). That time belongs in the log rather than in RAM because it outlives the boot: reps written while the client was connected keep their time when the device restarts, and a rep that only the RAM remembers a clock for would lose it.
@@ -1171,9 +1265,10 @@ class BootClock extends $pb.GeneratedMessage {
   void clearEpochS() => $_clearField(1);
 }
 
-enum RepRecord_Body { summary, computed, clock, raw, notSet }
+enum RepRecord_Body { summary, computed, clock, raw, imu, notSet }
 
-/// One log record: a rep summary, one of either trace's chunks, or a clock reading.
+/// One log record: a rep summary, one of either trace's chunks, a clock reading, or a
+/// live IMU chunk a phone captured.
 /// Keeping them under one wire type makes the log a single self-describing stream.
 class RepRecord extends $pb.GeneratedMessage {
   factory RepRecord({
@@ -1181,12 +1276,14 @@ class RepRecord extends $pb.GeneratedMessage {
     TraceChunk? computed,
     BootClock? clock,
     RawChunk? raw,
+    ImuChunk? imu,
   }) {
     final result = RepRecord._();
     if (summary != null) result.summary = summary;
     if (computed != null) result.computed = computed;
     if (clock != null) result.clock = clock;
     if (raw != null) result.raw = raw;
+    if (imu != null) result.imu = imu;
     return result;
   }
 
@@ -1204,13 +1301,14 @@ class RepRecord extends $pb.GeneratedMessage {
     2: RepRecord_Body.computed,
     3: RepRecord_Body.clock,
     4: RepRecord_Body.raw,
+    5: RepRecord_Body.imu,
     0: RepRecord_Body.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RepRecord',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'calypso'),
       createEmptyInstance: RepRecord.$_createMessage)
-    ..oo(0, [1, 2, 3, 4])
+    ..oo(0, [1, 2, 3, 4, 5])
     ..aOM<RepSummary>(1, _omitFieldNames ? '' : 'summary',
         subBuilder: RepSummary.$_createMessage)
     ..aOM<TraceChunk>(2, _omitFieldNames ? '' : 'computed',
@@ -1219,6 +1317,8 @@ class RepRecord extends $pb.GeneratedMessage {
         subBuilder: BootClock.$_createMessage)
     ..aOM<RawChunk>(4, _omitFieldNames ? '' : 'raw',
         subBuilder: RawChunk.$_createMessage)
+    ..aOM<ImuChunk>(5, _omitFieldNames ? '' : 'imu',
+        subBuilder: ImuChunk.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1245,11 +1345,13 @@ class RepRecord extends $pb.GeneratedMessage {
   @$pb.TagNumber(2)
   @$pb.TagNumber(3)
   @$pb.TagNumber(4)
+  @$pb.TagNumber(5)
   RepRecord_Body whichBody() => _RepRecord_BodyByTag[$_whichOneof(0)]!;
   @$pb.TagNumber(1)
   @$pb.TagNumber(2)
   @$pb.TagNumber(3)
   @$pb.TagNumber(4)
+  @$pb.TagNumber(5)
   void clearBody() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
@@ -1295,6 +1397,17 @@ class RepRecord extends $pb.GeneratedMessage {
   void clearRaw() => $_clearField(4);
   @$pb.TagNumber(4)
   RawChunk ensureRaw() => $_ensure(3);
+
+  @$pb.TagNumber(5)
+  ImuChunk get imu => $_getN(4);
+  @$pb.TagNumber(5)
+  set imu(ImuChunk value) => $_setField(5, value);
+  @$pb.TagNumber(5)
+  $core.bool hasImu() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearImu() => $_clearField(5);
+  @$pb.TagNumber(5)
+  ImuChunk ensureImu() => $_ensure(4);
 }
 
 /// Sent by the app to request a rep's trace, which is always the whole of it.
@@ -1369,11 +1482,13 @@ class TraceRequest extends $pb.GeneratedMessage {
   void clearKind() => $_clearField(4);
 }
 
-/// Turn recording of raw traces on or off, until the device restarts.
+/// Turn the live IMU stream on or off, until the device restarts.
 ///
-/// A dev switch, not a setting. A raw trace is the largest thing in the log — a full-rate nine-second rep is ~19 KB against the plotted trace's ~5 — and it exists so a session can be replayed offline, not so a release session gets bigger. It lives here rather than on a characteristic of its own because it is an operation rather than a value the app reads back: the client that sets it knows which way it set it, and the device forgets at every boot.
+/// A dev switch, not a setting. The stream is every sample the sampler takes, sent as `ImuChunk` notifications on `Sync.Imu`; it is for watching a sensor or recording a session on the phone, not for a release session, and nothing about it is stored on the device. It lives here rather than on a characteristic of its own because it is an operation rather than a value the app reads back: the client that sets it knows which way it set it, and the device forgets at every boot.
 ///
-/// **Off at every boot and not persisted.** A switch left on by accident fills the log at three times the rate for as long as nobody notices; the cost of remembering it would be a reflash to turn it off.
+/// **Off at every boot and not persisted.** A switch left on spends the link and the phone's battery for as long as nobody notices; the cost of remembering it would be a reflash to turn it off.
+///
+/// A record-mode build still stores raw traces per rep in the log (`RawChunk`); that is a build flag, not this switch.
 class DevMode extends $pb.GeneratedMessage {
   factory DevMode({
     $core.bool? enabled,

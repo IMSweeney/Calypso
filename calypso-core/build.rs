@@ -9,6 +9,11 @@ use std::path::Path;
 /// Max trace samples per `TraceChunk` record (must equal `calypso_core::pb::TRACE_CHUNK_SAMPLES`).
 const TRACE_CHUNK_SAMPLES: usize = 48;
 
+/// Max samples per live `ImuChunk` (must equal `calypso_core::pb::IMU_CHUNK_SAMPLES`).
+///
+/// Bounded by the characteristic, not by a trace chunk's budget: one chunk is one 244-byte notification.
+const IMU_CHUNK_SAMPLES: usize = 8;
+
 /// Length of a rep's UUID (must equal `calypso_core::uuid::UUID_LEN`).
 const REP_UUID_LEN: usize = 16;
 
@@ -58,6 +63,10 @@ fn messages(out_dir: &Path) {
     generator.configure(
         ".calypso.RawChunk.samples",
         micropb_gen::Config::new().max_len(TRACE_CHUNK_SAMPLES as u32),
+    );
+    generator.configure(
+        ".calypso.ImuChunk.samples",
+        micropb_gen::Config::new().max_len(IMU_CHUNK_SAMPLES as u32),
     );
     generator
         .compile_protos(&[PROTO], dest.to_str().unwrap())

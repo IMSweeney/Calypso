@@ -633,7 +633,7 @@ impl Default for Detector {
 
 /// One point of a rep's **plotted** trace: where the bar was, and which way the sensor faced.
 ///
-/// Derived, and only ever used to draw. The inputs it was derived from are the rep's raw trace, which a device records on request (`REP_RAW`) and which is what a summary is re-derived from.
+/// Derived, and only ever used to draw. The inputs it was derived from are the rep's raw trace, which a record-mode build stores with the rep and which is what a summary is re-derived from.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct TracePoint {
     pub t_ms: u32,

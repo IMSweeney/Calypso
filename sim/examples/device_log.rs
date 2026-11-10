@@ -214,6 +214,8 @@ fn main() {
                 chunks += 1;
             }
             Some(msg::RepRecord_::Body::Raw(_)) => {}
+            // A phone's live recording, never a device log record.
+            Some(msg::RepRecord_::Body::Imu(_)) => {}
             None => {}
         }
     })

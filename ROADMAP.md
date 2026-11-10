@@ -13,6 +13,7 @@ Where Calypso is and what is left. Feature documentation lives in
 - **A generated BLE interface** — `proto/calypso_gatt.proto` declares the service and its characteristics, and `gatt-gen` writes both ends' code from it, committed rather than generated at build time. See [tools/gatt-gen/README.md](tools/gatt-gen/README.md).
 - **Bench mode** — a `fake-reps` build stores a synthetic rep every 30 s, exercising device to log to BLE to app without lifting. See [calypso-esp32/README.md](calypso-esp32/README.md).
 - **Device time** — the app sets the device's clock on every connection, the log keeps each boot's epoch, and the list is ordered and labelled by that time. **Not yet run on hardware.** See [docs/APP_SYNC.md](docs/APP_SYNC.md).
+- **Live IMU streaming** — dev mode sends every sample the sampler takes over BLE as `ImuChunk` notifications instead of storing raw traces in the log: eight samples a notification, 100 samples a second, no acknowledgement. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
 - **The device's own faults reach the app** — a failed mount, a rep that could not be stored, an unreadable trace or a dropped transfer arrives as a `Report` kind and is shown as a banner. **Not yet run on hardware.** See [docs/APP_SYNC.md](docs/APP_SYNC.md).
 - **Diagnostics that can be read back** — the app logs every BLE message to a rotating file, and the firmware's boot log carries the heap and stack figures. See [calypso-app/README.md](calypso-app/README.md).
 - **A day at a time** — the rep list opens on today, and an arrow either side walks it back a day per press. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
@@ -71,7 +72,7 @@ Where Calypso is and what is left. Feature documentation lives in
       the fused build stored none, the fused output was the problem. What it does not settle is
       whether the detector now reads travel correctly on a live bar — the maps are synthetic and
       the annotated captures are gone — so the session's rep counts are written down before it
-      starts, dev mode records the windows, and the fixtures come from them.
+      starts, the live stream captures the samples, and the fixtures come from them.
 - [ ] **Whether the detector consumes the filter's velocity.** Two integrators run in firmware
       today, deliberately, and they disagree. Folding the detector onto the filter's velocity is
       one decision taken on that session's data, not before it.

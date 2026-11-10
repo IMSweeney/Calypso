@@ -7,12 +7,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
+import '../logging/loggers.dart';
 import '../logging/rotating_file_appender.dart';
 import '../logging/setup.dart';
 import '../model/rep.dart';
 import '../protocol/calypso.pb.dart' as pb;
 import '../store/archive_sync.dart';
 import '../store/history_store.dart';
+import '../store/imu_recording.dart';
 import '../store/rep_archive.dart';
 import '../transport/ble_link.dart';
 import '../transport/ble_transport.dart';
@@ -117,6 +119,18 @@ class _RepListScreenState extends State<RepListScreen> {
   StreamSubscription<pb.RepSummary>? _live;
   Future<void> _writes = Future<void>.value();
 
+  /// Whether the device's live IMU stream is running for this connection.
+  ///
+  /// Local because dev mode is an operation rather than a value: the device forgets it at every boot and ends it with the link, so there is nothing to read back. The status listener below is what turns the button off when the link goes away.
+  bool _recording = false;
+
+  /// Whether a `DevMode` write is in flight, so the button cannot send the opposite of itself twice.
+  bool _toggling = false;
+
+  /// The file the live chunks are going into, and the subscription that feeds it.
+  ImuRecording? _recordingFile;
+  StreamSubscription<pb.ImuChunk>? _imuSub;
+
   /// The day the list is on, or null while it is on today. Null rather than today's date, so a screen left open across midnight follows the clock instead of pinning the day it was opened on.
   DateTime? _day;
 
@@ -131,11 +145,14 @@ class _RepListScreenState extends State<RepListScreen> {
       _ble = BleTransport(UniversalBleLink());
     }
     _live = _ble.watchSummaries().listen(_onSummary);
+    _ble.status.addListener(_onBleStatus);
     _load();
   }
 
   @override
   void dispose() {
+    _closeRecording();
+    _ble.status.removeListener(_onBleStatus);
     _live?.cancel();
     if (widget.ble == null) {
       _ble.close();
@@ -368,6 +385,150 @@ class _RepListScreenState extends State<RepListScreen> {
     await _ble.disconnect();
   }
 
+  /// The device ends the stream with the link, so a button left on would be claiming a stream that stopped. The file is closed and kept: whatever arrived before the drop is still a recording.
+  void _onBleStatus() {
+    if (mounted && _recording && !_ble.status.isConnected) {
+      unawaited(_stopRecording(tellDevice: false));
+    }
+  }
+
+  /// Close a recording the screen is leaving behind, and stop the device's stream.
+  ///
+  /// The file keeps whatever arrived before the screen went away, and an empty one is deleted rather than left as a recording of nothing. The device is told to stop without waiting: the link is the only reason it was streaming, and nothing is left to report a failure to.
+  void _closeRecording() {
+    final recording = _recordingFile;
+    _recordingFile = null;
+    _imuSub?.cancel();
+    _imuSub = null;
+    if (recording == null) return;
+    _recording = false;
+    recording.stop();
+    if (recording.samples == 0) {
+      recording.file.deleteSync();
+    } else {
+      appLog.info(
+        'imu recording closed: ${recording.file.path}, ${recording.samples} samples',
+      );
+    }
+    unawaited(
+      _ble.setDevMode(false).catchError((Object e) {
+        appLog.warning('imu recording: the device did not stop streaming: $e');
+      }),
+    );
+  }
+
+  /// Start or stop recording the live IMU stream to a `.pblog`.
+  ///
+  /// The stream is subscribed before `DevMode` is sent, so the first chunks cannot arrive before there is somewhere to put them. A `DevMode` failure cleans up the file, because a recording that never had a stream is not a recording.
+  Future<void> _toggleRecording() async {
+    if (_toggling) return;
+    setState(() => _toggling = true);
+    try {
+      if (_recording) {
+        await _stopRecording();
+      } else {
+        await _startRecording();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not ${_recording ? 'stop' : 'start'} the IMU stream: $e',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _toggling = false);
+    }
+  }
+
+  Future<void> _startRecording() async {
+    final base =
+        widget.historyDirectory ?? await getApplicationSupportDirectory();
+    final recording = ImuRecording.start(Directory('${base.path}/imu'));
+    final subscription = _ble.watchImu().listen(
+      recording.add,
+      onError: (Object e, StackTrace stack) =>
+          appLog.warning('imu recording: stream error: $e\n$stack'),
+    );
+
+    try {
+      await _ble.setDevMode(true);
+    } catch (e) {
+      await subscription.cancel();
+      recording.stop();
+      recording.file.deleteSync();
+      rethrow;
+    }
+
+    if (!mounted) {
+      await subscription.cancel();
+      recording.stop();
+      unawaited(
+        _ble.setDevMode(false).catchError((Object e) {
+          appLog.warning(
+            'imu recording: the device did not stop streaming: $e',
+          );
+        }),
+      );
+      return;
+    }
+    setState(() {
+      _recording = true;
+      _recordingFile = recording;
+      _imuSub = subscription;
+    });
+    appLog.info('imu recording started: ${recording.file.path}');
+  }
+
+  Future<void> _stopRecording({bool tellDevice = true}) async {
+    final recording = _recordingFile;
+    final subscription = _imuSub;
+    if (recording == null) return;
+    _recordingFile = null;
+    _imuSub = null;
+    if (mounted) setState(() => _recording = false);
+
+    Object? failure;
+    if (tellDevice) {
+      try {
+        await _ble.setDevMode(false);
+      } catch (e) {
+        failure = e;
+      }
+    }
+    await subscription?.cancel();
+    try {
+      recording.stop();
+    } catch (e) {
+      failure ??= e;
+    }
+
+    if (recording.samples == 0) {
+      recording.file.deleteSync();
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('No IMU samples arrived')));
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    appLog.info(
+      'imu recording stopped: ${recording.file.path}, ${recording.samples} samples',
+    );
+    final saved =
+        'Saved ${recording.samples} samples to ${recording.file.path}';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(failure == null ? saved : '$saved (device: $failure)'),
+      ),
+    );
+  }
+
   String get _statusLine {
     if (_syncTotal > 0) return 'syncing $_syncDone/$_syncTotal';
     if (_synced > 0) return '+$_synced synced';
@@ -421,6 +582,22 @@ class _RepListScreenState extends State<RepListScreen> {
     final rows = _rows(archive);
     final statusLine = _statusLine;
     return Scaffold(
+      floatingActionButton: AnimatedBuilder(
+        animation: _ble.status,
+        builder: (context, _) {
+          if (!_ble.status.isConnected) return const SizedBox.shrink();
+          final scheme = Theme.of(context).colorScheme;
+          return FloatingActionButton.small(
+            onPressed: _toggling ? null : _toggleRecording,
+            tooltip: _recording
+                ? 'Stop recording the IMU stream'
+                : 'Record the IMU stream',
+            backgroundColor: _recording ? scheme.error : null,
+            foregroundColor: _recording ? scheme.onError : null,
+            child: Icon(_recording ? Icons.stop : Icons.fiber_manual_record),
+          );
+        },
+      ),
       appBar: AppBar(
         title: const Text('Calypso'),
         actions: [

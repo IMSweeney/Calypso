@@ -63,6 +63,9 @@ class SyncClient {
   /// `calypso.Sync.Messages` -- notify, calypso.SyncMessage.
   static const String messagesUuid = '0000ca21-b0cd-11ec-871f-d45ddf138840';
 
+  /// `calypso.Sync.Imu` -- notify, calypso.ImuChunk.
+  static const String imuUuid = '0000ca24-b0cd-11ec-871f-d45ddf138840';
+
   /// Subscribe to `Reports`. Nothing arrives until this completes.
   Future<void> subscribeReports() => _link.subscribe(serviceUuid, reportsUuid);
 
@@ -73,6 +76,13 @@ class SyncClient {
   /// Write a `gatt.U32`.
   Future<void> writeTime(int value) =>
       _link.write(serviceUuid, timeUuid, _encodeU32(value), withResponse: true);
+
+  /// Subscribe to `Imu`. Nothing arrives until this completes.
+  Future<void> subscribeImu() => _link.subscribe(serviceUuid, imuUuid);
+
+  /// One `calypso.ImuChunk` per notification.
+  Stream<pb.ImuChunk> get imuUpdates =>
+      _link.values(imuUuid).map((bytes) => pb.ImuChunk.fromBuffer(bytes));
 }
 
 /// Pipe `sync`: `pb.SyncRequest` in, `pb.SyncMessage` out.

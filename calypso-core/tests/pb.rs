@@ -1,4 +1,4 @@
-use calypso_core::pb::{self, msg, Record, TRACE_CHUNK_SAMPLES};
+use calypso_core::pb::{self, msg, Record, IMU_CHUNK_SAMPLES, TRACE_CHUNK_SAMPLES};
 use calypso_core::rep::TracePoint;
 use calypso_core::uuid::fixture_uuid;
 
@@ -199,6 +199,44 @@ fn sync_message_carries_a_summary() {
     match decoded.body {
         Some(msg::SyncMessage_::Body::Summary(s)) => assert_eq!(s, summary),
         other => panic!("expected a summary, got {other:?}"),
+    }
+}
+
+#[test]
+fn live_chunk_fits_one_notification_at_the_sensor_extremes() {
+    use calypso_core::gatt::SyncImuValue;
+    use calypso_core::sampler::Sample;
+
+    let capacity: heapless::Vec<msg::TraceRawPoint, IMU_CHUNK_SAMPLES> =
+        msg::ImuChunk::default().samples;
+    assert_eq!(capacity.capacity(), IMU_CHUNK_SAMPLES);
+
+    // Every field at an i16 extreme, which is the most a raw register value can cost on the wire, with the offsets a 100 Hz chunk can carry.
+    let samples: Vec<Sample> = (0..IMU_CHUNK_SAMPLES)
+        .map(|i| Sample {
+            t_ms: 10_000 + i as u32 * 10,
+            accel: [i16::MIN, i16::MAX, -1],
+            gyro: [i16::MAX, i16::MIN, 0],
+        })
+        .collect();
+    let chunk = pb::imu_chunk_message(9, &samples);
+
+    let value = SyncImuValue::encode(&chunk).expect("one chunk fits the 244-byte characteristic");
+    assert!(value.as_bytes().len() <= 244);
+
+    let back = value.decode().expect("what was sent is an ImuChunk");
+    assert_eq!(back.first_t_ms, 10_000);
+    assert_eq!(back.sample_rate_hz, calypso_core::sampler::SAMPLE_RATE_HZ);
+    assert_eq!(back.seq, 9);
+    for (i, point) in back.samples.iter().enumerate() {
+        let sample = pb::raw_point_from_message(point);
+        assert_eq!(
+            sample.t_ms,
+            samples[i].t_ms - back.first_t_ms,
+            "t_offset at {i}"
+        );
+        assert_eq!(sample.accel, samples[i].accel);
+        assert_eq!(sample.gyro, samples[i].gyro);
     }
 }
 

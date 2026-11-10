@@ -245,9 +245,10 @@ plot then pays for samples it cannot draw.
 The split is also what makes a stored rep smaller. It was 512 points carrying position,
 acceleration and attitude; it is now 128 carrying position and attitude, so a rep is about a third
 of what it was and the log holds about three times as many. The raw trace costs 8–19 KB on top for
-a 4–9 s rep, which is why only a device a client has asked records one (`DevMode`, an arm of
-`SyncRequest` rather than a characteristic of its own: it is an operation, and unlike the clock
-nothing waits on it).
+a 4–9 s rep, which is why only a record-mode build stores one. A client's `DevMode` streams the
+same samples live instead (`ImuChunk` on the `Imu` characteristic); the switch is an arm of
+`SyncRequest` rather than a characteristic of its own because it is an operation, and unlike the
+clock nothing waits on it.
 
 `RepState` (velocity, attitude, both offsets, and whether the bar was at rest) replaces
 `TraceOrigin`, which carried only `v0`; `RepConfig` says what the sensor was set to and which
@@ -264,9 +265,11 @@ fixtures are regenerated from the generators.
 device when this stage landed, even with `DevMode` set: its sample had no gyroscope until the chip
 was read raw, and a raw trace that cannot be replayed through the filter it exists for is not worth
 the log. The write and read paths were in `store` and exercised by the fixtures, so stage 3 had only
-the device's own use of them to add — which it did, one stage early: dev mode records and streams a
-rep's window end to end, and the buffer one is streamed from is allocated on the first request
-rather than at boot.
+the device's own use of them to add — which it did, one stage early: a record-mode build stores
+and streams a rep's window end to end, and the buffer one is streamed from is allocated on the
+first request rather than at boot. A client's dev mode no longer stores raw traces; it streams
+the sampler live, because a session that wants the samples now does not want the log to pay for
+them.
 
 ### 3. Device — done
 

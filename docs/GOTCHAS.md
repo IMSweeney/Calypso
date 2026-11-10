@@ -250,10 +250,10 @@ panics — and the panic handler used to be `loop {}` with no output.
 **Fix / how to read it.** The handler now prints `*** PANIC: ... ***`. The heap is
 two `esp_alloc` regions — one reclaimed DRAM, one the 64 KB static region above —
 and the buffer set is large: sample ring, 10 s rep window, two plotted-trace buffers, record
-scratch, decode scratch, summary batch. The radio takes most of it before any
-of that. A raw trace a dev client asks for adds a window's worth of samples, allocated
-on the request rather than at boot, and refused when the heap cannot spare it alongside
-the headroom that constant asks for.
+scratch, decode scratch, summary batch, and the live stream's queue. The radio takes most of
+it before any of that. A raw trace read out of a record-mode build adds a window's worth of
+samples, allocated on the request rather than at boot, and refused when the heap cannot spare
+it alongside the headroom that constant asks for.
 
 The figures to watch, and what they mean: `Radio up, heap free N B` says whether
 the radio was cheap or expensive, and the free figure should then fall at each

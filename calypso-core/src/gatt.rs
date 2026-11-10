@@ -13,7 +13,7 @@ use trouble_host::types::gatt_traits::FromGattError;
 /// A hash of the schema this was generated from: firmware and app built from
 /// the same schema agree, and anything else is caught before a typed value is
 /// believed. Protobuf would otherwise decode a mismatch silently.
-pub const SCHEMA_HASH: u64 = 0xf52440a0d9269e20;
+pub const SCHEMA_HASH: u64 = 0xc4478f517ad54263;
 
 /// Backing buffer for a pipe characteristic's chunk.
 pub const PIPE_CHUNK_MAX: usize = 244;
@@ -65,6 +65,14 @@ pub mod uuid {
     ]);
     /// `calypso.Sync.Messages`, as a client prints it.
     pub const SYNC_MESSAGES_TEXT: &str = "0000ca21-b0cd-11ec-871f-d45ddf138840";
+
+    /// `calypso.Sync.Imu`.
+    pub const SYNC_IMU_UUID: Uuid = Uuid::new_long([
+        0x40, 0x88, 0x13, 0xdf, 0x5d, 0xd4, 0x1f, 0x87, 0xec, 0x11, 0xcd, 0xb0, 0x24, 0xca, 0x00,
+        0x00,
+    ]);
+    /// `calypso.Sync.Imu`, as a client prints it.
+    pub const SYNC_IMU_TEXT: &str = "0000ca24-b0cd-11ec-871f-d45ddf138840";
 }
 
 /// The `max_len` each sized characteristic declares. A buffer that holds one
@@ -73,6 +81,9 @@ pub mod uuid {
 pub mod max_len {
     /// `calypso.Sync.Reports`.
     pub const SYNC_REPORTS: usize = 20;
+
+    /// `calypso.Sync.Imu`.
+    pub const SYNC_IMU: usize = 244;
 }
 
 /// `calypso.Report` as one GATT attribute value: the message encoded whole, which is what a single-shot characteristic carries (`max_len` 20).
@@ -150,6 +161,81 @@ impl FromGatt for SyncReportsValue {
     }
 }
 
+/// `calypso.ImuChunk` as one GATT attribute value: the message encoded whole, which is what a single-shot characteristic carries (`max_len` 244).
+/// `encode` returns `None` only for a message that does not fit `max_len`; `decode` returns `None` for bytes that are not this message at all.
+#[derive(Default)]
+pub struct SyncImuValue {
+    bytes: Vec<u8, 244>,
+}
+
+impl SyncImuValue {
+    /// Encode `message` into a value.
+    pub fn encode(message: &crate::pb::msg::ImuChunk) -> Option<Self> {
+        let mut bytes = Vec::new();
+        bytes.resize(244, 0).ok()?;
+        let mut writer: &mut [u8] = bytes.as_mut_slice();
+        {
+            let mut encoder = micropb::PbEncoder::new(&mut writer);
+            message.encode(&mut encoder).ok()?;
+        }
+        let written = 244 - writer.len();
+        bytes.truncate(written);
+        Some(SyncImuValue { bytes })
+    }
+
+    /// Encode `message` into an existing value, reusing its buffer: for a
+    /// sender that notifies repeatedly and does not want a value per message.
+    /// Returns false if the message does not fit.
+    pub fn encode_into(&mut self, message: &crate::pb::msg::ImuChunk) -> bool {
+        self.bytes.clear();
+        if self.bytes.resize(244, 0).is_err() {
+            return false;
+        }
+        let mut writer: &mut [u8] = self.bytes.as_mut_slice();
+        {
+            let mut encoder = micropb::PbEncoder::new(&mut writer);
+            if message.encode(&mut encoder).is_err() {
+                self.bytes.clear();
+                return false;
+            }
+        }
+        let written = 244 - writer.len();
+        self.bytes.truncate(written);
+        true
+    }
+
+    /// Decode the value.
+    pub fn decode(&self) -> Option<crate::pb::msg::ImuChunk> {
+        let mut message = crate::pb::msg::ImuChunk::default();
+        message.decode_from_bytes(self.bytes.as_slice()).ok()?;
+        Some(message)
+    }
+
+    /// The value as it goes on the wire.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+}
+
+impl AsGatt for SyncImuValue {
+    const MIN_SIZE: usize = 0;
+    const MAX_SIZE: usize = 244;
+
+    fn as_gatt(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+}
+
+impl FromGatt for SyncImuValue {
+    fn from_gatt(data: &[u8]) -> Result<Self, FromGattError> {
+        let mut bytes = Vec::new();
+        bytes
+            .extend_from_slice(data)
+            .map_err(|_| FromGattError::InvalidLength)?;
+        Ok(SyncImuValue { bytes })
+    }
+}
+
 /// `calypso.Sync`.
 #[gatt_service(uuid = "0000ca20-b0cd-11ec-871f-d45ddf138840")]
 pub struct SyncService {
@@ -171,6 +257,9 @@ pub struct SyncService {
     /// so nothing here decodes it as a message.
     #[characteristic(uuid = "0000ca21-b0cd-11ec-871f-d45ddf138840", notify)]
     pub messages: Vec<u8, PIPE_STORAGE_MAX>,
+    /// `Imu` (0000ca24-b0cd-11ec-871f-d45ddf138840), calypso.ImuChunk.
+    #[characteristic(uuid = "0000ca24-b0cd-11ec-871f-d45ddf138840", notify)]
+    pub imu: SyncImuValue,
 }
 
 /// Every service in the schema, and the table they are built into.

@@ -22,6 +22,10 @@ pub use proto::calypso_ as msg;
 /// Trace samples per [`msg::TraceChunk`]. Must match the `max_len` configured in `build.rs` (asserted by a test).
 pub const TRACE_CHUNK_SAMPLES: usize = 48;
 
+/// Samples per live [`msg::ImuChunk`], which is one notification on the 244-byte characteristic.
+/// Must match the `max_len` configured in `build.rs`; a test pins the worst-case encoding against the characteristic's size.
+pub const IMU_CHUNK_SAMPLES: usize = 8;
+
 /// Errors from the record layer.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
@@ -42,6 +46,8 @@ pub enum Record {
     Computed(msg::TraceChunk),
     Raw(msg::RawChunk),
     Clock(msg::BootClock),
+    /// A live IMU chunk from a phone's recording. The device never writes one.
+    Imu(msg::ImuChunk),
 }
 
 /// How many records a trace of `len` points takes, either kind: the two chunk messages hold the same number of samples.
@@ -220,6 +226,29 @@ pub fn raw_chunk_message(
     chunk
 }
 
+/// Fill `chunk` with one live slice of `samples`, whose times are the device's uptime.
+///
+/// `seq` numbers the chunks of one connection's stream, and `first_t_ms` is the origin each point's `t_offset_ms` is relative to.
+/// Takes the message rather than returning one, so the device can reuse its heap buffer instead of building a 200-byte value on the stack every 80 ms.
+pub fn fill_imu_chunk(chunk: &mut msg::ImuChunk, seq: u32, samples: &[Sample]) {
+    let first_t_ms = samples.first().map(|s| s.t_ms).unwrap_or(0);
+    chunk.first_t_ms = first_t_ms;
+    chunk.sample_rate_hz = crate::sampler::SAMPLE_RATE_HZ;
+    chunk.seq = seq;
+    chunk.samples.clear();
+    for s in samples.iter().take(IMU_CHUNK_SAMPLES) {
+        // Capacity is IMU_CHUNK_SAMPLES, so this cannot fail.
+        let _ = chunk.samples.push(raw_point_message(s, first_t_ms));
+    }
+}
+
+/// Build one live chunk from `samples`; the same thing as [`fill_imu_chunk`] for callers without a buffer.
+pub fn imu_chunk_message(seq: u32, samples: &[Sample]) -> msg::ImuChunk {
+    let mut chunk = msg::ImuChunk::default();
+    fill_imu_chunk(&mut chunk, seq, samples);
+    chunk
+}
+
 /// Encode a rep summary as a log record. Returns the encoded length.
 /// The caller fills in `rep_uuid` and `chunk_count`; the summary is the wire type, so nothing is converted.
 pub fn encode_summary(summary: &msg::RepSummary, out: &mut [u8]) -> Result<usize, Error> {
@@ -318,6 +347,7 @@ pub fn decode_record(bytes: &[u8]) -> Result<Record, Error> {
         Some(msg::RepRecord_::Body::Computed(t)) => Ok(Record::Computed(t)),
         Some(msg::RepRecord_::Body::Raw(r)) => Ok(Record::Raw(r)),
         Some(msg::RepRecord_::Body::Clock(c)) => Ok(Record::Clock(c)),
+        Some(msg::RepRecord_::Body::Imu(i)) => Ok(Record::Imu(i)),
         None => Err(Error::Empty),
     }
 }

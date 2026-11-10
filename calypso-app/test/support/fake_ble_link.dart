@@ -29,6 +29,7 @@ class FakeBleLink implements BleLink {
       SyncClient.requestsUuid,
       SyncClient.reportsUuid,
       SyncClient.timeUuid,
+      SyncClient.imuUuid,
     ]),
   ];
 

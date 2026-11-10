@@ -35,7 +35,7 @@ const Duration _defaultXferTimeout = Duration(
 
 /// Reaching the device over the schema's interface: the UUIDs, the directions and the message types come from `proto/calypso_gatt.proto` (see `lib/gatt/gatt_client.dart`), so this file names none of them.
 ///
-/// The generated `SyncClient` reads the **IMU's own sample**, the characteristic that carries a value.
+/// The generated `SyncClient` reaches the characteristics that carry a value: the clock, the device's reports, and the live IMU stream.
 /// The pipe's two halves are deliberately not reached through it: a notification there is a chunk of a transfer, not a message, so those bytes go to the runtime in `lib/gatt/pipe.dart`.
 ///
 /// What stays here is what a schema cannot say: scanning, connecting, the trace reassembly and its timeouts, and what the archive is told.
@@ -68,6 +68,7 @@ class BleTransport implements RepTransport {
   String? _deviceId;
   StreamSubscription<Uint8List>? _messagesSub;
   StreamSubscription<pb.Report>? _reportsSub;
+  StreamSubscription<pb.ImuChunk>? _imuSub;
 
   /// The app's end of the pipe: one receiver for everything the device sends, and one sender for everything the app asks with. Both directions are the same frame on the same two characteristics, so what arrives has to be sorted by the frame rather than by where it came from (`_onNotification`).
   final pipe.Receiver _receiver = pipe.Receiver(SyncPipe.window);
@@ -79,6 +80,8 @@ class BleTransport implements RepTransport {
   int _mtu = _minimumMtu;
   final StreamController<pb.RepSummary> _summaryCtrl =
       StreamController<pb.RepSummary>.broadcast();
+  final StreamController<pb.ImuChunk> _imuCtrl =
+      StreamController<pb.ImuChunk>.broadcast();
 
   final Map<String, pb.RepSummary> _summaries = {};
 
@@ -142,7 +145,7 @@ class BleTransport implements RepTransport {
       debugPrint(
         'calypso: device offers ${_describe(services)}; '
         'want ${SyncClient.serviceUuid}[${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}, '
-        '${SyncClient.reportsUuid}, ${SyncClient.timeUuid}]',
+        '${SyncClient.reportsUuid}, ${SyncClient.timeUuid}, ${SyncClient.imuUuid}]',
       );
       if (!_offersSync(services) || _strangersIn(services).isNotEmpty) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -160,7 +163,7 @@ class BleTransport implements RepTransport {
           );
         }
         throw StateError(
-          'device offers ${_describe(services)}, not all five characteristics of '
+          'device offers ${_describe(services)}, not every characteristic this app needs of '
           '${SyncClient.serviceUuid} (${SyncClient.messagesUuid}, ${SyncClient.requestsUuid}, '
           '${SyncClient.reportsUuid}, '
           '${SyncClient.timeUuid})',
@@ -232,6 +235,8 @@ class BleTransport implements RepTransport {
     _client = SyncClient(_GattLink(_link, deviceId));
     // Before the clock and before anything is asked for: from here on the device can tell the app what has gone wrong, including what it raised while nobody was listening.
     await _subscribeReports();
+    // The live stream is subscribed on every connection and sends nothing until dev mode is set: subscribing is cheap, and a stream enabled before the subscription would lose its first chunks.
+    await _subscribeImu();
     // The clock before anything is asked for: the device holds this boot's summaries until it has one, and they are the reps this connection exists for.
     await setClock();
     bleLog.info('connected to $deviceId');
@@ -260,6 +265,38 @@ class BleTransport implements RepTransport {
       );
     }
   }
+
+  /// Subscribe to the live IMU stream, and start listening.
+  ///
+  /// The subscription is harmless without dev mode: the device sends nothing until a `DevMode` request turns it on. A failure is logged and not raised for the reason the reports' is — the reps still sync, and only the stream is missing.
+  Future<void> _subscribeImu() async {
+    final client = _client;
+    if (client == null) return;
+    _imuSub = client.imuUpdates.listen(
+      _imuCtrl.add,
+      onError: (Object error) =>
+          bleLog.warning('error on ${SyncClient.imuUuid}: $error'),
+    );
+    try {
+      await client.subscribeImu();
+      bleLog.info('subscribed to ${SyncClient.imuUuid}');
+    } catch (e) {
+      bleLog.warning(
+        'could not subscribe to the IMU stream ($e); the reps still sync',
+      );
+    }
+  }
+
+  /// Turn the device's live IMU stream on or off, until it restarts or the link drops.
+  ///
+  /// A `DevMode` request on the pipe: an operation, not a value, so it is written rather than read back. The stream itself is on its own characteristic and is not acknowledged, so this call says the switch was heard, not that the first chunk has arrived.
+  Future<void> setDevMode(bool enabled) =>
+      _request(pb.SyncRequest(devMode: pb.DevMode(enabled: enabled)));
+
+  /// The device's live IMU chunks, in the order they arrive.
+  ///
+  /// Empty until [setDevMode] has been sent; `firstTMs` and `seq` are what tell a missing chunk apart from a gap in the samples.
+  Stream<pb.ImuChunk> watchImu() => _imuCtrl.stream;
 
   /// One fault from the device: the kind and the app's sentence, on its own line in the log.
   void _onReport(pb.Report report) {
@@ -313,7 +350,8 @@ class BleTransport implements RepTransport {
           if (!_sameUuid(characteristic, SyncClient.messagesUuid) &&
               !_sameUuid(characteristic, SyncClient.requestsUuid) &&
               !_sameUuid(characteristic, SyncClient.reportsUuid) &&
-              !_sameUuid(characteristic, SyncClient.timeUuid))
+              !_sameUuid(characteristic, SyncClient.timeUuid) &&
+              !_sameUuid(characteristic, SyncClient.imuUuid))
             characteristic,
   ];
 
@@ -354,6 +392,8 @@ class BleTransport implements RepTransport {
     _messagesSub = null;
     _reportsSub?.cancel();
     _reportsSub = null;
+    _imuSub?.cancel();
+    _imuSub = null;
     // Whatever was in flight went with the link: half a message is not a message.
     _receiver.reset();
     _sender.reset();
@@ -479,6 +519,7 @@ class BleTransport implements RepTransport {
     _failPending('transport closed');
     _completed.clear();
     await _summaryCtrl.close();
+    await _imuCtrl.close();
     status.set(BleStatus.idle);
   }
 
@@ -634,7 +675,7 @@ class BleTransport implements RepTransport {
       case pb.SyncMessage_Body.computed:
         _onChunk(message.computed);
       case pb.SyncMessage_Body.raw:
-        // Only a device whose dev switch is on records these, and nothing asks for one yet.
+        // Only a record-mode build stores these, and nothing asks for one yet.
         break;
       case pb.SyncMessage_Body.notSet:
         break;

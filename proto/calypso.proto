@@ -22,7 +22,7 @@ package calypso;
 //
 // `TraceComputed` is for the plot: where the bar went and which way the sensor faced, decimated to a fixed budget. It is derived data, and the device derives it once, at the moment the rep closes, from the same window the summary came from.
 //
-// `TraceRaw` is for replay: what the sensor actually read, at full rate and never decimated, so the filter and the detector can run over it again and the summary be re-derived from it. A device records it only while a client has asked it to (`DevMode`), because a full-rate trace is the largest thing in the log.
+// `TraceRaw` is for replay: what the sensor actually read, at full rate and never decimated, so the filter and the detector can run over it again and the summary be re-derived from it. A record-mode build stores it per rep, because a full-rate trace is the largest thing in the log; a client's `DevMode` streams the same samples live instead (`ImuChunk`).
 //
 // Both cover the same window and share one time origin: `t_offset_ms` is milliseconds from the rep's first sample, so `RepSummary.t_start_ms + t_offset_ms` is a sample's uptime in either of them, and the two can be drawn against each other. The raw trace starts at that origin — it keeps every sample — while the plotted one starts wherever its decimation grid first lands.
 
@@ -77,7 +77,7 @@ message RepSummary {
   RepState state = 17;
   // What the sensor was set to, and which detection logic closed the rep: what the numbers in either trace mean.
   RepConfig config = 18;
-  // The raw trace's size, or both 0 when this device does not record one. The counts are the answer to "can I replay this rep"; there is no flag for it, because two places to ask is one place to disagree.
+  // The raw trace's size, or both 0 when this device does not store one. The counts are the answer to "can I replay this rep"; there is no flag for it, because two places to ask is one place to disagree.
   uint32 raw_len = 19;
   uint32 raw_chunks = 20;
 }
@@ -127,12 +127,26 @@ message TraceChunk {
 }
 
 // A slice of a rep's raw trace: the same framing, at full rate.
+//
+// Stored in the log by a record-mode build, and read back only by a client that asks for `TRACE_KIND_RAW`.
 message RawChunk {
   bytes rep_uuid = 1;
   uint32 index = 2;
   uint32 first_t_offset_ms = 3;
   repeated TraceRawPoint samples = 4;
   uint32 total_chunks = 5;  // as `TraceChunk`
+}
+
+// A slice of the live IMU stream: what the sampler read, sent while it reads it.
+//
+// One notification is one chunk, so the number of samples a chunk carries is the device's choice and is bounded by the characteristic's `max_len`. The stream has no acknowledgement: a notification is best-effort at the host, and `first_t_ms` plus `seq` are what let the client see a gap instead of silently interpolating one.
+//
+// This is the same sample format as `RawChunk`, at the same fixed-point scales, but it is not a rep: the stream runs from the moment `DevMode` is enabled until it is disabled or the link drops, and it has no UUID, window, or total. The phone app's record button writes each one into a `.pblog` as a `RepRecord.imu`, behind the `BootClock` that dates the boot.
+message ImuChunk {
+  uint32 first_t_ms = 1;      // the device's uptime for samples[0], the same clock as `RepSummary.t_start_ms`
+  uint32 sample_rate_hz = 2;  // samples taken per second, so a client can place a missing chunk
+  uint32 seq = 3;             // chunk number in this connection's stream, from 0
+  repeated TraceRawPoint samples = 4;
 }
 
 // The device's clock, as of one point in the log: what its uptime zero was worth on the wall clock from here on.
@@ -148,7 +162,8 @@ message BootClock {
   uint32 epoch_s = 1; // unix seconds at that boot's uptime zero; 0 = not known
 }
 
-// One log record: a rep summary, one of either trace's chunks, or a clock reading.
+// One log record: a rep summary, one of either trace's chunks, a clock reading, or a
+// live IMU chunk a phone captured.
 // Keeping them under one wire type makes the log a single self-describing stream.
 message RepRecord {
   oneof body {
@@ -156,6 +171,7 @@ message RepRecord {
     TraceChunk computed = 2;  // the plotted trace (was `trace`)
     BootClock clock = 3;
     RawChunk raw = 4;  // the replayable trace, on a device that recorded it
+    ImuChunk imu = 5;  // a live stream chunk, written by the phone; the device never stores one
   }
 }
 
@@ -165,7 +181,7 @@ message RepRecord {
 //
 // Setting the clock is deliberately *not* an arm of `SyncRequest`. It is a state the app writes once per boot, and on the pipe it would queue behind the summaries it is meant to be there for — the device holds them until it has a clock (see `BootClock`).
 //
-// Recording a rep's raw trace **is** an arm, and the difference is what it holds up: dev mode decides what *future* reps store, so a message that queues behind a few summaries costs nothing, where the clock's would have delayed the very summaries it was needed for.
+// Dev mode **is** an arm, and the difference is what it holds up: it starts a stream that runs until it is turned off, so a message that queues behind a few summaries costs nothing, where the clock's would have delayed the very summaries it was needed for.
 
 // Which of a rep's two traces a request is about.
 enum TraceKind {
@@ -181,11 +197,13 @@ message TraceRequest {
   TraceKind kind = 4;
 }
 
-// Turn recording of raw traces on or off, until the device restarts.
+// Turn the live IMU stream on or off, until the device restarts.
 //
-// A dev switch, not a setting. A raw trace is the largest thing in the log — a full-rate nine-second rep is ~19 KB against the plotted trace's ~5 — and it exists so a session can be replayed offline, not so a release session gets bigger. It lives here rather than on a characteristic of its own because it is an operation rather than a value the app reads back: the client that sets it knows which way it set it, and the device forgets at every boot.
+// A dev switch, not a setting. The stream is every sample the sampler takes, sent as `ImuChunk` notifications on `Sync.Imu`; it is for watching a sensor or recording a session on the phone, not for a release session, and nothing about it is stored on the device. It lives here rather than on a characteristic of its own because it is an operation rather than a value the app reads back: the client that sets it knows which way it set it, and the device forgets at every boot.
 //
-// **Off at every boot and not persisted.** A switch left on by accident fills the log at three times the rate for as long as nobody notices; the cost of remembering it would be a reflash to turn it off.
+// **Off at every boot and not persisted.** A switch left on spends the link and the phone's battery for as long as nobody notices; the cost of remembering it would be a reflash to turn it off.
+//
+// A record-mode build still stores raw traces per rep in the log (`RawChunk`); that is a build flag, not this switch.
 message DevMode {
   bool enabled = 1;
 }
@@ -194,7 +212,7 @@ message DevMode {
 message SyncRequest {
   oneof body {
     TraceRequest trace = 1;  // answered by `SyncMessage.computed` or `.raw`, in chunks
-    DevMode dev_mode = 2;    // record raw traces from here on, or stop
+    DevMode dev_mode = 2;    // stream live IMU samples from here on, or stop
   }
 }
 

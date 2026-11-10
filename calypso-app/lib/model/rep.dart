@@ -14,7 +14,7 @@ const int tracePointsBudget = 128;
 extension RepSummaryX on pb.RepSummary {
   String? get uuid => uuidFromBytes(repUuid);
 
-  /// Whether this rep can be replayed from its own samples: a device records the raw trace, at full rate, only while a client has asked it to, and `rawChunks` is the answer.
+  /// Whether this rep can be replayed from its own samples: only a record-mode build stores the raw trace, and `rawChunks` is the answer.
   bool get hasRawTrace => rawChunks > 0;
 
   double get rollRangeDeg => rollMaxDeg - rollMinDeg;

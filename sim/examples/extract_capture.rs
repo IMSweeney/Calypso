@@ -37,6 +37,8 @@ fn main() {
             Ok(Record::Computed(c)) => prefix_matches(&c.rep_uuid, &wanted, &mut found),
             Ok(Record::Raw(r)) => prefix_matches(&r.rep_uuid, &wanted, &mut found),
             Ok(Record::Clock(_)) => true,
+            // A live IMU recording has no rep to match, so it is never part of an extracted rep capture.
+            Ok(Record::Imu(_)) => false,
             Err(e) => panic!("a record in the capture does not decode: {e:?}"),
         };
         if keep {

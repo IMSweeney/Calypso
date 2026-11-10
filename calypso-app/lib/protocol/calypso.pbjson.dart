@@ -278,6 +278,30 @@ final $typed_data.Uint8List rawChunkDescriptor = $convert.base64Decode(
     'ZXMYBCADKAsyFi5jYWx5cHNvLlRyYWNlUmF3UG9pbnRSB3NhbXBsZXMSIQoMdG90YWxfY2h1bm'
     'tzGAUgASgNUgt0b3RhbENodW5rcw==');
 
+@$core.Deprecated('Use imuChunkDescriptor instead')
+const ImuChunk$json = {
+  '1': 'ImuChunk',
+  '2': [
+    {'1': 'first_t_ms', '3': 1, '4': 1, '5': 13, '10': 'firstTMs'},
+    {'1': 'sample_rate_hz', '3': 2, '4': 1, '5': 13, '10': 'sampleRateHz'},
+    {'1': 'seq', '3': 3, '4': 1, '5': 13, '10': 'seq'},
+    {
+      '1': 'samples',
+      '3': 4,
+      '4': 3,
+      '5': 11,
+      '6': '.calypso.TraceRawPoint',
+      '10': 'samples'
+    },
+  ],
+};
+
+/// Descriptor for `ImuChunk`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List imuChunkDescriptor = $convert.base64Decode(
+    'CghJbXVDaHVuaxIcCgpmaXJzdF90X21zGAEgASgNUghmaXJzdFRNcxIkCg5zYW1wbGVfcmF0ZV'
+    '9oehgCIAEoDVIMc2FtcGxlUmF0ZUh6EhAKA3NlcRgDIAEoDVIDc2VxEjAKB3NhbXBsZXMYBCAD'
+    'KAsyFi5jYWx5cHNvLlRyYWNlUmF3UG9pbnRSB3NhbXBsZXM=');
+
 @$core.Deprecated('Use bootClockDescriptor instead')
 const BootClock$json = {
   '1': 'BootClock',
@@ -330,6 +354,15 @@ const RepRecord$json = {
       '9': 0,
       '10': 'raw'
     },
+    {
+      '1': 'imu',
+      '3': 5,
+      '4': 1,
+      '5': 11,
+      '6': '.calypso.ImuChunk',
+      '9': 0,
+      '10': 'imu'
+    },
   ],
   '8': [
     {'1': 'body'},
@@ -341,7 +374,8 @@ final $typed_data.Uint8List repRecordDescriptor = $convert.base64Decode(
     'CglSZXBSZWNvcmQSLwoHc3VtbWFyeRgBIAEoCzITLmNhbHlwc28uUmVwU3VtbWFyeUgAUgdzdW'
     '1tYXJ5EjEKCGNvbXB1dGVkGAIgASgLMhMuY2FseXBzby5UcmFjZUNodW5rSABSCGNvbXB1dGVk'
     'EioKBWNsb2NrGAMgASgLMhIuY2FseXBzby5Cb290Q2xvY2tIAFIFY2xvY2sSJQoDcmF3GAQgAS'
-    'gLMhEuY2FseXBzby5SYXdDaHVua0gAUgNyYXdCBgoEYm9keQ==');
+    'gLMhEuY2FseXBzby5SYXdDaHVua0gAUgNyYXcSJQoDaW11GAUgASgLMhEuY2FseXBzby5JbXVD'
+    'aHVua0gAUgNpbXVCBgoEYm9keQ==');
 
 @$core.Deprecated('Use traceRequestDescriptor instead')
 const TraceRequest$json = {
