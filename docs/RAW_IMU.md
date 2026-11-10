@@ -216,9 +216,10 @@ motion with no lead-in rest not storing a garbage rep.
 - The detector's history is 640 ms, not `MARGIN_MS`, and `MARGIN_MS` is 500 ms, not 200: the
   filter only calls a bar at rest after 400 ms of it, so a window with 200 ms of rest either
   side has nothing to anchor to.
-- `rep_state()` returns the state *and the moment it was taken*. The detector's history begins
-  when it is first fed, which is when the filter becomes ready, so a rep close behind a boot has
-  no filtered history `MARGIN_MS` back — and the window must start where the state does.
+- A detected rep answers with its own `DetectedRep`: the span, its turns, and the state and
+  moment the stored window starts at. The detector's history begins when it is first fed, which
+  is when the filter becomes ready, so a rep close behind a boot has no filtered history
+  `MARGIN_MS` back — and the window must start where the state does.
 - `T_REST_MS` is gone: the debounce a rest needs is the filter's, and doing it twice made a rest
   take 800 ms to recognise when it happens in 400.
 - `compute_rep` no longer detrends. The position is the filter's velocity integrated, the

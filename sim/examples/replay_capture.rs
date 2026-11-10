@@ -147,18 +147,17 @@ fn replay(w: &Window, from: FusionState, spans: bool) -> Replay {
         let v = filtered.state.velocity;
         out.peak_v = out.peak_v.max(magnitude(v));
         out.peak_h = out.peak_h.max((v[0] * v[0] + v[1] * v[1]).sqrt());
-        if let Some(span) = det.update(&filtered) {
-            let (from_ms, state) = det.rep_state();
-            let n = ring.copy_window(from_ms, span.end_ms, 0, MARGIN_MS, &mut window);
+        if let Some(rep) = det.update(&filtered) {
+            let n = ring.copy_window(rep.from_ms, rep.span.end_ms, 0, MARGIN_MS, &mut window);
             if n == 0 {
                 continue;
             }
             let mut trace = TraceBuf::new(&mut storage);
-            let summary = compute_rep(&window[..n], &state, Some(det.rep_turns()), &mut trace);
+            let summary = compute_rep(&window[..n], &rep.state, Some(rep.turns), &mut trace);
             if spans {
                 println!(
                     "  span {}..{}  rom {:.2} m  v_z {:+.2} m/s at the window's edge",
-                    span.start_ms, span.end_ms, summary.rom, state.velocity[2]
+                    rep.span.start_ms, rep.span.end_ms, summary.rom, rep.state.velocity[2]
                 );
                 let every = trace.len().div_ceil(16).max(1);
                 let z: Vec<String> = trace
@@ -168,7 +167,7 @@ fn replay(w: &Window, from: FusionState, spans: bool) -> Replay {
                     .collect();
                 println!("    z {}", z.join(" "));
             }
-            out.spans.push((span, summary.rom));
+            out.spans.push((rep.span, summary.rom));
         }
     }
     out.legs = det.legs();

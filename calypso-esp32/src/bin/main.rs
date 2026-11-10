@@ -825,6 +825,7 @@ async fn main(spawner: Spawner) -> ! {
                                     end_ms: t_ms,
                                 },
                                 Some((start_ms, state)),
+                                None,
                             ))
                         }
                         _ => None,
@@ -850,21 +851,25 @@ async fn main(spawner: Spawner) -> ! {
                                 end_ms: t_ms,
                             },
                             None,
+                            None,
                         ))
                     } else {
                         None
                     }
                 } else if fusion.ready() {
                     // The filter is fed every sample, so its offsets and its attitude keep up with the sensor; only the detector is gated, and it starts from a real rest whenever the gate opens.
-                    detector.update(&filtered).map(|span| (span, None))
+                    detector
+                        .update(&filtered)
+                        .map(|rep| (rep.span, Some((rep.from_ms, rep.state)), Some(rep.turns)))
                 } else {
                     None
                 };
-                if let Some((span, edge)) = window {
+                if let Some((span, edge, turns)) = window {
                     // Marks either side of each step between a rep closing and the sampler coming back, because the log's own timestamps are taken at the host end of the serial link and subtracting two of them is a range rather than a measurement.
                     let closed_at = Instant::now();
                     // Where the window begins and where the filter stood: the detector's answer for a rep it closed, the snapshot taken when the window opened for one that was recorded. A detected rep's is not always `MARGIN_MS` before it, because one close behind the boot has no history that far back.
-                    let (from_ms, state) = edge.unwrap_or_else(|| detector.rep_state());
+                    let (from_ms, state) =
+                        edge.unwrap_or((span.start_ms, calypso_core::fusion::FusionState::LEVEL));
                     let copied = samples
                         .borrow()
                         .copy_window(from_ms, span.end_ms, 0, MARGIN_MS, rep_window);
@@ -892,7 +897,7 @@ async fn main(spawner: Spawner) -> ! {
                         let turns = if RECORD_MODE || FAKE_REPS {
                             None
                         } else {
-                            Some(detector.rep_turns())
+                            turns
                         };
                         let mut sum = compute_rep(&rep_window[..copied], &state, turns, &mut rep_trace);
                         let computed_at = Instant::now();

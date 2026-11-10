@@ -70,6 +70,21 @@ pub struct RepTurns {
     pub zeros: [Option<Zero>; 3],
 }
 
+/// A detected rep: its span, the turns it was measured between, and where its window starts.
+///
+/// Everything the caller needs to store it, answered at the moment it closes rather than left in
+/// the detector to be read back before the next sample.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DetectedRep {
+    pub span: RepSpan,
+    pub turns: RepTurns,
+    /// Where the stored window starts, which is not always `MARGIN_MS` before the span: one close
+    /// behind a boot has no filtered history that far back.
+    pub from_ms: u32,
+    /// The filter state where that window starts, which is what the replay is seeded with.
+    pub state: FusionState,
+}
+
 /// An instant a replay may put its velocity back to zero, and which side of its sample the step belongs to.
 ///
 /// The distinction is one sample wide and it is not bookkeeping: the sample at an instant carries the acceleration of the step that *led* to it, so a bar that was already at rest as that step began has not been moved by it, and a bar that reached zero at it has.
@@ -104,25 +119,188 @@ impl Turn {
 /// A leg: the bar's travel between two turns, and what the bar carried into it.
 #[derive(Debug, Clone, Copy)]
 struct Leg {
-    start_ms: u32,
-    /// Where the bar's vertical speed reached zero at the turn that began it, where the cue that named that turn could say.
+    span: RepSpan,
+    /// Where the bar's vertical speed reached zero at the turns that began and ended it, where the
+    /// cue that named each could say.
     ///
-    /// Not always [`Leg::start_ms`], because a cue names a turn as well as it can rather than exactly: the edge is where the motion was cut, and this is the instant a replay may put its velocity back to zero without throwing away speed the bar still had.
-    start_zero: Option<Zero>,
-    end_ms: u32,
-    /// The same at the turn that ended it.
-    end_zero: Option<Zero>,
+    /// Not always the span's own edges, because a cue names a turn as well as it can rather than
+    /// exactly: the edge is where the motion was cut, and this is the instant a replay may put its
+    /// velocity back to zero without throwing away speed the bar still had.
+    zeros: [Option<Zero>; 2],
     /// Signed vertical displacement over the leg.
-    disp_z: f32,
+    travel: f32,
     /// Whether the bar was rising over the leg.
     ///
-    /// A turn the acceleration named says so by itself — it knows which way it stopped — and that is the answer to use, because the displacement is an integral and an integral is what drifted.
-    /// A turn the velocity named does not, and there the displacement's sign is what is left.
+    /// A turn the acceleration named says so by itself — it knows which way it stopped — and that
+    /// is the answer to use, because the displacement is an integral and an integral is what
+    /// drifted. A turn the velocity named does not, and there the displacement's sign is what is
+    /// left.
     up: bool,
     /// Whether the bar came to rest before this leg moved — a hold, not a grind.
     had_rest: bool,
     /// The filter state one [`MARGIN_MS`] before the leg started, and the moment it was taken.
     state: (u32, FusionState),
+}
+
+/// The bar's vertical acceleration turning, which names a turn exactly.
+#[derive(Debug, Clone, Copy)]
+struct TurningPoint {
+    next: Turn,
+    ext: f32,
+    ext_t: u32,
+    ext_z: f32,
+}
+
+/// A turn the acceleration named: where it happened, the height there, and which way the bar had
+/// been going.
+#[derive(Debug, Clone, Copy)]
+struct TurnAt {
+    t_ms: u32,
+    z: f32,
+    ended: Turn,
+}
+
+impl TurningPoint {
+    const fn new() -> Self {
+        TurningPoint {
+            next: Turn::Top,
+            ext: 0.0,
+            ext_t: 0,
+            ext_z: 0.0,
+        }
+    }
+
+    fn on_side(&self, a_z: f32) -> f32 {
+        match self.next {
+            Turn::Top => -a_z,
+            Turn::Bottom => a_z,
+        }
+    }
+
+    /// Track the extreme in the direction the next turn is expected from.
+    fn observe(&mut self, a_z: f32, t_ms: u32, pos_z: f32) {
+        let w = self.on_side(a_z);
+        if w > self.ext {
+            self.ext = w;
+            self.ext_t = t_ms;
+            self.ext_z = pos_z;
+        }
+    }
+
+    /// Whether the acceleration has come back far enough that the extreme is behind it.
+    fn confirmed(&self, a_z: f32) -> bool {
+        let w = self.on_side(a_z);
+        w <= self.ext - TURN_BACK && self.ext >= TURN_ACCEL
+    }
+
+    /// Take the confirmed turn, and start the other side from where the acceleration is now.
+    fn take(&mut self, a_z: f32, t_ms: u32, pos_z: f32) -> TurnAt {
+        let at = TurnAt {
+            t_ms: self.ext_t,
+            z: self.ext_z,
+            ended: self.next,
+        };
+        self.next = self.next.other();
+        self.ext = self.on_side(a_z);
+        self.ext_t = t_ms;
+        self.ext_z = pos_z;
+        at
+    }
+
+    /// Start a fresh stroke: a stroke that begins by rising stops rising first.
+    fn restart(&mut self, a_z: f32, t_ms: u32, pos_z: f32) {
+        self.next = Turn::Top;
+        self.ext = self.on_side(a_z);
+        self.ext_t = t_ms;
+        self.ext_z = pos_z;
+    }
+}
+
+/// The motion that opens a leg, and where it began.
+#[derive(Debug, Clone, Copy)]
+struct Onset {
+    since: Option<u32>,
+    z: f32,
+}
+
+impl Onset {
+    const fn new() -> Self {
+        Onset {
+            since: None,
+            z: 0.0,
+        }
+    }
+
+    /// The moment and height motion began at, once it has persisted for [`T_ON_MS`].
+    fn ready(&mut self, mag: f32, t_ms: u32, pos_z: f32) -> Option<(u32, f32)> {
+        if mag <= ACCEL_ON_THRESHOLD {
+            self.since = None;
+            return None;
+        }
+        let since = match self.since {
+            Some(since) => since,
+            None => {
+                self.since = Some(t_ms);
+                self.z = pos_z;
+                t_ms
+            }
+        };
+        (t_ms.saturating_sub(since) >= T_ON_MS).then_some((since, self.z))
+    }
+
+    fn clear(&mut self) {
+        self.since = None;
+    }
+}
+
+/// The speed falling under [`VEL_MIN`], which names a turn a stroke too gentle to move the
+/// acceleration gives.
+#[derive(Debug, Clone, Copy)]
+struct VelocityTurn {
+    moved: bool,
+    since: Option<u32>,
+    z: f32,
+}
+
+impl VelocityTurn {
+    const fn new() -> Self {
+        VelocityTurn {
+            moved: false,
+            since: None,
+            z: 0.0,
+        }
+    }
+
+    fn moved(&self) -> bool {
+        self.moved
+    }
+
+    /// The moment and height the speed fell below [`VEL_MIN`], once it has stayed there for
+    /// [`T_TURN_MS`].
+    fn update(&mut self, speed: f32, t_ms: u32, pos_z: f32) -> Option<(u32, f32)> {
+        if speed > VEL_MIN {
+            self.moved = true;
+            self.since = None;
+            return None;
+        }
+        if !self.moved {
+            return None;
+        }
+        let since = match self.since {
+            Some(since) => since,
+            None => {
+                self.since = Some(t_ms);
+                self.z = pos_z;
+                t_ms
+            }
+        };
+        (t_ms.saturating_sub(since) >= T_TURN_MS).then_some((since, self.z))
+    }
+
+    fn reset(&mut self) {
+        self.moved = false;
+        self.since = None;
+    }
 }
 
 /// Turning-point detector: **a rep is an out-and-back**.
@@ -138,7 +316,7 @@ struct Leg {
 ///
 /// **Everything here is in the world frame**, because the filter supplies one worth the name: tilt comes from the gyro and is pulled onto gravity continuously. The detector still integrates the acceleration into its own velocity rather than taking the filter's, so that the two can be compared on a real session before either is trusted.
 ///
-/// [`Detector::rep_state`] is the filter's state where the stored window begins, which is what [`compute_rep`] replays from.
+/// [`DetectedRep`] carries the filter state where the stored window begins, which is what [`compute_rep`] replays from.
 pub struct Detector {
     /// World-frame velocity, integrated here rather than taken from the filter.
     v: [f32; 3],
@@ -155,33 +333,21 @@ pub struct Detector {
     leg_pos0_z: f32,
     leg_state: (u32, FusionState),
     leg_had_rest: bool,
-    /// Whether the bar has moved since the leg opened. A turn only counts once it has.
-    moved: bool,
-    /// Which way the bar turns next, and the acceleration's extreme in that direction since the last turn, with the moment it was reached.
-    next_turn: Turn,
-    ext: f32,
-    ext_t: u32,
-    /// When the velocity first fell below [`VEL_MIN`], as a candidate turn.
-    still_since: Option<u32>,
-    /// When the acceleration first rose above [`ACCEL_ON_THRESHOLD`], as a candidate motion onset.
-    above_since: Option<u32>,
+    /// The acceleration's turning point, the motion onset, and the speed falling away: the three
+    /// cues, each keeping its own candidate.
+    turn: TurningPoint,
+    onset: Onset,
+    velocity_turn: VelocityTurn,
     /// Whether a rest has been seen and not yet claimed by a leg.
     gap_rest: bool,
     /// The last completed leg not yet paired into a rep.
     pending: Option<Leg>,
-    /// Recent sample times, filter states and heights, for naming a leg's start after the fact.
+    /// Recent sample times and filter states, for naming a leg's start after the fact.
     hist_t: [u32; HIST],
     hist_state: [FusionState; HIST],
-    hist_z: [f32; HIST],
     hist_head: usize,
     /// How much of the history has been written, so a lookup cannot read a slot that is still zero.
     hist_len: usize,
-    /// The filter state at the left edge of the rep that just closed, and the moment it was taken.
-    state: (u32, FusionState),
-    /// The turns the rep that just closed was measured between.
-    turns: RepTurns,
-    /// The first sample the detector was ever fed, which is as far back as its history goes.
-    first_t_ms: Option<u32>,
     /// Legs completed since the detector started. A leg is one stroke between two turns, and a rep is two of them, so this is the count that says whether detection got past its first stage.
     legs: u32,
 }
@@ -198,42 +364,17 @@ impl Detector {
             leg_pos0_z: 0.0,
             leg_state: (0, FusionState::LEVEL),
             leg_had_rest: false,
-            moved: false,
-            next_turn: Turn::Top,
-            ext: 0.0,
-            ext_t: 0,
-            still_since: None,
-            above_since: None,
+            turn: TurningPoint::new(),
+            onset: Onset::new(),
+            velocity_turn: VelocityTurn::new(),
             gap_rest: false,
             pending: None,
             hist_t: [0; HIST],
             hist_state: [FusionState::LEVEL; HIST],
-            hist_z: [0.0; HIST],
             hist_head: 0,
             hist_len: 0,
-            state: (0, FusionState::LEVEL),
-            turns: RepTurns {
-                start_ms: 0,
-                end_ms: 0,
-                zeros: [None; 3],
-            },
-            first_t_ms: None,
             legs: 0,
         }
-    }
-
-    /// The filter state at the left edge of the rep that just closed, captured as it began, and the sample it was taken at.
-    ///
-    /// That moment is the start of the stored window: everything before it describes motion the filter was not yet filtering, so a trace that reached further back would be replaying samples from a frame that does not exist.
-    pub fn rep_state(&self) -> (u32, FusionState) {
-        self.state
-    }
-
-    /// The turns the rep that just closed was measured between.
-    ///
-    /// Taken with [`Detector::rep_state`]: the state is where the replay starts, and these are where it is told the bar stopped, so the two together are everything [`compute_rep`] needs to not carry an integral across a rep the bar turned inside.
-    pub fn rep_turns(&self) -> RepTurns {
-        self.turns
     }
 
     /// Legs completed since the detector started.
@@ -258,8 +399,8 @@ impl Detector {
         self.leg_start.is_some()
     }
 
-    /// Feed one filtered sample; returns the span when a rep closes.
-    pub fn update(&mut self, f: &Filtered) -> Option<RepSpan> {
+    /// Feed one filtered sample; returns the rep when one closes.
+    pub fn update(&mut self, f: &Filtered) -> Option<DetectedRep> {
         let dt = self.step_ms(f.t_ms);
         let a = f.linear_accel;
         let mag = magnitude(a);
@@ -268,7 +409,7 @@ impl Detector {
             for k in 0..3 {
                 self.v[k] += a[k] * dt;
             }
-            if f.still && !self.moved {
+            if f.still && !self.velocity_turn.moved() {
                 for k in 0..3 {
                     // Only anchor the velocity while the bar is still: at the midpoint of a stroke the acceleration crosses zero while the velocity is at its peak.
                     self.v[k] += (0.0 - self.v[k]) * (dt / V_TAU_S);
@@ -278,10 +419,8 @@ impl Detector {
         }
         self.prev_vz = self.v[2];
 
-        self.first_t_ms.get_or_insert(f.t_ms);
         self.hist_t[self.hist_head] = f.t_ms;
         self.hist_state[self.hist_head] = f.state;
-        self.hist_z[self.hist_head] = self.pos_z;
         self.hist_head = (self.hist_head + 1) % HIST;
         self.hist_len = (self.hist_len + 1).min(HIST);
 
@@ -289,20 +428,19 @@ impl Detector {
         if f.still {
             self.gap_rest = true;
             if let Some(start) = self.leg_start.take() {
-                let moved = self.moved;
-                self.moved = false;
-                self.still_since = None;
+                let moved = self.velocity_turn.moved();
+                self.velocity_turn.reset();
                 if moved {
                     // **A rest ends a leg, and it is not only a kindness.** A stopped bar means the bar has stopped, whatever the integrated speed says; on a real capture the speed can sit above `VEL_MIN` for a whole window because the integration has drifted, and a leg that could only end on a speed would run from the first rep to the last and store nothing. The leg ends where the bar stopped, and the next one starts when it moves again.
-                    let disp_z = self.pos_at_z(f.t_ms) - self.leg_pos0_z;
+                    let travel = self.pos_z - self.leg_pos0_z;
                     let leg = Leg {
-                        start_ms: start,
-                        start_zero: self.leg_zero,
-                        end_ms: f.t_ms,
-                        // No anchor: a rest is the one place the filter stops the velocity itself, and it has been pulling at it since long before this sample. An anchor here would add its own timing error to a zero the filter already has — and it lands on the first sample of the patch, where a stroke slow enough to look still for 400 ms is still genuinely moving.
-                        end_zero: None,
-                        disp_z,
-                        up: disp_z > 0.0,
+                        span: RepSpan {
+                            start_ms: start,
+                            end_ms: f.t_ms,
+                        },
+                        zeros: [self.leg_zero, None],
+                        travel,
+                        up: travel > 0.0,
                         had_rest: self.leg_had_rest,
                         state: self.leg_state,
                     };
@@ -316,133 +454,108 @@ impl Detector {
         if f.still && self.leg_start.is_none() && self.pending.is_none() && absf(self.pos_z) > 2.0 {
             let shift = self.pos_z;
             self.pos_z -= shift;
-            for z in self.hist_z.iter_mut() {
-                *z -= shift;
-            }
+            self.turn.ext_z -= shift;
+            self.onset.z -= shift;
+            self.velocity_turn.z -= shift;
         }
 
         let speed = self.vertical_speed();
 
         // The bar turns where its **vertical acceleration** does — a reading, and the one signal here that cannot walk away. The extreme comes first; the turn is named once the acceleration has come back far enough that the extreme is behind it.
-        let w = self.on_side(a[2]);
-        if w > self.ext {
-            self.ext = w;
-            self.ext_t = f.t_ms;
-        }
-        let turned = w <= self.ext - TURN_BACK && self.ext >= TURN_ACCEL;
+        self.turn.observe(a[2], f.t_ms, self.pos_z);
 
         if self.leg_start.is_none() {
             // Looking for a motion onset, which is only needed at the start of a stream: every leg after the first begins where the previous one turned.
-            if mag > ACCEL_ON_THRESHOLD {
-                let since = *self.above_since.get_or_insert(f.t_ms);
-                if f.t_ms.saturating_sub(since) >= T_ON_MS {
-                    // An onset is where the bar started, not where it reversed, so the bar is still at rest as that sample's step begins — a different side of the sample from a turn, and the whole reason [`Zero`] has two of them.
-                    self.open_leg(since, Some(Zero::Rest(since)));
-                    self.leg_had_rest = self.gap_rest;
-                    self.gap_rest = false;
-                    self.above_since = None;
-                    // Off a rest the first turnaround is the far end of this stroke: a stroke that begins by rising stops rising first. One that begins by falling names its own start as a trough and has that leg dropped for being too short to be half a rep, which costs the first leg and nothing else.
-                    self.next_turn = Turn::Top;
-                    self.ext = self.on_side(a[2]);
-                    self.ext_t = f.t_ms;
-                }
-            } else {
-                self.above_since = None;
+            if let Some((since, z)) = self.onset.ready(mag, f.t_ms, self.pos_z) {
+                // An onset is where the bar started, not where it reversed, so the bar is still at rest as that sample's step begins — a different side of the sample from a turn, and the whole reason [`Zero`] has two of them.
+                self.open_leg(since, Some(Zero::Rest(since)), z);
+                self.leg_had_rest = self.gap_rest;
+                self.gap_rest = false;
+                self.onset.clear();
+                self.turn.restart(a[2], f.t_ms, self.pos_z);
             }
             return None;
         }
 
-        if turned {
-            let (at, ended) = (self.ext_t, self.next_turn);
-            self.take_turn(a[2], f.t_ms);
+        if self.turn.confirmed(a[2]) {
+            let at = self.turn.take(a[2], f.t_ms, self.pos_z);
             // The extreme of the vertical acceleration is where the bar stopped decelerating and started back, which is the instant its speed was zero: the cue that names that instant exactly, and the reason a replay is anchored here.
-            return self.close_leg(at, Some(Zero::Turn(at)), Some(ended == Turn::Top));
+            return self.close_leg(
+                at.t_ms,
+                Some(Zero::Turn(at.t_ms)),
+                Some(at.ended == Turn::Top),
+                at.z,
+            );
         }
 
         // A leg also ends when the velocity has sat under VEL_MIN for T_TURN_MS, which is the only cue a stroke too gentle to move the acceleration gives.
-        if speed > VEL_MIN {
-            self.moved = true;
-            self.still_since = None;
-        } else if self.moved {
-            let since = *self.still_since.get_or_insert(f.t_ms);
-            if f.t_ms.saturating_sub(since) >= T_TURN_MS {
-                self.take_turn(a[2], f.t_ms);
-                // **This cue cannot say where the speed reached zero.** `since` is where it fell under [`VEL_MIN`] and the confirmation is `T_TURN_MS` later, and the stop is somewhere between: the bar still has a seventh of a metre per second at one end and may have turned at the other. Zeroing a replay's velocity anywhere in there would trade a bounded drift for an error of the same size, so it is not recorded and the replay is left unanchored across this turn.
-                return self.close_leg(since, None, None);
-            }
+        if let Some((since, z)) = self.velocity_turn.update(speed, f.t_ms, self.pos_z) {
+            self.turn.take(a[2], f.t_ms, self.pos_z);
+            // **This cue cannot say where the speed reached zero.** `since` is where it fell under [`VEL_MIN`] and the confirmation is `T_TURN_MS` later, and the stop is somewhere between: the bar still has a seventh of a metre per second at one end and may have turned at the other. Zeroing a replay's velocity anywhere in there would trade a bounded drift for an error of the same size, so it is not recorded and the replay is left unanchored across this turn.
+            return self.close_leg(since, None, None, z);
         }
         None
-    }
-
-    /// The vertical acceleration on the side the next turn is expected from.
-    fn on_side(&self, a_z: f32) -> f32 {
-        match self.next_turn {
-            Turn::Top => -a_z,
-            Turn::Bottom => a_z,
-        }
-    }
-
-    /// Take a turn: the next one is the other way, and the acceleration starts again from where it is now, so the extreme just used cannot name a second turn.
-    fn take_turn(&mut self, a_z: f32, t_ms: u32) {
-        self.next_turn = self.next_turn.other();
-        self.ext = self.on_side(a_z);
-        self.ext_t = t_ms;
     }
 
     /// Close the open leg at `t_ms` and open the next one there, answering with a rep if this half finished one.
     ///
     /// `up` is the direction when the cue that found the turn knew it, and `None` when the travel is the only thing that can say.
-    fn close_leg(&mut self, t_ms: u32, zero: Option<Zero>, up: Option<bool>) -> Option<RepSpan> {
+    fn close_leg(
+        &mut self,
+        t_ms: u32,
+        zero: Option<Zero>,
+        up: Option<bool>,
+        z0: f32,
+    ) -> Option<DetectedRep> {
         let start = self.leg_start.expect("a leg ends at a turn");
-        let disp_z = self.pos_at_z(t_ms) - self.leg_pos0_z;
+        let travel = z0 - self.leg_pos0_z;
         let leg = Leg {
-            start_ms: start,
-            start_zero: self.leg_zero,
-            end_ms: t_ms,
-            end_zero: zero,
-            disp_z,
-            up: up.unwrap_or(disp_z > 0.0),
+            span: RepSpan {
+                start_ms: start,
+                end_ms: t_ms,
+            },
+            zeros: [self.leg_zero, zero],
+            travel,
+            up: up.unwrap_or(travel > 0.0),
             had_rest: self.leg_had_rest,
             state: self.leg_state,
         };
         // The bar turns, it does not restart: the next leg begins where this one ended, so a turnaround with no pause either side is still two legs.
-        self.open_leg(t_ms, zero);
+        self.open_leg(t_ms, zero, z0);
         self.leg_had_rest = false;
         self.legs += 1;
         self.pair(leg)
     }
 
     /// Start a leg at `t_ms`, with the height and the filter state the bar had there.
-    fn open_leg(&mut self, t_ms: u32, zero: Option<Zero>) {
+    fn open_leg(&mut self, t_ms: u32, zero: Option<Zero>, z0: f32) {
         self.leg_start = Some(t_ms);
         self.leg_zero = zero;
-        self.leg_pos0_z = self.pos_at_z(t_ms);
+        self.leg_pos0_z = z0;
         self.leg_state = self.state_at(t_ms.saturating_sub(MARGIN_MS));
-        self.moved = false;
-        self.still_since = None;
+        self.velocity_turn.reset();
     }
 
     /// Pair a completed leg with the pending one.
     ///
     /// Opposite directions, both past [`MIN_ROM_M`], is a rep. The same direction with no rest between them is one stroke split by a stall, so the halves fuse — the travel is the sum, which is what keeps a grind reading as one rep. The same direction *after* a rest is a one-way push (an unrack), and the older leg is the one to drop.
-    fn pair(&mut self, leg: Leg) -> Option<RepSpan> {
-        let mag = leg.disp_z.abs();
+    fn pair(&mut self, leg: Leg) -> Option<DetectedRep> {
         let Some(p) = self.pending else {
-            if mag >= MIN_ROM_M {
+            if leg.travel.abs() >= MIN_ROM_M {
                 self.pending = Some(leg);
             }
             return None;
         };
-        let opposite = p.up != leg.up;
 
         // A stall that reaches no rest continues the stroke it interrupted, so its travel belongs to that stroke whatever size it is.
-        if !opposite && !leg.had_rest {
+        if p.up == leg.up && !leg.had_rest {
             self.pending = Some(Leg {
-                start_ms: p.start_ms,
-                start_zero: p.start_zero,
-                end_ms: leg.end_ms,
-                end_zero: leg.end_zero,
-                disp_z: p.disp_z + leg.disp_z,
+                span: RepSpan {
+                    start_ms: p.span.start_ms,
+                    end_ms: leg.span.end_ms,
+                },
+                zeros: [p.zeros[0], leg.zeros[1]],
+                travel: p.travel + leg.travel,
                 up: p.up,
                 had_rest: p.had_rest,
                 state: p.state,
@@ -451,25 +564,28 @@ impl Detector {
         }
 
         // **A leg under [`MIN_ROM_M`] is not a stroke, and it does not consume one.** A bar settling a few centimetres at a turnaround is motion in the opposite direction and it can reach `VEL_MIN`, so it arrives here as a leg; letting it pair — or letting it replace the leg before it, which is what the same-direction case used to do — throws away the rep it followed. It is dropped, and what was pending keeps waiting.
-        if mag < MIN_ROM_M {
+        if leg.travel.abs() < MIN_ROM_M {
             return None;
         }
 
-        if opposite {
+        if p.up != leg.up {
             let span = RepSpan {
-                start_ms: p.start_ms,
-                end_ms: leg.end_ms,
+                start_ms: p.span.start_ms,
+                end_ms: leg.span.end_ms,
             };
             self.pending = None;
-            self.state = p.state;
             if span.duration_ms() >= MIN_REP_MS && span.duration_ms() <= MAX_REP_MS {
                 // The pending leg ended at the turn the second one began at, so its end is the turnaround — which is the instant a replay can put its velocity back to zero.
-                self.turns = RepTurns {
-                    start_ms: p.start_ms,
-                    end_ms: leg.end_ms,
-                    zeros: [p.start_zero, p.end_zero, leg.end_zero],
-                };
-                return Some(span);
+                return Some(DetectedRep {
+                    span,
+                    turns: RepTurns {
+                        start_ms: span.start_ms,
+                        end_ms: span.end_ms,
+                        zeros: [p.zeros[0], p.zeros[1], leg.zeros[1]],
+                    },
+                    from_ms: p.state.0,
+                    state: p.state.1,
+                });
             }
             return None;
         }
@@ -477,18 +593,6 @@ impl Detector {
         // The same direction after a rest is a one-way push, and the older leg is the finished one.
         self.pending = Some(leg);
         None
-    }
-
-    /// The height at the newest sample at or before `t_ms`.
-    fn pos_at_z(&self, t_ms: u32) -> f32 {
-        let mut newest: Option<(u32, f32)> = None;
-        for i in self.history() {
-            let t = self.hist_t[i];
-            if t <= t_ms && newest.is_none_or(|(bt, _)| t > bt) {
-                newest = Some((t, self.hist_z[i]));
-            }
-        }
-        newest.map_or(self.pos_z, |(_, z)| z)
     }
 
     /// The filter state at the newest sample at or before `t_ms`, or the oldest one held if `t_ms` is older than any of them.
@@ -504,7 +608,7 @@ impl Detector {
                 newest = Some((t, self.hist_state[i]));
             }
         }
-        newest.or(oldest).unwrap_or(self.state)
+        newest.or(oldest).unwrap_or((0, FusionState::LEVEL))
     }
 
     /// The slots the history holds, oldest first — the ring is not contiguous and may not be full.
@@ -616,7 +720,7 @@ impl msg::RepSummary {
 
 /// Compute the trace and summary for one rep by replaying the filter over its window.
 ///
-/// `samples` should be the detector's span plus margin at each end, and `from` the filter state the detector captured where that window begins ([`Detector::rep_state`]). The filter is deterministic from that state, so the same window and the same state always give the same summary — which is what makes a stored trace re-derivable.
+/// `samples` should be the detector's span plus margin at each end, and `from` the state the detector answered with where that window begins ([`DetectedRep::state`]). The filter is deterministic from that state, so the same window and the same state always give the same summary — which is what makes a stored trace re-derivable.
 ///
 /// The trace's position is the filter's velocity integrated, and that integral is put back to zero twice over: wherever the filter sees the bar still, and at every turn `turns` names. Stillness alone is not enough on a real set — the window starts from a state that already carries the draft of the last one, and a stroke with no pause in it gives the filter nothing to anchor to between reps. A turn is the one instant the bar's vertical speed is genuinely zero whatever the estimate says, which is what bounds the drift to the inside of one leg.
 ///

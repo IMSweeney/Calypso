@@ -34,17 +34,16 @@ fn reps(w: &Window, from: FusionState) -> Vec<msg::RepSummary> {
     for s in &w.samples {
         ring.push(*s);
         let filtered = fusion.update(s);
-        if let Some(span) = det.update(&filtered) {
-            let (from_ms, state) = det.rep_state();
-            let n = ring.copy_window(from_ms, span.end_ms, 0, MARGIN_MS, &mut window);
+        if let Some(rep) = det.update(&filtered) {
+            let n = ring.copy_window(rep.from_ms, rep.span.end_ms, 0, MARGIN_MS, &mut window);
             if n == 0 {
                 continue;
             }
             let mut trace = TraceBuf::new(&mut storage);
             out.push(compute_rep(
                 &window[..n],
-                &state,
-                Some(det.rep_turns()),
+                &rep.state,
+                Some(rep.turns),
                 &mut trace,
             ));
         }

@@ -482,7 +482,7 @@ value "at the left edge" has to capture it **when the edge happens**, not when t
 closes.
 
 **Fix.** A leg records `v0` as it opens (`Detector::open_leg`), not at the pair. The same
-trap applies to any new field read out of `hist_*`.
+trap applies to anything else read out of the state history.
 
 ### A fake rep's window is not the span it claims
 
@@ -497,8 +497,9 @@ at the span's end.
 
 **Fix.** A window nothing detected has to name its own start: `--features record-mode` does,
 because it opens each window itself and keeps the filter state from that moment. The fake-reps
-branch is the one caller left asking a detector that never ran, and its trace stays offset until
-it does the same.
+branch now does too: a detected rep answers with a `DetectedRep` carrying its own start, and a
+window nothing detected starts at its span's own start rather than asking a detector that never
+ran.
 
 ### A rep window must not begin inside a rest
 

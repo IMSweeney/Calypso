@@ -110,15 +110,14 @@ pub fn detect_and_trace(
         if !fusion.ready() {
             continue;
         }
-        if let Some(span) = det.update(&filtered) {
+        if let Some(rep) = det.update(&filtered) {
             // The window starts where the filter state does, which is not always `MARGIN_MS` before the rep: one close behind the boot has no filtered history that far back.
-            let (from_ms, state) = det.rep_state();
-            let n = ring.copy_window(from_ms, span.end_ms, 0, MARGIN_MS, &mut window);
+            let n = ring.copy_window(rep.from_ms, rep.span.end_ms, 0, MARGIN_MS, &mut window);
             if n == 0 {
                 continue;
             }
             let mut trace = TraceBuf::new(&mut storage);
-            let mut summary = compute_rep(&window[..n], &state, Some(det.rep_turns()), &mut trace);
+            let mut summary = compute_rep(&window[..n], &rep.state, Some(rep.turns), &mut trace);
             summary.set_config(calypso_core::pb::config_message(
                 &calypso_core::sampler::RepConfig::of(
                     calypso_core::sampler::SAMPLE_RATE_HZ,
