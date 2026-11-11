@@ -24,6 +24,8 @@ target
 dist/**/*.bin
 .DS_Store
 
-# A session's log is a transcript of it, not an artifact worth keeping: the archive
-# beside it is the data.
+# A capture is recorded data, not source: the bytes live in the bucket (`tools/captures.sh`) and the
+# repository keeps what describes them, in `captures/captures.json`.
+captures/*.pblog
+captures/*.bin
 captures/*.log

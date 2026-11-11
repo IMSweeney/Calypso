@@ -1,0 +1,60 @@
+{
+  "about": "What each capture in the bucket is. A capture is recorded data rather than source, so the bytes live in the object store and only this file, the session notes beside it, and the plots drawn from them are in git. `tools/captures.sh` moves the bytes; `sim`'s tests read them through `calypso_sim::captures`.",
+  "captures": [
+    {
+      "name": "working-sets-2026-11-10.pblog",
+      "recorded": "2026-11-10",
+      "kind": "live-stream",
+      "exercise": "bench press",
+      "notes": "session-2026-11-10-bench.md",
+      "about": "The first real session recorded through the live stream: a bar-only warmup of ten reps and six loaded sets, the device mounted on the bar, the detector off for the whole recording. Every sample the device took is here.",
+      "expected": {
+        "sets": [
+          { "reps": 10, "load_lb": null },
+          { "reps": 5, "load_lb": 135 },
+          { "reps": 5, "load_lb": 155 },
+          { "reps": 5, "load_lb": 165 },
+          { "reps": 5, "load_lb": 165 },
+          { "reps": 4, "load_lb": 165 },
+          { "reps": 4, "load_lb": 155 }
+        ]
+      }
+    },
+    {
+      "name": "deadlift-2026-11-10.pblog",
+      "recorded": "2026-11-10",
+      "kind": "live-stream",
+      "exercise": "deadlift",
+      "notes": "session-2026-11-10-deadlift.md",
+      "about": "The same device on the same boot, recorded straight after the bench session: a warmup and five sets of five. `seq` continues from the bench recording because the link never dropped.",
+      "expected": {
+        "sets": [
+          { "reps": 5, "load_lb": 135 },
+          { "reps": 5, "load_lb": 185 },
+          { "reps": 5, "load_lb": 185 },
+          { "reps": 5, "load_lb": 185 },
+          { "reps": 5, "load_lb": 185 },
+          { "reps": 5, "load_lb": 185 }
+        ]
+      }
+    },
+    {
+      "name": "sets-2026-11-04.pblog",
+      "recorded": "2026-11-04",
+      "kind": "device-log",
+      "about": "A `record-mode` build's stored windows, off the device's flash: the three still mountings and the hand-held sets that `sim/tests/real_capture.rs` replays. Stored windows, not a stream, so nothing here can be replayed through the detector as a whole session."
+    },
+    {
+      "name": "stationary-2026-11-03.pblog",
+      "recorded": "2026-11-03",
+      "kind": "device-log",
+      "about": "The same build with the device sitting still: four stored windows and no motion. The control for what a quiet sensor looks like to the filter."
+    },
+    {
+      "name": "history-2026-10-27.pblog",
+      "recorded": "2026-10-27",
+      "kind": "device-archive",
+      "about": "The app's archive off the phone, before raw traces were recorded: summaries and plotted traces only, and no boot clock, so its reps carry no wall-clock time."
+    }
+  ]
+}

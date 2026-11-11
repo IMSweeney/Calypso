@@ -2,21 +2,26 @@
 //!
 //! This is the one place a stored window is judged, and it is here because a synthetic stream cannot make the motion that broke the old turn rule. A stroke is measured through an attitude the filter can only correct while the bar is still, so a set with almost no rest carries a tilt that the integrated velocity turns into metres per second — and a turn read off a speed that never comes back to zero is a turn that never happens. On this capture it stored nothing at all from four reps, each time.
 //!
-//! The windows are `captures/sets-2026-11-04.pblog`: three still ones and these two.
+//! The windows are `captures/sets-2026-11-04.pblog`: three still ones and these two. A capture is
+//! recorded data, so the bytes are in the bucket and this reads them through `calypso_sim::captures`
+//! — from `captures/` if it has been pulled, and from `CAPTURES_REMOTE` if not. Both tests are
+//! `#[ignore]`d for that reason: a suite that needs the network to answer is not one you can run on a
+//! train, so they are run on purpose with `cargo test -- --ignored`.
 
 use calypso_core::fusion::{Fusion, FusionState};
 use calypso_core::pb::msg;
 use calypso_core::rep::{compute_rep, Detector, TraceBuf, TracePoint, MARGIN_MS};
 use calypso_core::sampler::{Sample, SampleRing};
+use calypso_sim::captures;
 use calypso_sim::fixtures::{capture_windows, Window};
 
-const DUMP: &str = "../captures/sets-2026-11-04.pblog";
+const DUMP: &str = "sets-2026-11-04.pblog";
 const RING: usize = 2048;
 const WINDOW_SAMPLES: usize = 1200;
 const TRACE_POINTS: usize = 256;
 
 fn windows() -> Vec<Window> {
-    let bytes = std::fs::read(DUMP).expect("the capture reads");
+    let bytes = captures::bytes(DUMP);
     let (windows, truncated) = capture_windows(&bytes);
     assert!(!truncated, "{DUMP}: torn at the end");
     windows
@@ -55,6 +60,7 @@ fn reps(w: &Window, from: FusionState) -> Vec<msg::RepSummary> {
 ///
 /// The second half is the point of the rule: the capture's own state carries 8.1 and 15.0 m/s, which is what the un-corrected attitude integrated over the set before it. A detector that needs that number to be right to find a turn is a detector that only works on a bar that never moves for long, so the same window replayed from rest has to answer the same way.
 #[test]
+#[ignore = "reads the capture from the bucket"]
 fn a_hand_held_set_comes_back_as_the_reps_it_was() {
     let windows = windows();
     for (prefix, v0) in [("bb872722", 8.1f32), ("ebb17161", 15.0)] {
@@ -102,6 +108,7 @@ fn a_hand_held_set_comes_back_as_the_reps_it_was() {
 ///
 /// The three still windows of the same session are the control: the filter never ran away on them, and nothing in them moves enough to turn.
 #[test]
+#[ignore = "reads the capture from the bucket"]
 fn a_still_window_still_holds_nothing() {
     let windows = windows();
     for prefix in ["8c862e0c", "accb9c08", "9ed28b16"] {

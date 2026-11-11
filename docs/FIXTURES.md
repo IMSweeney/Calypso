@@ -29,6 +29,37 @@ stored looks like.
 A dump may end mid-record (a torn write, or a capture interrupted). A reader must
 report that rather than ignore it, and still return the records before it.
 
+## The captures
+
+A capture is not a fixture. A capture is a whole recording — a session, or a boot, or a
+device's own archive — and a fixture is what a test or a plot needs out of one. The
+bytes of a capture are recorded data: they are far too big to be source, they never
+change, and they therefore live in an object store rather than in the repository. What
+the repository keeps is `captures/captures.json`, which says what each one is, the
+session notes beside it, and the plots drawn from them.
+
+`tools/captures.sh` moves the bytes, and takes the store from `CAPTURES_REMOTE` — an
+`mc` alias and a bucket, so no bucket name becomes a fact in here:
+
+```sh
+export CAPTURES_REMOTE=r2/calypso-captures
+tools/captures.sh ls
+tools/captures.sh push                      # every capture in `captures/`
+tools/captures.sh pull working-sets-2026-11-10.pblog
+```
+
+`calypso_sim::captures` reads the manifest and a capture's bytes, from `captures/` if it
+has been pulled and out of the bucket if not, so a test or an example names a capture
+and never asks where it is. Everything that reads one is `#[ignore]`d anyway: a suite
+that needs the network to answer is not one that runs on a train, so those are run on
+purpose with `cargo test -- --ignored`.
+
+The manifest also carries what a session did — the reps in each set — for the captures
+where somebody wrote that down at the time. `sim/tests/captures.rs` replays such a
+recording through the real filter and detector and asserts the sets it closes are the
+sets that were performed, and no others. That is what makes a detector change answerable
+against a real session instead of against a fixture.
+
 ## Generating them
 
 The generators are a crate of their own, `sim`, which depends on `calypso-core` and
@@ -68,8 +99,9 @@ In the app, fixtures are consumed through:
    file nobody reads.
 
 **A real capture**: with the app connected to a device, the archive file
-(`history.pblog` in the app support directory) *is* a `.pblog`. Copy it into
-`assets/fixtures/` and commit.
+(`history.pblog` in the app support directory) *is* a `.pblog`. The capture itself is recorded
+data, so it goes to the bucket with an entry in `captures/captures.json`; what is committed is a
+cut of it.
 
 A session is far more interesting than a whole file is small, so a fixture is usually a
 few reps pulled out of one:
@@ -83,10 +115,9 @@ cargo run --example extract_capture -- \
 Every record is copied byte for byte, so a fixture made this way carries the same bytes
 the device wrote. Each prefix must match a rep or the command fails.
 
-**`real-deadlift` is the one that is**, and it is one rep rather than a session: the
-first rep the device stored after the sampler's timeline was fixed — a 5.7 s deadlift,
-285 points with 19–21 ms between them, so its window is motion the device measured. It is
-read by `sim/tests/real_capture.rs`.
+**The one that is** is `captures/sets-2026-11-04.pblog`: three still windows and two
+hand-held sets, replays of motion the device measured rather than motion a generator
+made. `sim/tests/real_capture.rs` is what reads it.
 
 An older session's windows were all removed again, and the reason is worth keeping: a
 stored window is not a stream. The sampler that recorded them stalled for 2.2 s at a time
@@ -97,20 +128,20 @@ gap, and the first thing it did was make a detector change look worse than it wa
 
 A clean timeline is necessary but not sufficient. The window is the motion span with
 `MARGIN_MS` asked for before it and whatever had been sampled after it — the tail is cut
-at the close, so its margin is a few samples at most — and on `real-deadlift` even the
-200 ms before the onset are inside motion. Nothing replays such a window as a stream: a
-detector fed it cold closes no span, and `compute_rep` re-run over its own trace reads
-1.10 m where the summary stored 0.94, because the trace keeps every second sample and
-this motion's travel depends on the step it is integrated at.
+at the close, so its margin is a few samples at most — and on a window cut tight to its
+motion even the 200 ms before the onset are inside it. Nothing replays such a window as a
+stream: a detector fed it cold closes no span, and `compute_rep` re-run over its own trace
+reports different travel than the summary stored, because the trace keeps every second
+sample and travel depends on the step it is integrated at.
 
-So audit a session with `replay_dump` — it labels every window with the timeline it found
+So audit a session with `raw_dump` — it labels every window with the timeline it found
 and the peak acceleration inside it — and extract only what that says is sound. A whole
 session with its set counts known on the day is still what the detector wants
-([`ROADMAP.md`](../ROADMAP.md), "first real device capture"). The device's own log does
+([`ROADMAP.md`](../ROADMAP.md)). The device's own log does
 not need the app: `espflash read-flash 0x190000 0x270000 log.bin`, then `cargo run
---example device_log -- log.bin --dump <out.pblog> <uuid-prefix>`, which is how
-`real-deadlift` was made.
+--example device_log -- log.bin --dump <out.pblog> <uuid-prefix>`, which is how a session
+only the device saw becomes a `.pblog` here.
 
-**Replaying one through the detector**: from `sim/`, `cargo run --example replay_dump
+**Replaying one through the detector**: from `sim/`, `cargo run --example replay_capture
 -- <path.pblog>` prints the spans today's detector finds in each stored window, and
 whether `MIN_ROM_M` would store them.

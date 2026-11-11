@@ -6,9 +6,11 @@ Measure the detector's performance, and keep measuring it while the detector cha
 
 Three kinds of evidence, and the suite is only worth having if it takes all three:
 
-- **Real measurements** — the labelled session in `captures/history-2026-10-27.pblog`. The
-  only ground truth about what a rep actually looks like, and the answer to "did a change
-  make a real rep worse".
+- **Real measurements** — the labelled session in `captures/history-2026-10-27.pblog`, and
+  the sessions recorded through the live stream beside it. The only ground truth about what
+  a rep actually looks like, and the answer to "did a change make a real rep worse". A
+  capture is recorded data and lives in a bucket rather than in git
+  ([`FIXTURES.md`](FIXTURES.md)), so it is pulled by name before a test reads it.
 - **Generated fixtures** — synthetic reps swept over a range of scenarios, so what is
   detectable is a curve we can draw rather than the three shapes we happened to capture.
   What is stored is the generator, not the output: a scenario is built in the test or the

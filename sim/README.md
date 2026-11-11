@@ -11,7 +11,8 @@ cannot describe motion the device would produce differently.
 ```sh
 cargo test
 cargo run --example gen_fixtures     # writes calypso-app/assets/fixtures/
-cargo run --example replay_dump -- <path.pblog>
+cargo run --example replay_capture -- <capture.pblog>   # stored windows, through the detector
+cargo run --example replay_stream -- <capture.pblog>    # a recorded stream, through the detector
 cargo run --example detector_report # every phase, counted
 cargo run --example detector_map -- bench        # draw where a synthetic rep is stored
 cargo run --example false_positive_map           # draw where motion that is not a rep is stored

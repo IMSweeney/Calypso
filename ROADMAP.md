@@ -150,11 +150,15 @@ Where Calypso is and what is left. Feature documentation lives in
 - [ ] **A session with its set counts known on the day.** The three real reps checked in
       from a bench session were removed again because every window in it carried a jump in
       its sample times, so a test against them pinned numbers that came from bridging a
-      2.2 s gap ([docs/FIXTURES.md](docs/FIXTURES.md)). The sampler's timeline is fixed,
-      and the first rep stored after that is in the fixture set as `real-deadlift`
-      (`sim/tests/real_capture.rs`): one clean deadlift, 285 points, no hole. What one rep
-      cannot say is whether the detector caught a *set* — that needs a session whose rep
-      count is known before it starts, so a miss is a count rather than an inference.
+      2.2 s gap ([docs/FIXTURES.md](docs/FIXTURES.md)). The sampler's timeline is fixed and
+      the windows a real session stores now are in `captures/sets-2026-11-04.pblog`, which
+      `sim/tests/real_capture.rs` replays — but a handful of windows cannot say whether the
+      detector caught a *set*. Two sessions have now been recorded for that: a bench session
+      and a deadlift one, through the live stream with the detector off, every set written
+      down as it was performed in `captures/captures.json`. Replaying them
+      ([`sim/tests/captures.rs`](sim/tests/captures.rs)) finds every set where it happened and
+      closes too many reps in one — a rep arriving as two strokes, and the bar being handled
+      between sets closing spans of its own. The rule is what is left; the counts are the test.
 - [ ] **Whether the frame can be trusted, now that a rep is measured on it.** ROM is
       the vertical travel on Z rather than the biggest excursion, because Z is the only
       axis pinned to gravity — a rep's horizontal range is the estimate's error, not the
