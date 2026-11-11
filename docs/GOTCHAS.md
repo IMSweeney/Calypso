@@ -323,6 +323,30 @@ frame, and a real rotation moves it through. A set now teaches the gyro between 
 ever being called at rest, and the attitude is pulled onto gravity gently while moving as well
 as hard at rest. The regression is `a_gyro_bias_that_arrives_during_a_set_does_not_walk_the_ground`.
 
+### A stillness gate built on one reading calls a real bar moving
+
+**Symptom.** On the live-stream captures the filter integrated for the whole session: the
+velocity reached 20 m/s, 18 of it horizontal, on a bar that never went sideways. Stored traces
+came out 40–100 % too deep and did not end near where they began, and the accelerometer's offset
+never settled — a rest read a tenth of a m/s² off in one session and three tenths in the other,
+which is a metre of drift inside a rep.
+
+**Cause.** Stillness was asked of one sample at a time: the raw reading's spread across 400 ms
+under 0.15 m/s², `|‖f‖ − g|` under 0.12, and the instantaneous rate under 2 dps. A bar in a hand
+fails all three at a real rest — the reading swings 0.3–0.5 m/s² peak to peak and the rate by a
+few dps — so the gate opened on a rack and never during a set, and the zero-velocity update that
+bounds the velocity with it never ran. The same spread test was what the accelerometer's offset
+was learned from, and a stroke's shoulder holds one reading for as long as a rest does, so the
+offset learned the stroke instead of the sensor.
+
+**Fix.** Ask the window, not the sample: 400 ms whose **mean** specific force is 1 g with the
+offset out, and no sample in it more than `STILL_STRAY` from that. The mean is what a slow stroke
+cannot hold and the strays are what a fast one cannot avoid. Both offsets are then *set* from
+the first window the bar could have been resting in, rather than filtered up from nothing, and
+the accelerometer's offset is only learned from a window the bar could have been at rest in.
+`sim/examples/raw_dump.rs` reports both statistics against their thresholds, so a capture says
+whether its own rests would pass.
+
 ### The IMU driver configures the accelerometer and not the gyroscope
 
 **Symptom.** A plan that says "set both ranges in CONFIG mode" meets a driver whose

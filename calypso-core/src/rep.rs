@@ -557,10 +557,10 @@ impl<'a> TraceBuf<'a> {
     }
 }
 
-/// Which detection logic closed a rep, as it travels in that rep's `RepConfig`.
+/// Which logic closed a rep — the filter its trace was measured with, and the detector that found it — as it travels in that rep's `RepConfig`.
 ///
 /// Bumped when a change makes a stored summary mean something else — a threshold that moves is a different measurement wearing the same name, and two numbers from two versions are then not comparable as if they were one.
-pub const DETECTOR_VERSION: u32 = 6;
+pub const DETECTOR_VERSION: u32 = 7;
 
 impl msg::RepSummary {
     /// Whether this is a rep at all: the bar has to have gone up or down [`MIN_ROM_M`].

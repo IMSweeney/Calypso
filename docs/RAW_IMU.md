@@ -9,8 +9,8 @@ Four things, in the order they cost us time, and then the price.
 
 **Rest has no absolute reference in fusion mode.** The fused output's linear acceleration is
 zero at rest *by definition* — that is what "gravity removed" means. So the only way to tell a
-still bar from a sensor offset is whether the number is *constant*, which is why the detector's
-stillness test is a spread over 400 ms rather than a magnitude. That works, but it cannot
+still bar from a sensor offset is whether the number stops changing, which is why a stillness
+test in that frame has to be about constancy rather than magnitude. That works, but it cannot
 answer "is this accelerometer reading right", and a residue the fusion left behind — a fraction
 of a metre per second squared pointing at the floor, different in the body frame at every
 orientation — made the detector believe it was moving for an entire session. A raw
@@ -121,11 +121,10 @@ bar was at rest when the state was taken.
   at rest (ZUPT). That is what bounds drift to within one rep, and a lift guarantees the
   conditions at both ends of every stroke.
 - **Offsets** are learned from stillness, but stillness is a different question for each. The
-  accelerometer's is a window where the reading has stopped changing; the gyroscope's is a
-  window where gravity's direction in the sensor's frame has not moved, since a bias leaves it
-  there and a real rotation does not. A bar moving up and down is still for the gyro's purpose
-  even when it is not for the accelerometer's, so a set with no rest in it still learns its
-  bias.
+  accelerometer's is a window the bar could have been resting in; the gyroscope's is a window
+  where gravity's direction in the sensor's frame has not moved, since a bias leaves it there
+  and a real rotation does not. A bar moving up and down is still for the gyro's purpose even
+  when it is not for the accelerometer's, so a set with no rest in it still learns its bias.
 
 **Four predicates, and the difference between them is the design.** Landing on one question is
 what a first attempt at this does, and it fails in both directions at once — recorded here
@@ -133,18 +132,23 @@ because the map is what found it.
 
 | predicate | what it asks | what it is for |
 |---|---|---|
-| quiet | the reading has not changed across 400 ms, and nothing is turning | the accelerometer's offset, and a boot |
-| direction quiet | gravity's direction in the sensor's frame has not moved across 400 ms | the gyroscope's offset |
-| resting | the reading, with the offset taken out, is 1 g, and nothing is turning | the bar is not accelerating |
-| still | resting for 400 ms | the bar is at rest |
+| shaped | nothing in the window strays far from 1 g | a boot, before either offset is known |
+| resting | shaped, and the window's mean rate is not a turn | the accelerometer's offset, and the bar is not accelerating |
+| still | resting, and the window's mean is 1 g | the bar is at rest: the zero-velocity update, and a trace's anchor |
+| direction quiet | gravity's direction in the sensor's frame has not moved across the window | the gyroscope's offset |
 
-Asking "is it 1 g" to decide whether the accelerometer's offset may be learned is circular — an
-unknown offset makes a still sensor read something else — so the learning uses the spread
-instead. Asking "has it stopped changing" to decide whether the bar is at rest is wrong the
-other way: a slow stroke spends a third of a second crossing zero acceleration at its fastest
-point, where it reads 1 g and barely moves, and calling that a rest caps the stroke in half.
-Only the wait tells them apart, and everything downstream — the trace's anchoring, a leg's
-close, the detector's idea of a hold — hangs off `still`.
+Both halves of the stillness question are asked of the **window's mean** rather than of one
+reading, and both are needed. A slow stroke holds a reading near 1 g for a third of a second,
+so a rest cannot be a single sample; and a fast stroke turns its acceleration over inside a
+window, so its mean returns to 1 g while the bar is plainly moving, and only the strays say so.
+Asking "is the mean 1 g" to decide whether the accelerometer's offset may be learned is circular
+— an unknown offset makes a still sensor read something else — so the boot **sets** both offsets
+from the first window the bar could have been resting in, and the learning only ever sees a
+window the bar could have been at rest in. It is the learning that must not see a stroke: a
+stroke's shoulder holds one reading about as long as a rest does, so an offset learned from "the
+reading has stopped changing" follows the motion, largest where the bar is fastest, which is the
+one error a trace cannot absorb. Everything downstream — the trace's anchoring, a leg's close,
+the detector's idea of a hold — hangs off `still`.
 
 Nothing here consults the chip's calibration or a config register. It also deletes the
 body-frame/world-frame split in `Detector`: bias was learned in the world frame and subtracted

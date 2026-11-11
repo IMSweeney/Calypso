@@ -9,7 +9,9 @@
 use std::env;
 use std::fs;
 
-use calypso_core::fusion::{GRAVITY, READY_S, STILL_SPREAD, STILL_WINDOW};
+use calypso_core::fusion::{
+    GRAVITY, READY_S, STILL_GRAVITY, STILL_RATE_DPS, STILL_STRAY, STILL_WINDOW,
+};
 use calypso_core::pb::{self, decode_record, Record};
 use calypso_core::sampler::{Sample, ACCEL_SCALE};
 use calypso_sim::fixtures::read_dump;
@@ -186,26 +188,39 @@ fn report(index: usize, w: &Window) {
         }
     }
 
-    // The gate's own statistic: a range over `STILL_WINDOW` samples, per axis, evaluated at every sample. The p50 says what the quiet is like, the max says how near the threshold it comes.
+    // The gate's own statistics, over every `STILL_WINDOW` run that has no hole in it: how far the run's mean specific force sits from 1 g, and how far its worst sample does. The first is what a slow stroke cannot hold and the second what a fast one cannot avoid.
     // Windows with a hole in them are left out of the count, because the gate never saw one: it is handed every sample the loop took, and a gap is a window that closed on nine hundred ms.
     println!(
-        "  quiet {:.0} ms window (p50 / p95 / max)",
+        "  stillness window {:.0} ms (p50 / p95 / max)",
         STILL_WINDOW as f32 * dt_ms as f32
     );
-    for axis in 0..3 {
-        let ranges = window_ranges(&accel, &w.samples, axis, dt_ms);
-        println!(
-            "    {}           {:.1} / {:.1} / {:.1} mg   (STILL_SPREAD {:.1} mg)",
-            "xyz".chars().nth(axis).unwrap(),
-            pct(&ranges, 0.50) * 1000.0 / GRAVITY,
-            pct(&ranges, 0.95) * 1000.0 / GRAVITY,
-            ranges.last().copied().unwrap_or(0.0) * 1000.0 / GRAVITY,
-            STILL_SPREAD * 1000.0 / GRAVITY
-        );
-    }
+    let (means, strays) = window_gate(&accel, &w.samples, dt_ms);
+    println!(
+        "    mean from 1 g {:.1} / {:.1} / {:.1} mg   (STILL_GRAVITY {:.1} mg)",
+        pct(&means, 0.50) * 1000.0 / GRAVITY,
+        pct(&means, 0.95) * 1000.0 / GRAVITY,
+        means.last().copied().unwrap_or(0.0) * 1000.0 / GRAVITY,
+        STILL_GRAVITY * 1000.0 / GRAVITY
+    );
+    println!(
+        "    worst sample  {:.1} / {:.1} / {:.1} mg   (STILL_STRAY {:.1} mg)",
+        pct(&strays, 0.50) * 1000.0 / GRAVITY,
+        pct(&strays, 0.95) * 1000.0 / GRAVITY,
+        strays.last().copied().unwrap_or(0.0) * 1000.0 / GRAVITY,
+        STILL_STRAY * 1000.0 / GRAVITY
+    );
+    // The rate the gate judges is the window's mean with the gyro's offset out, so the statistic is how far that mean wanders once the window's own reading of the offset is taken out.
+    let rates = window_rates(&gyro, &w.samples, dt_ms);
+    println!(
+        "    mean rate     {:.2} / {:.2} / {:.2} dps  (STILL_RATE_DPS {:.0} dps)",
+        pct(&rates, 0.50),
+        pct(&rates, 0.95),
+        rates.last().copied().unwrap_or(0.0),
+        STILL_RATE_DPS
+    );
     let (quiet_share, longest_ms) = quiet_runs(&accel, &w.samples, dt_ms);
     println!(
-        "    all three axes under it: {:.0}% of samples, longest unbroken run {} ms (READY_S {:.0})",
+        "    worst sample under it: {:.0}% of samples, longest unbroken run {} ms (READY_S {:.0})",
         quiet_share * 100.0,
         longest_ms,
         READY_S * 1000.0
@@ -344,13 +359,42 @@ fn spread(xs: &[[f32; 3]], axis: usize, n: usize) -> f32 {
     hi - lo
 }
 
-/// The range of every `STILL_WINDOW`-sample window of one axis, sorted.
-fn window_ranges(xs: &[[f32; 3]], samples: &[Sample], axis: usize, dt_ms: i64) -> Vec<f32> {
-    let mut out = Vec::with_capacity(xs.len());
+/// Both statistics the stillness gate takes from a window: how far the run's mean specific force sits from 1 g, and how far its worst sample does, each sorted for a percentile.
+fn window_gate(xs: &[[f32; 3]], samples: &[Sample], dt_ms: i64) -> (Vec<f32>, Vec<f32>) {
+    let (mut means, mut strays) = (Vec::new(), Vec::new());
     for start in 0..xs.len().saturating_sub(STILL_WINDOW - 1) {
-        if contiguous(samples, start, dt_ms) {
-            out.push(spread_slice(xs, axis, start, STILL_WINDOW));
+        if !contiguous(samples, start, dt_ms) {
+            continue;
         }
+        let run = &xs[start..start + STILL_WINDOW];
+        let mean = mean3(run);
+        means.push((magnitude(mean) - GRAVITY).abs());
+        strays.push(
+            run.iter()
+                .map(|x| (magnitude(*x) - GRAVITY).abs())
+                .fold(0.0f32, f32::max),
+        );
+    }
+    means.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    strays.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    (means, strays)
+}
+
+/// How far each window's mean angular rate sits from the rate the window itself has, which is what the gate compares with a bound: the offset is a constant and the filter takes it out, so what is left is how much the bar turned inside the run.
+fn window_rates(xs: &[[f32; 3]], samples: &[Sample], dt_ms: i64) -> Vec<f32> {
+    let mut out = Vec::new();
+    let centre = mean3(xs);
+    for start in 0..xs.len().saturating_sub(STILL_WINDOW - 1) {
+        if !contiguous(samples, start, dt_ms) {
+            continue;
+        }
+        let mean = mean3(&xs[start..start + STILL_WINDOW]);
+        let d = [
+            mean[0] - centre[0],
+            mean[1] - centre[1],
+            mean[2] - centre[2],
+        ];
+        out.push(magnitude(d));
     }
     out.sort_by(|a, b| a.partial_cmp(b).unwrap());
     out
@@ -363,17 +407,15 @@ fn contiguous(samples: &[Sample], start: usize, dt_ms: i64) -> bool {
         .all(|p| (p[1].t_ms as i64 - p[0].t_ms as i64) <= dt_ms * 3 / 2)
 }
 
-fn spread_slice(xs: &[[f32; 3]], axis: usize, start: usize, len: usize) -> f32 {
-    let mut lo = f32::MAX;
-    let mut hi = f32::MIN;
-    for x in &xs[start..start + len] {
-        lo = lo.min(x[axis]);
-        hi = hi.max(x[axis]);
-    }
-    hi - lo
+/// The furthest any one sample in a run sits from 1 g (m/s²).
+fn stray_slice(xs: &[[f32; 3]], start: usize, len: usize) -> f32 {
+    xs[start..start + len]
+        .iter()
+        .map(|x| (magnitude(*x) - GRAVITY).abs())
+        .fold(0.0f32, f32::max)
 }
 
-/// What share of samples would pass the gate's range test on all three axes at once, and the longest unbroken run of them — the run `READY_S` counts toward.
+/// What share of samples would pass the gate's worst-sample test, and the longest unbroken run of them — the run `READY_S` counts toward.
 fn quiet_runs(xs: &[[f32; 3]], samples: &[Sample], dt_ms: i64) -> (f32, i64) {
     let mut passed = 0usize;
     let mut total = 0usize;
@@ -386,7 +428,7 @@ fn quiet_runs(xs: &[[f32; 3]], samples: &[Sample], dt_ms: i64) -> (f32, i64) {
             continue;
         }
         total += 1;
-        let quiet = (0..3).all(|axis| spread_slice(xs, axis, start, STILL_WINDOW) <= STILL_SPREAD);
+        let quiet = stray_slice(xs, start, STILL_WINDOW) <= STILL_STRAY;
         if quiet {
             passed += 1;
             run += 1;
