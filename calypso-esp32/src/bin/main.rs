@@ -1079,14 +1079,13 @@ async fn main(spawner: Spawner) -> ! {
                     }
                 }
 
-                // Refill the erased reserve while nothing is being stroked or recorded: the erase parks the chip for ~45 ms, and this is the one moment in the session where that costs no samples. Never while a stream is running, though nothing would be consuming the reserve then either: the erase is still a hole in the one thing the client asked for.
+                // Refill the erased reserve while the bar is at rest and nothing is being recorded: the erase parks the chip for ~45 ms, and a rest is the one moment in the session where that costs no samples. Never while a stream is running, though nothing would be consuming the reserve then either: the erase is still a hole in the one thing the client asked for.
                 //
                 // One sector a tick, because a tick's worth of the sampler is all this loop is willing to hand over, and the try lock because a sync walk holds the store for seconds and the sampler will not wait for it.
                 if !reserve_done
                     && append_ms.is_none()
                     && recording.is_none()
                     && !streaming
-                    && !detector.leg_open()
                     && fusion.still_for_s() >= RESERVE_STILL_S
                     && let Ok(mut guard) = store.try_lock()
                 {
@@ -1125,14 +1124,14 @@ async fn main(spawner: Spawner) -> ! {
                     // Paused, the detector's numbers are the ones from before the stream and would read as if nothing had moved since, so the line says which it is instead.
                     if detecting {
                         info!(
-                            "detector: bias ({}, {}, {}) cm/s², |a| {} cm/s², |v| {} cm/s, legs {}, open {}",
+                            "detector: bias ({}, {}, {}) cm/s², |a| {} cm/s², |v| {} cm/s, halves {}, rep {}",
                             (b[0] * 100.0) as i32,
                             (b[1] * 100.0) as i32,
                             (b[2] * 100.0) as i32,
                             (a * 100.0) as i32,
                             (detector.speed() * 100.0) as i32,
-                            detector.legs(),
-                            detector.leg_open()
+                            detector.halves(),
+                            detector.rep_open()
                         );
                     } else {
                         info!(

@@ -12,6 +12,10 @@ use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, GYRO_SCALE};
 
 use crate::fixtures::{at, detect_and_trace, LEAD_IN_MS, SAMPLE_DT_MS};
 
+/// Rest appended after a motion, because a recording does not end where the bar does: the last stroke
+/// needs its quiet to be read as a turn, and the device is still sampling while the bar is put down.
+const LEAD_OUT_MS: u32 = 1000;
+
 /// The trace capacity a scenario replays through, which is the plotted budget a device stores.
 pub use calypso_core::rep::TRACE_POINTS;
 
@@ -113,7 +117,8 @@ impl Rep {
     pub fn samples(&self) -> Vec<Sample> {
         let mut out = Vec::new();
         let t = push_rest(&mut out, 0, LEAD_IN_MS);
-        self.strokes(&mut out, t);
+        let t = self.strokes(&mut out, t);
+        push_rest(&mut out, t, LEAD_OUT_MS);
         out
     }
 }
@@ -180,7 +185,8 @@ impl Stall {
     pub fn samples(&self) -> Vec<Sample> {
         let mut out = Vec::new();
         let t = push_rest(&mut out, 0, LEAD_IN_MS);
-        self.strokes(&mut out, t);
+        let t = self.strokes(&mut out, t);
+        push_rest(&mut out, t, LEAD_OUT_MS);
         out
     }
 }
@@ -220,6 +226,7 @@ impl Motion {
                     out.push(at(t, [0.0, 0.0, accel]));
                     t += SAMPLE_DT_MS;
                 }
+                push_rest(&mut out, t, LEAD_OUT_MS);
                 out
             }
         }
@@ -264,8 +271,9 @@ impl Set {
             t = rep.strokes(&mut out, t);
         }
         if let Some(p) = self.rerack {
-            p.strokes(&mut out, t);
+            t = p.strokes(&mut out, t);
         }
+        push_rest(&mut out, t, LEAD_OUT_MS);
         out
     }
 }

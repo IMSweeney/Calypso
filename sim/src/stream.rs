@@ -29,6 +29,8 @@ pub struct Replay {
     pub reps: Vec<DetectedRep>,
     /// The travel each rep's own window reports, in the same order.
     pub roms: Vec<f32>,
+    /// Each rep's plotted trace, in the same order: what the app would draw for it.
+    pub traces: Vec<Vec<TracePoint>>,
     /// Where the filter first knew which way is down, on the device's clock.
     pub ready_at_ms: Option<u32>,
     /// How many samples it called still.
@@ -39,6 +41,7 @@ pub struct Replay {
     /// into the horizontal plane, where nothing a rep does ought to put metres per second.
     pub peak_speed: f32,
     pub peak_horizontal: f32,
+    pub halves: u32,
 }
 
 /// The samples one recording holds, on the device's own clock.
@@ -68,9 +71,10 @@ pub fn samples(pblog: &[u8]) -> Vec<Sample> {
 
 /// Feed the whole stream through one filter and one detector, and close the reps it finds.
 ///
-/// `each` sees every sample and where the filter stood after it, which is what a report on the two
-/// signals the detector gates on is made of; a caller that only wants the reps passes a no-op.
-pub fn replay(samples: &[Sample], each: &mut dyn FnMut(&Sample, &Filtered)) -> Replay {
+/// `each` sees every sample, where the filter stood after it, and the speed the detector counted on it,
+/// which is what a report on the signals the detections are made of is; a caller that only wants the
+/// reps passes a no-op.
+pub fn replay(samples: &[Sample], each: &mut dyn FnMut(&Sample, &Filtered, f32)) -> Replay {
     let mut ring_buf = vec![Sample::ZERO; RING];
     let mut ring = SampleRing::new(&mut ring_buf);
     let mut fusion = Fusion::new();
@@ -80,16 +84,17 @@ pub fn replay(samples: &[Sample], each: &mut dyn FnMut(&Sample, &Filtered)) -> R
     let mut out = Replay {
         reps: Vec::new(),
         roms: Vec::new(),
+        traces: Vec::new(),
         ready_at_ms: None,
         still: 0,
         peak_speed: 0.0,
         peak_horizontal: 0.0,
+        halves: 0,
     };
 
     for s in samples {
         ring.push(*s);
         let f = fusion.update(s);
-        each(s, &f);
         if f.still {
             out.still += 1;
         }
@@ -101,20 +106,21 @@ pub fn replay(samples: &[Sample], each: &mut dyn FnMut(&Sample, &Filtered)) -> R
         }
         // The device gates the detector on the filter knowing which way is down, and so does this:
         // before that there is no vertical for a rep to be measured against.
-        if !fusion.ready() {
-            continue;
+        if fusion.ready() {
+            if let Some(rep) = det.update(&f) {
+                let n = ring.copy_window(rep.from_ms, rep.span.end_ms, 0, MARGIN_MS, &mut window);
+                if n > 0 {
+                    let mut trace = TraceBuf::new(&mut storage);
+                    let summary =
+                        compute_rep(&window[..n], &rep.state, Some(rep.turns), &mut trace);
+                    out.reps.push(rep);
+                    out.roms.push(summary.rom);
+                    out.traces.push(trace.as_slice().to_vec());
+                }
+            }
         }
-        let Some(rep) = det.update(&f) else {
-            continue;
-        };
-        let n = ring.copy_window(rep.from_ms, rep.span.end_ms, 0, MARGIN_MS, &mut window);
-        if n == 0 {
-            continue;
-        }
-        let mut trace = TraceBuf::new(&mut storage);
-        let summary = compute_rep(&window[..n], &rep.state, Some(rep.turns), &mut trace);
-        out.reps.push(rep);
-        out.roms.push(summary.rom);
+        each(s, &f, det.vertical());
     }
+    out.halves = det.halves();
     out
 }

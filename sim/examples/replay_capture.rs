@@ -23,7 +23,7 @@ const TRACE_POINTS: usize = 256;
 /// What one replay produced.
 struct Replay {
     spans: Vec<(RepSpan, f32)>,
-    legs: u32,
+    halves: u32,
     still: usize,
     /// The largest speed reached, and the largest of it that was horizontal.
     ///
@@ -110,8 +110,8 @@ fn print_series(w: &Window) {
 fn report(label: &str, r: Replay) {
     let roms: Vec<String> = r.spans.iter().map(|(_, rom)| format!("{rom:.2}")).collect();
     println!(
-        "  {label} legs {}  spans {}  rom [{}]  peak |v| {:.2} m/s (horiz {:.2})  still {} samples",
-        r.legs,
+        "  {label} halves {}  spans {}  rom [{}]  peak |v| {:.2} m/s (horiz {:.2})  still {} samples",
+        r.halves,
         r.spans.len(),
         roms.join(", "),
         r.peak_v,
@@ -132,7 +132,7 @@ fn replay(w: &Window, from: FusionState, spans: bool) -> Replay {
     let mut storage = vec![TracePoint::ZERO; TRACE_POINTS];
     let mut out = Replay {
         spans: Vec::new(),
-        legs: 0,
+        halves: 0,
         still: 0,
         peak_v: 0.0,
         peak_h: 0.0,
@@ -170,6 +170,6 @@ fn replay(w: &Window, from: FusionState, spans: bool) -> Replay {
             out.spans.push((rep.span, summary.rom));
         }
     }
-    out.legs = det.legs();
+    out.halves = det.halves();
     out
 }

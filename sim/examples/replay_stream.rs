@@ -11,7 +11,7 @@
 
 use std::env;
 
-use calypso_core::fusion::{Filtered, Fusion, GRAVITY};
+use calypso_core::fusion::{Filtered, GRAVITY};
 use calypso_core::sampler::{Sample, SAMPLE_RATE_HZ};
 use calypso_sim::{captures, stream};
 use libm::atan2f;
@@ -38,8 +38,8 @@ fn main() {
     );
     holes(&samples, t0);
 
-    // The two signals the detector gates on, one line a sample, which is what a turn rule or a stillness gate has to be read against; `tilt` is how far the world frame's gravity is off vertical, and a velocity that runs away is made of it.
-    let mut each = |s: &Sample, f: &Filtered| {
+    // One line a sample: the acceleration, the filter's velocity, and the speed the detector counts on, which is what a threshold or a turn rule has to be read against; `tilt` is how far the world frame's gravity is off vertical, and a velocity that runs away is made of it.
+    let mut each = |s: &Sample, f: &Filtered, counted: f32| {
         if !series {
             return;
         }
@@ -47,7 +47,7 @@ fn main() {
         let a = f.linear_accel;
         let tilt = atan2f((a[0] * a[0] + a[1] * a[1]).sqrt(), a[2] + GRAVITY).to_degrees();
         println!(
-            "{:.2}\t{:+.2}\t{:+.2}\t{:.2}\t{:+.2}\t{:+.2}\t{:+.1}\t{}",
+            "{:.2}\t{:+.2}\t{:+.2}\t{:.2}\t{:+.2}\t{:+.2}\t{:+.1}\t{}\t{:+.2}",
             s.t_ms.saturating_sub(t0) as f32 / 1000.0,
             a[2],
             v[2],
@@ -55,7 +55,8 @@ fn main() {
             a[0],
             a[1],
             tilt,
-            if f.still { 1 } else { 0 }
+            if f.still { 1 } else { 0 },
+            counted
         );
     };
     let out = stream::replay(&samples, &mut each);
@@ -80,7 +81,11 @@ fn main() {
         out.peak_speed,
         out.peak_horizontal
     );
-    println!("  detector    {} reps", out.reps.len());
+    println!(
+        "  detector    {} reps, {} halves",
+        out.reps.len(),
+        out.halves
+    );
 }
 
 /// Where the stream has a gap in it, which is the sampler stalling rather than anything the filter did.

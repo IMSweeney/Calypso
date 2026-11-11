@@ -123,11 +123,7 @@ fn a_stall_mid_stroke_is_one_rep_with_its_travel() {
 
 /// **The known blind spot, pinned so it is a decision rather than a surprise.**
 ///
-/// A leg ends where the speed falls below `VEL_MIN`, so a return gentle enough never to reach
-/// 0.07 m/s never turns, and the rep is never stored. This is the cost of asking the question with velocity, and it is accepted: for a bench the boundary sits between 0.12 and 0.14 m/s, where the filter that now feeds the detector moved it up from 0.14–0.16 — the same blind spot, a little further out. A fix would close a leg on bounded travel as well as on a turn, at which point this test is the one to delete, not to relax.
-///
-/// `VEL_MIN` and `T_TURN_MS` move together: dropping the speed bar alone made fast turnarounds
-/// *harder* to close, because the bar then spends less time below it than the debounce asks for.
+/// A stroke is counted by the speed the bar reaches, and that speed is a leaky integral, so it attenuates the slow ones: a return gentle enough never to reach `SWING_MPS` never counts as half a rep, and the rep is never stored. That is the cost of the leak, which is what keeps the speed trustworthy through a set, and it is accepted. A fix would need something else holding the noise floor the same bar is holding down — bounded travel, or a window that has to come back to where it started — at which point this test is the one to delete, not to relax.
 #[test]
 fn a_gentle_return_is_not_detected_yet() {
     for speed_out in [0.10, 0.12] {

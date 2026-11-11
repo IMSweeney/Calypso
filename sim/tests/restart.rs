@@ -1,6 +1,6 @@
 //! What the detector does when the device stops asking it: `DevMode` pauses detection for as long as it streams, and what the detector picks up afterwards must not describe the pause.
 //!
-//! The two things that would otherwise cross it are a leg left open — which would close as one rep spanning the whole stream — and a first step measured from the last sample before it, which would integrate minutes of nothing as motion.
+//! The two things that would otherwise cross it are a stroke left open — whose turn would pair with a stroke from the far side of the stream as one rep spanning it — and a first step measured from the last sample before it, which would integrate minutes of nothing as motion.
 
 use calypso_core::fusion::{Filtered, FusionState};
 use calypso_core::rep::Detector;
@@ -25,7 +25,7 @@ fn rest(det: &mut Detector, t: &mut u32, ms: u32) {
 }
 
 #[test]
-fn a_pause_ends_the_leg_it_interrupted_instead_of_stretching_it() {
+fn a_pause_ends_the_stroke_it_interrupted_instead_of_stretching_it() {
     let mut det = Detector::new();
     let mut t = 0;
     rest(&mut det, &mut t, 2000);
@@ -34,12 +34,15 @@ fn a_pause_ends_the_leg_it_interrupted_instead_of_stretching_it() {
         det.update(&sample(t, [0.0, 0.0, 4.0], false));
         t += DT_MS;
     }
-    assert!(det.leg_open(), "the drive is a leg");
+    assert_eq!(det.halves(), 1, "the drive is a stroke the bar made");
 
     det.restart(t);
 
-    assert!(!det.leg_open(), "the leg ended with the pause");
-    assert_eq!(det.legs(), 0, "and it was not closed as a rep of its own");
+    assert_eq!(det.halves(), 0, "the stroke ended with the pause");
+    assert!(
+        !det.rep_open(),
+        "and nothing was left waiting for a partner across it"
+    );
 }
 
 #[test]

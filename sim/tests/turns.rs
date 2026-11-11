@@ -1,9 +1,8 @@
-//! What a leg is delimited by: the vertical motion, and only the vertical motion.
+//! What a rep is delimited by: the vertical motion, and only the vertical motion.
 //!
-//! A rep is two signed **vertical** travels between turns, so a turnaround is the vertical speed falling away — not the whole velocity. The two are not the same question on a real device: the frame has only the accelerometer to hold it level, and the residue of a couple of degrees sits in the horizontal, where it accumulates through a stroke and never lets the *speed* reach zero.
-//! The bar turns; the integral does not.
+//! A rep is counted on the **vertical** speed — the bar setting off one way and coming back the other — and not on the whole velocity. The two are not the same question on a real device: the frame has only the accelerometer to hold it level, and the residue of a couple of degrees sits in the horizontal, where it accumulates through a stroke. The bar turns; the horizontal never does.
 //!
-//! The other half of the same question is what happens when the bar gives a few centimetres back at the turnaround. That motion is opposite to the drive and short of half a rep, and it must not be allowed to consume the drive it follows.
+//! The other half of the same question is what happens when the bar gives a few centimetres back at the turnaround. That motion is opposite to the drive, and it must not be allowed to split or consume the rep it belongs to.
 
 use calypso_core::sampler::Sample;
 use calypso_sim::fixtures::{detect_and_trace, LEAD_IN_MS, SAMPLE_DT_MS};
@@ -19,7 +18,7 @@ fn stored(samples: &[Sample]) -> Vec<calypso_core::pb::msg::RepSummary> {
 
 /// A bar that settles back at the top before the return is the same rep it would have been.
 ///
-/// The settle is real motion — a bar caught at lockout gives a few centimetres back — and it is long enough to turn, so it arrives at the pairing as an opposite leg of its own. It is not half a rep, so it is not a stroke, and the drive it followed is still the drive.
+/// The settle is real motion — a bar caught at lockout gives a few centimetres back — and it is far too slow to clear the speed a rep is counted by, so it is not half of one and cannot split the rep it belongs to.
 #[test]
 fn a_settle_at_the_turnaround_is_still_one_rep() {
     let base = Rep::bench();
@@ -47,7 +46,7 @@ fn a_settle_at_the_turnaround_is_still_one_rep() {
 
 /// A gyroscope whose offset moves after the boot does not stop the bar from turning.
 ///
-/// The filter learns the offset at rest and cannot learn it through a stroke, so a degree per second that arrives with the first rep is a degree per second of tilt through it: `g·sin` of that is a few tenths of a metre per second squared in the horizontal, which integrates to more than `VEL_MIN` inside one stroke. The vertical is unaffected, and the vertical is what the rep is measured on.
+/// The filter learns the offset at rest and cannot learn it through a stroke, so a degree per second that arrives with the first rep is a degree per second of tilt through it: `g·sin` of that is a few tenths of a metre per second squared in the horizontal, which over a stroke is a speed of its own. The vertical is unaffected, and the vertical is what the rep is counted on.
 #[test]
 fn a_gyro_offset_that_arrives_with_a_rep_does_not_hide_its_turn() {
     let base = Rep::bench();
