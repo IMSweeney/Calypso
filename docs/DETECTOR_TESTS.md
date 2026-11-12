@@ -71,11 +71,11 @@ into two — not ROM, not span boundaries, not velocity. The count is the produc
 the split is the failure a two-state cell used to hide behind a `#`.
 
 **A miss is a result, not a failure.** The map is expected to show regions where the
-detector stores nothing. Since the detector was taught to close on the return rather than
-on rest, the pause-top slices now read `#` across the swept range — a paused rep is one
-rep — instead of splitting (`X`) or vanishing (`.`), and a lowering gentler than `VEL_MIN`
-still closes on its rest. The `X` state stays in the map as the instrument that would show
-a future re-split.
+detector stores nothing. A swing is delimited by the bar's speed rather than by a rest, so
+the pause-top slices read `#` across the swept range — a paused rep is one rep — instead of
+splitting (`X`) or vanishing (`.`). A lowering gentle enough that the bar never reaches
+`SWING_MPS` is a miss, and that same bar is what keeps the noise out. The `X` state stays in
+the map as the instrument that would show a future re-split.
 
 **Drawing it.** Five axes do not plot, so the map is 2-D slices, each with travel on the x
 axis and one of the other four knobs on y: travel × speed in, travel × speed out, travel
@@ -134,7 +134,7 @@ column is the point: each spec converted into the quantity this pipeline actuall
 | one 400 ms window of that | the expected range of forty normal samples is ~4.3σ | 7.7 mg, 9.7 at the maximum, against the 15.3 mg `STILL_SPREAD` allows: **the boot gate has 2.0× of margin at a typical part and 1.6× at a maximum one** |
 | the die's LSB at ±8 g | 3.9 mg in the interrupt thresholds, against the 1 mg of the output register | **nothing, measured.** Consecutive readings off a device move one LSB, so the ±8 g range does not coarsen what this pipeline sees and the quantiser costs the gate none of its margin. The 3.9 mg figure belongs to the die's threshold units, not to this output |
 | zero-g offset | ±80 mg typ, ±150 max | **absorbed.** Learning runs for the second `READY_S` asks for, leaving 1.8% of the offset: at the maximum that is 2.8 mg, an eighth of what `resting` tolerates. The sideways part tilts the boot attitude by 8.5°, and cancels exactly — the bias is learned against the attitude it tilted |
-| zero-rate offset | ±1 typ, ±3 max dps | learned to 0.05 dps in the boot second, and the boot gate admits 5 dps: 1.7× the part's maximum. What costs is a bias **step** — 1 dps for a second is 1° and 0.17 m/s² of gravity in the horizontal, 2.4× `VEL_MIN` — not its size. It is learned during a set as well, so the cost is the second before that: the nine-second uncorrected figure, 6.6° and 1.1 m/s², is the measurement from before the direction gate existed |
+| zero-rate offset | ±1 typ, ±3 max dps | learned to 0.05 dps in the boot second, and the boot gate admits 5 dps: 1.7× the part's maximum. What costs is a bias **step** — 1 dps for a second is 1° and 0.17 m/s² of gravity in the horizontal, which over a stroke is a speed of its own — not its size. It is learned during a set as well, so the cost is the second before that: the nine-second uncorrected figure, 6.6° and 1.1 m/s², is the measurement from before the direction gate existed |
 | gyroscope noise | 0.014 °/s/√Hz, 0.1 dps rms at 32 Hz | 0.01° of angle random walk a second, 0.002 m/s² of gravity leaked: **a null control, not an axis** |
 | temperature drift | 1–3.5 mg/K, 0.015–0.03 °/s/K | 5–35 mg over a session's warm-up, tracked whenever gravity's direction in the sensor's frame is not moving — which a ramp does not disturb. A pin |
 | gain | ±1/±4 %, ±1/±3 % | ±4% of ROM is 7.6 mm at a bench's nominal: less than the overshoot the integration already reads, so it measures reported travel rather than reach. **A device was measured at 3.3% on one axis** — gravity read 967 mg on that axis and 1001 mg split across the other two — which is inside the ±4% maximum and invisible to the bias learning |
@@ -179,7 +179,7 @@ part.
 | rest before the first rep | 0.4 – 6 s | the device records from the moment it calls itself ready, and that count is of quiet seconds, not of correct ones |
 | sampler stall | 0–2 events, 10–200 ms | a rep is written to flash inside the sampling loop, and a gap past the integration step is travel that never happened |
 | mount roll | 0 – 350 °/s through the motion, which a hand-held set measured 220–330 °/s of | the gyro's whole job, and nothing generates it today |
-| attitude, uncorrected | 0 – 30 s of motion without a 400 ms still, at 0.2 – 0.7 dps | the pull onto gravity is slow while the bar moves, so a bias learned slowly still runs uncorrected for the length of a set: 0.7 dps for nine seconds is 6.6° of tilt and 1.1 m/s² of leak, sixteen times `VEL_MIN` before a velocity has even been integrated |
+| attitude, uncorrected | 0 – 30 s of motion without a 400 ms still, at 0.2 – 0.7 dps | the pull onto gravity is slow while the bar moves, so a bias learned slowly still runs uncorrected for the length of a set: 0.7 dps for nine seconds is 6.6° of tilt and 1.1 m/s² of leak, which over a stroke is more speed than the bar has before a velocity has even been integrated |
 | sway, stroke shape, phase | 0–0.5 m/s² at 0.3–2 Hz; a cosine at 0.6–1.6 power; up- or down-first | motion the detector has never been asked about, including the lowering-first rep that pairs with an unrack |
 
 **What is measured — six things, not one.** Whether anything was stored is the product
@@ -245,8 +245,10 @@ samples still reach 2.3 and 10.2 m/s, and the peak *horizontal* speed is 10.10 o
 which is the shape of a tilt and not of a bar. Over those nine seconds `still` is true for 17
 samples of 901: the accelerometer is only allowed to correct the attitude when the bar is still,
 and a set never is, so 0.7 dps of residual gyro error runs uncorrected into 6.6° and 1.1 m/s² of
-gravity in the horizontal. The set of four reps closes two legs and stores nothing; the other
-set's five legs store one, at 0.63 m of the 0.3 m it travelled.
+gravity in the horizontal. The set of four reps closed two legs and stored nothing; the other
+set's five legs stored one, at 0.63 m of the 0.3 m it travelled. (Both measured with the
+turn-and-leg detector of the day, which has since been replaced; the drift they show is the
+filter's and is unchanged.)
 
 Two things follow, and they are why this section grew an axis and a measurement. The term that
 costs is not the bias — that is learned to 0.05 dps — but **how long it runs uncorrected**, which
@@ -302,8 +304,8 @@ Same five knobs, different classes, and the same measurement inverted: how often
 something stored that is not a rep. With the noise map on top it becomes a rate.
 
 **The wobble is where a turn rule shows up.** Reading the turn off the vertical acceleration
-reaches farther into this sweep than reading it off the speed: an oscillation of 0.08 m or more at
-0.7–2.5 Hz is stored for 38% of the class's cells, where the velocity rule stored 16% of them. A
+reached farther into this sweep than reading it off the speed: an oscillation of 0.08 m or more at
+0.7–2.5 Hz was stored for 38% of the class's cells, where the velocity rule stored 16% of them. A
 half-cycle that long and that wide is an out-and-back by every rule the detector has, so the
 change did not create the hole — it removed the arithmetic accident that was hiding part of it,
 and the class now measures the hole's real size.
@@ -340,9 +342,9 @@ back as a set. A set is the unrack, several reps separated by the set's rest, an
 one continuous stream, replayed through the real pipeline. It is the only place two things can be
 seen:
 
-- **A rep's neighbours.** One rep's motion can merge with, or hide, its neighbour. A merged span
-  exceeds `MAX_REP_MS` and is thrown away, taking every rep in it; the real 5×5 sessions captured
-  at most one rep per set.
+- **A rep's neighbours.** One rep's motion can merge with, or hide, its neighbour. A merged
+  swing exceeds `MAX_SWING_MS` and is refused, so the set loses both reps; before the detector
+  closed on the return, the real 5×5 sessions captured at most one rep per set.
 - **The motion between reps.** The unrack and the re-rack are the false positives that live *next
   to* a rep rather than on their own.
 
@@ -371,7 +373,7 @@ kept it from merging into one span. The one blemish the probe surfaced is ROM fi
 set every rep after the first reads high, because the velocity has not settled to zero between reps.
 The fix is in: the integration starts from the bar's velocity at the rep's left edge, shipped as `RepSummary.v0` (a `TraceOrigin`) so a reader re-derives from the same origin, which cut the no-rest inflation from ~25 % to a ~9 % residual and left a set with rest between reps unchanged. The residual is a second-order edge effect (a span is emitted a few tens of ms before the true turnaround) and is tracked, not fixed, here.
 
-**Since then the detector itself changed** — a rep is now two strokes between turning points, with the travel check inside detection (`docs/REP_TRACKING.md`). On the maps that moved nothing it should not: the same 5,292 cells store the same reps, no new false positive on the non-rep sweep, ROM on shared cells at least as close to the travel moved, and stalls mid-drive gained. The no-rest residual did not move with it either way: the later reps of a five-rep set with no rest in it read 0.201 m before the change and 0.207 m after, against 0.19 m of travel. That residual is not the detector's close — it is the bar genuinely still moving when the next rep starts, and the reference frame the trace starts from deciding how much of it to attribute to the rep. The sweep below is unchanged and still the way a detector change is measured — it is how this one was.
+**The detector has changed twice since.** A rep became two strokes between turning points, with the travel check inside detection, and is now one swing of the bar's speed (`docs/REP_TRACKING.md`). The turning-point change moved nothing on the maps it should not have: the same 5,292 cells stored the same reps, no new false positive on the non-rep sweep, ROM on shared cells at least as close to the travel moved, and stalls mid-drive gained. The no-rest residual did not move with it either way: the later reps of a five-rep set with no rest in it read 0.201 m before that change and 0.207 m after, against 0.19 m of travel. That residual is not the detector's close — it is the bar genuinely still moving when the next rep starts, and the reference frame the trace starts from deciding how much of it to attribute to the rep. The sweep below is unchanged and still the way a detector change is measured, and it has not been re-run against the swing detector.
 
 ## Status
 

@@ -284,10 +284,10 @@ poll and the `CALIBRATION_SAVED` path all go, along with `calibration.rs`; the r
 becomes the fusion's own readiness — seeded from a still window — rather than a level the chip
 reports.
 
-**The deliberate A/B:** the detection logic — the turning points, the pairing, the thresholds —
-is unchanged, and only what feeds it is new. If the device starts storing reps again, that is
-direct evidence the fused output was the whole problem, and it separates "is raw plus filter
-sane" from "is the detector right", which have been tangled for the last two sessions.
+**The deliberate A/B:** the detection logic is unchanged, and only what feeds it is new. If the
+device starts storing reps again, that is direct evidence the fused output was the whole problem,
+and it separates "is raw plus filter sane" from "is the detector right", which have been tangled
+for the last two sessions.
 
 **Not optional:** clearing the log partition after flashing. The ring survives a reflash, and
 without a wipe the app pulls old-format records and plots them as though they were new.

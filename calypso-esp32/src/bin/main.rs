@@ -145,7 +145,7 @@ const RECORD_PERIOD_MS: u32 = 30_000;
 ///
 /// None of it changes the scale a trace is decoded with — the registers are fixed at 1 m/s² = 100 LSB and 1 dps = 16 LSB whatever the range — so this is what the numbers were taken under, not how to convert them.
 const SAMPLER_CONFIG: calypso_core::sampler::RepConfig = calypso_core::sampler::RepConfig {
-    accel_range_g: 8,
+    accel_range_g: calypso_core::sampler::ACCEL_RANGE_G,
     gyro_range_dps: 2000,
     // The chip's step names it 62.5 Hz; its own tables label the same step 63.
     accel_bandwidth_hz: 63,

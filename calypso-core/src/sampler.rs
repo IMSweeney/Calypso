@@ -3,6 +3,11 @@
 /// Specific-force scale: LSB per m/s² (the BNO055's accelerometer registers, so no conversion is needed on the device).
 pub const ACCEL_SCALE: i32 = 100;
 
+/// The accelerometer's configured clip point: the largest specific force a sample can hold.
+///
+/// A reading past it is not the bar, because the sensor cannot produce one: it is a corrupt register or a corrupt chunk.
+pub const ACCEL_RANGE_G: u32 = 8;
+
 /// Angular-rate scale: LSB per degree per second (the BNO055's gyroscope registers).
 pub const GYRO_SCALE: i32 = 16;
 

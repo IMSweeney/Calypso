@@ -132,18 +132,15 @@ Where Calypso is and what is left. Feature documentation lives in
 
 ### The rep detector
 
-- [ ] **An unrack followed by a lowering is paired as a rep.** A rep is two opposite legs
-      past `MIN_ROM_M`, and a one-way push is dropped only when the stroke after it goes the
-      same way. A bench or squat set's first stroke after the unrack is the lowering, so the
-      unrack pairs with it: the first stored rep is the unrack plus a descent, and every rep
-      after that is one stroke out of phase — an ascent and the next rep's descent, which
-      reads the right ROM over a window that spans the rest between two reps. With a rest
-      long enough to push the shifted pair past `MAX_REP_MS`, the set stores nothing. The
-      simulator cannot see it: `Rep` always drives up first, so the unrack merges with the
-      first drive there instead. Nothing about the pair separates the two cases — not the
-      pause, since a paused rep has one too, and not the directions — so the measurement to
-      take on a session is the travel asymmetry between an unrack and a stroke, and the rule
-      is a decision rather than an inference.
+- [ ] **An unrack is one swing with the stroke that follows it.** A rep is an out-and-back of
+      the bar's speed, and a one-way push that pauses and is followed by the set's first stroke
+      has exactly that shape: out, turn at the top, back. What separates it from a rep is the
+      travel the push leaves behind — the bar ends above where it started — and the detector
+      does not measure travel, so the first rep after an unrack is stored with the push inside
+      its window and its ROM. Nothing about the speed separates the two cases — not the pause,
+      since a paused rep has one too — so the measurement to take is travel or displacement,
+      and the rule is a decision rather than an inference. `sim/tests/sets.rs` pins both halves:
+      the count is right and the ROM is not.
 
 ### First real device capture
 
@@ -258,27 +255,38 @@ Where Calypso is and what is left. Feature documentation lives in
       slots would mean shrinking the log partition.
 - [ ] On-device tests with [`embedded-test`](https://crates.io/crates/embedded-test):
       the flash partition layer first, then the radio path.
-- [ ] **A gentle return is not detected.** The turning-point detector ends a leg on a
-      turn, and a turn is a speed: a return that never reaches `VEL_MIN` (0.07 m/s) at its
-      peak never turns, so the rep is never stored. On a bench the boundary is between 0.12
-      and 0.14 m/s — the very slow end of a deliberate negative. Closing a leg on
-      bounded travel as well as on a turn would cover it; the cost of doing so is not yet
-      measured against the maps, which is why it is not done yet. Pinned meanwhile by
-      `a_gentle_return_is_not_detected_yet`, which fails with instructions when fixed. See
-      [docs/GOTCHAS.md](docs/GOTCHAS.md).
-- [ ] **Tune the detector against real reps.** A rep now ends where the bar turns
-      around rather than at a pause, which is what a set nobody pauses through needed
-      (`docs/GOTCHAS.md`). Two hand-held sets whose count is known — four reps each — are
-      pinned in `sim/tests/real_capture.rs` and both come back whole; what is still fitted
-      to generated motion is everything else: the on and rest thresholds, their debounces,
-      `TURN_ACCEL`/`TURN_BACK`, and `VEL_MIN`. One capture cannot tune them, and the maps
-      say what a change would cost.
-- [ ] **A wobble is a rep, where it was not one before.** The acceleration cue reaches
-      farther into the non-rep sweep than the velocity did: an oscillation of 0.08 m or more
-      at 0.7–2.5 Hz is stored, 168 of 441 cells against 69. A half-cycle that long and that
-      wide is an out-and-back by every rule the detector has, so telling it from a lift needs
-      something the detector does not have — a net-travel or a starts-and-ends-at-rest gate.
-      The cheap knob is `MIN_REP_MS`, and what it would cost is fast real reps. See
+- [ ] **A gentle return is not detected.** A stroke is counted by the speed the bar reaches,
+      and the speed is a leaky integral, which attenuates slow strokes: one whose peak stays
+      under `SWING_MPS` is not a stroke at all, and its half of the rep is missing. On a bench
+      that is the very slow end of a deliberate negative. Lowering the bar would buy it back,
+      at the cost of the noise floor the same bar is holding down, so the fix wants something
+      else to separate noise from a stroke — bounded travel, or a window that has to come back
+      to where it started. Pinned meanwhile by `a_gentle_return_is_not_detected_yet`, which
+      fails with instructions when fixed. See [docs/GOTCHAS.md](docs/GOTCHAS.md).
+- [ ] **Tune the detector against real sessions.** The constants — the speed a swing has to
+      reach, the leak's time constant, and the two duration bounds — sit where a handful of
+      shapes put them, not where real sessions did. The instrument exists: `captures/` holds
+      whole sessions with the sets that were performed written down beside them, and
+      `cargo test -- --ignored` in `sim` reports what the detector closed against what happened.
+      Run on the two sessions it has, the sets land where they were performed for the most part
+      and the counts are not right: the deadlift comes back a rep short in half its sets, and the
+      bench's first two are the worst of it — one cut to a single rep, the next taking in the rest
+      before it. The maps say what moving a constant would cost.
+- [ ] **The velocity a rep is integrated from is not zero at either end of it.** Within a set
+      the bar is never still long enough for the filter's stillness gate, so its velocity keeps
+      what the strokes left it: a bar being held wobbles past the gate, and over a set the leak
+      accumulates more velocity than a stroke is worth. Every boundary a trace is anchored at is
+      then an estimate rather than a rest, the ROM inflates, and a rep's ends drift off the
+      instant the bar actually reversed — which is exactly what per-rep bar paths are read from.
+      The detector already knows where the bar turned, and two ways of using that are open and
+      neither is decided: the filter's stillness gate consulting the velocity it is integrating,
+      so a wobble cannot pass for a rest; or the detector's turns fed back as a zero-velocity
+      update, so the filter is told where the bar stopped rather than inferring it.
+- [ ] **A wobble is a rep.** An oscillation wide enough and slow enough to reach `SWING_MPS`
+      both ways is an out-and-back by every rule the detector has, so telling it from a lift
+      needs something the detector does not have — a net travel, or a window that has to end
+      where it started. The cheap knob is the speed bar, and what it would cost is the slow
+      strokes above. The false-positive map is where the size of the region is measured; see
       [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
 - [ ] **Trim the static heap region if the deepest stack figure ever asks for it.**
       The 64 KB `heap_allocator!` region is what the linker stack competes with

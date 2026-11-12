@@ -267,6 +267,35 @@ fn a_replay_from_a_state_reproduces_the_run() {
 }
 
 #[test]
+fn a_sample_the_sensor_cannot_have_read_does_not_move_the_bar() {
+    let mut fusion = Fusion::new();
+    let mut t = 0u32;
+    for _ in 0..300 {
+        fusion.update(&rest(t, [0.0; 3], [0.0; 3], [0.0; 3]));
+        t += DT_MS;
+    }
+
+    // The chip is configured for 8 g, so a specific force of 20 g is a corrupt register or a corrupt chunk rather than a bar.
+    let spike = Sample {
+        t_ms: t,
+        accel: [0, 0, quantize(20.0 * GRAVITY, ACCEL_SCALE)],
+        gyro: [0; 3],
+    };
+    fusion.update(&spike);
+    assert!(
+        magnitude(fusion.state().velocity) < 0.05,
+        "one unreadable sample left the bar moving at {:.2} m/s",
+        magnitude(fusion.state().velocity)
+    );
+    assert!(
+        fusion
+            .update(&rest(t + DT_MS, [0.0; 3], [0.0; 3], [0.0; 3]))
+            .still,
+        "an unreadable sample broke the stillness of the window around it"
+    );
+}
+
+#[test]
 fn magnitude_matches_vector_length() {
     assert!((magnitude([3.0, 4.0, 0.0]) - 5.0).abs() < 1e-6);
     assert!((magnitude([0.0, 0.0, -9.0]) - 9.0).abs() < 1e-6);

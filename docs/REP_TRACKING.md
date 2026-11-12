@@ -9,8 +9,8 @@ BNO055 (ACCGYRO, 100 Hz)
 Sampler ──► RAM ring (~13 s of samples)
    │
    ▼
-Rep detector (turning points, ZUPT at rest)
-   │  rep complete → slice [start-margin, end+margin] out of the ring
+Rep detector (a speed's swings, leak-anchored)
+   │  rep complete → slice [the turn it opened at, end+margin] out of the ring
    ▼
 Trace computation: world-frame displacement + orientation, summary stats
    │
@@ -37,6 +37,9 @@ Flash log (ring of 4 KB sectors) ──► BLE sync to the app
 - The range settings do not change those scales — only what clips, and how noisy the
   sensor is inside the chip. A rep's summary carries what they were
   (`RepConfig`), which is why a trace can be read without assuming today's build.
+- A sample past the configured clip is not a reading, and the filter refuses it rather than
+  integrating it; the device's stream carries a few corrupt samples a session.
+  [`GOTCHAS.md`](GOTCHAS.md) has the evidence.
 - Samples go into a RAM ring of `SAMPLE_RING_LEN` = 13 s (`REP_WINDOW_SAMPLES` = 1000
   = 10 s, which is the longest window a rep can ask for with its 500 ms margins,
   plus 3 s headroom).
@@ -56,74 +59,75 @@ is down.
 
 ## Detecting a rep
 
-`calypso_core::rep::Detector`, fed one sample at a time, asks the question in terms of
-travel rather than momentum. **A rep is an out-and-back**: the bar goes more than
-`MIN_ROM_M` one way, turns, and comes more than `MIN_ROM_M` back.
+`calypso_core::rep::Detector`, fed one sample at a time, asks the question in terms of the
+bar's **speed**. **A rep is an out-and-back of that speed**: the bar sets off past
+`SWING_MPS` one way, turns, and comes back past it the other.
 
 ```
-turn: the bar's vertical acceleration has turned around — a trough where it stopped rising, a
-      peak where it stopped falling — and has come back TURN_BACK from it; or, for a stroke
-      too gentle to move the acceleration, the vertical speed falls below VEL_MIN for T_TURN_MS
-leg:  the bar's travel between two turns, and which way it went
-rep:  two consecutive legs, opposite directions, each past MIN_ROM_M
+speed: the vertical acceleration integrated, and pulled back toward zero with SPEED_TAU_S
+swing: two threshold crossings in opposite directions, MIN_SWING_MS .. MAX_SWING_MS apart
+rep:   one swing
 ```
 
-**A turn is read on the vertical, not on the whole velocity**, because the vertical is the
-only axis a rep is measured on. The frame's horizontal residue — a couple of degrees of
-attitude, which is what an accelerometer offset leaves behind — integrates to more than
-`VEL_MIN` inside one stroke, and a turn read off the whole speed would then never happen.
-The bar turns along Z; where the estimate thinks it is heading in X and Y is not part of
-the rep.
+**The leak is what makes the speed worth asking.** An integral cannot know its own error, so
+an unfiltered one walks away as soon as the acceleration carries a bias — the fusion allows a
+couple of degrees of tilt, and `g·sin 2°` is 0.34 m/s² held for as long as the set lasts. A
+set is twenty seconds with no rest in it long enough to correct that, so the residue outgrows
+the stroke it is measuring. Pulling the integral toward zero makes the speed a measurement of
+*now*: a bar that is not moving has no speed, continuously, without a rest having to be judged
+and without waiting for one.
 
-**And it is read on the acceleration, not on the velocity**, because the velocity is an
-integral and any attitude residue it carries accumulates over a set. Over one stroke that
-residue is a few tenths of a metre per second and the vertical speed still crosses zero; over
-a set with no rest in it the speed can pass the whole set without ever coming near zero. A
-reading cannot do that: the acceleration swings ten metres per second squared either side of
-a turn whatever the integral has drifted to, so its extreme is the turn, and the turn says
-which way the leg went. The velocity keeps its say for the one case the acceleration cannot
-see — a deliberate negative whose acceleration barely moves — which is what `VEL_MIN` is still
-for.
+What that costs is the slowest strokes. The leak attenuates them — the slower the stroke, the
+less speed it leaves behind — so `SWING_MPS` is a floor under what counts as a rep, and a
+stroke the bar makes beneath it is not one. That is the whole of what the detector cannot see,
+and it is why the bar is where it is (`ROADMAP.md`, `GOTCHAS.md`).
 
-The detector integrates each sample's acceleration (rotated into the world frame) into a
-velocity, which is zero wherever the bar stops — at the bottom and at the top of every
-rep, whether it dwells there or not. A pause is just a turn that lasts longer, so a set
-nobody pauses through splits at each end the same way a slow one does. Tunables are
-constants at the top of `calypso-core/src/rep.rs`.
+**The out-and-back is in the measurement, not a check made after it.** The speed cannot pass
+one side and then the other without the bar having gone somewhere and come back, so there is no
+travel to measure, no turn to name off an acceleration extreme, and no legs to pair. A bump, a
+hand on the rack and a re-rack are refused by the same measurement that accepts a press: the
+bar does not reach the speed they would need on both sides. `MIN_ROM_M` no longer decides
+anything at detection time — it is asked of the trace a stored rep carries, which is what the
+app plots.
 
-**Travel is part of detection, not a check afterwards.** A leg too short to be half a
-rep is never kept, so it cannot pair with anything, and it cannot consume the leg before
-it: a bump, a re-rack and a hand on the rack (the one capture had four spans of 0.03–0.09 m
-among ten real reps) are rejected by the same measurement that accepts a press, and the few
-centimetres a bar settles back at a turnaround are motion that leaves the drive still
-waiting for its return. A one-way push tall enough to be a leg is
-dropped when the bar rests and then sets off the same way again — that is an unrack, not
-a rep. The summary is still checked against `MIN_ROM_M` when it is stored, against the
-travel the trace computes rather than the one integrated on the way in.
+**A rep is measured on the vertical**, and only the vertical. The frame's horizontal residue is
+as much as a couple of degrees of attitude, which is what the leak above is for; where the
+estimate thinks the bar is heading sideways is not part of a rep. The detector integrates all
+three axes, because the log prints the whole speed, and counts swings on Z alone.
 
-**A stall mid-drive is one rep with its whole travel.** The bar stopping without coming
-down splits a leg in two; two same-direction legs with no rest between them are the same
-stroke, so their travel is summed. After a rest they are not — that is a hold, and the
-older leg is the one that was already finished.
+**The turns a replay is anchored at are the velocity's own quiet.** A turn is an instant the bar
+was genuinely stopped, which is where a replay can put its velocity back to zero without lying
+about the motion, so the detector names three of them from the vertical velocity the replay will
+integrate: the turn behind the first half, which is the quietest that velocity has been since the
+stroke before it ended — or, for the first stroke the detector sees, in the `MARGIN_MS` before
+its crossing; the turn between the halves, which is the quietest since the first half crossed;
+and the end, which is the same question asked of the second. This is the one part of a rep a
+velocity can name better than a reading can: a minimum is the turn however much the integral has
+drifted.
 
-**What it cannot see is a stroke slower than `VEL_MIN`.** A leg ends on a turn, and a turn
-is a *speed*: a return that never reaches 0.07 m/s at its peak never turns, so it never
-closes a rep. For a bench that boundary sits between 0.12 and 0.14 m/s, and it is accepted
-for now (`ROADMAP.md`, and the test that pins it is the one to delete when it is fixed).
+**A one-way push is a rep to it, if the bar comes back.** An unrack that pauses, followed by
+the set's first stroke, reads as out, turn, back: the speed crossed the threshold going up, the
+bar turned at the top, and it crossed the other way coming down. What separates that from a
+rep is the travel the push leaves behind — the bar ends above where it started — and this
+detector does not measure travel. `ROADMAP.md` has it as open and `sim/tests/sets.rs` pins it:
+the count is right, the stored window and its ROM are not.
 
-**The velocity is integrated in the world frame.** The accelerometer's offset is learned,
-and the velocity anchored to zero, only while the bar is still: an offset learned from
-motion is the rep taken out of itself, and a velocity damped mid-rep is the same mistake one
-step later. The gyroscope's offset is not in that category — a bar moving vertically does not
-move gravity in the sensor's frame — so it is learned during a set, which is what keeps the
-vertical from drifting between rests. The detector keeps its own integrator rather than
-taking the filter's, deliberately, so that a change in what the device stores can be
-attributed to the detection or to the filter.
+**The velocity is integrated in the world frame**, from the acceleration the filter has
+already de-biased. Those offsets are learned the way the filter learns them: the
+accelerometer's only while the bar is still, because an offset learned from motion is the rep
+taken out of itself, and the gyroscope's whenever gravity is not moving in the sensor's frame,
+which a set is happy to provide — a bar moving vertically does not turn gravity. The detector
+keeps its own integrator rather than reading the filter's, deliberately, so that a change in
+what the device stores can be attributed to the detection or to the filter; the leak is its
+own, and it is not the filter's damping.
+
+Tunables are constants at the top of `calypso-core/src/rep.rs`.
 
 ## Computing a rep
 
-On rep close, the sampler copies `[start - MARGIN_MS, end + MARGIN_MS]` out of the
-ring and calls `rep::compute_rep`, which:
+On rep close, the sampler copies `[start, end + MARGIN_MS]` out of the ring — `start` being
+the turn the swing opened at, which is where the filter had already stopped the bar — and calls
+`rep::compute_rep`, which:
 
 1. Runs the filter ([`fusion.rs`]) over the window from the state the detector recorded
    where the window begins, so the rotation, the offsets and the anchoring are the ones
@@ -140,16 +144,14 @@ ring and calls `rep::compute_rep`, which:
    roll/pitch min/max in degrees.
 
 **A turn is where the velocity can be put back to zero for free, and only there.** A
-rep's legs meet at instants where the bar reversed, so its own speed is zero whatever
-the estimate says; everywhere else in a stroke the bar is moving and the estimate's
-error cannot be told from the motion. That makes the anchor as good as the instant is:
-the acceleration names it exactly (its extreme is where the bar stopped decelerating),
-a rest names it everywhere in the patch (the filter has already stopped the velocity
-there), and the vertical *speed* names it only to within `VEL_MIN` — so a turn the speed
-named is not anchored, because zeroing on it would trade a bounded drift for an error of
-the same size. The same holds of the rep's start: an onset is a start from rest, so the
-velocity is zeroed ahead of that sample's step, while a turn's step is the deceleration
-that led to it and the zero goes in after.
+rep's halves meet at an instant where the bar reversed, so its own speed is zero whatever
+the estimate says; everywhere else in a stroke the bar is moving and the estimate's error
+cannot be told from the motion. So the detector hands the replay the three turns it found,
+and the replay zeroes there and nowhere else. The one that is exact is the middle — a minimum of
+the velocity is the turn however much the integral that produced it has drifted. The two ends are
+the closest thing to a turn the detector has, which is what a bounded drift costs. A rep's start
+is zeroed ahead of its sample's step rather than after it: it is where the bar began to move,
+not where it stopped.
 
 **ROM is measured on Z, not on whichever axis moved furthest.** A barbell lift is the
 bar going up and down, and Z is the only axis that knows which way up is — it is pinned
@@ -172,7 +174,7 @@ gap as a single step, which adds 2.3 s of whatever acceleration sat on either si
 to the velocity at once. A gap is motion that was not measured — see `ROADMAP.md` and the
 can/must distinction this file's estimator does not yet make.
 
-The trace is capped at **512 points** (`TRACE_POINTS`). When a rep is longer than
+The trace is capped at `TRACE_POINTS`, the plot's budget. When a rep is longer than
 that, it is decimated and `RepSummary.decimated` is set. The decimation grid is
 anchored at the **last** sample, so a rep's end is always stored — the end is one of
 the two samples you judge a bar path by.

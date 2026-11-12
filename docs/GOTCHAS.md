@@ -378,6 +378,28 @@ still sensor never reads zero, so a real first reading cannot be lost to it. The
 at boot is still not a still window — the filter has not been still long enough to know which way is
 down — but it is now the motion that is missing from it rather than the sensor's.
 
+### A sample past the sensor's clip is not a reading
+
+**Symptom.** A stored rep reports metres of travel the bar never made — several times the ROM of
+the rep beside it — and the reps after it in the same set read long as well. Nothing marks the
+window: the bar was never moving fast enough to clip anything.
+
+**Cause.** The accelerometer is configured for ±8 g, so the chip cannot produce a reading past
+78 m/s², and a sample that has one is not a measurement of anything. It is a corrupt register
+read: in every over-range sample found so far the high byte of Z is `0xF1`, which is the
+register after Z's, and the axes beside it are stitched from two different instants — a burst
+that came back a register out of place, which is what a clock-stretch glitch injecting a start
+on the bus does. Ten milliseconds of a reading that size is metres per second of velocity the bar
+never had, and the attitude it leaves behind is wrong for four hundred, after which the
+stillness gate will not fire because the frame it judges is not the frame the bar is in. One
+sample is the rest of the set.
+
+**Fix.** The filter refuses a sample whose specific force exceeds the configured clip: it moves
+the clock and nothing else, leaving the state and the stillness where they were. The bound is the
+clip rather than a claim about how hard a bar can be moved, because the sensor's own range is the
+one thing that says a reading is impossible. The corruption itself is not fixed by this — the
+sample is refused where it is understood, not where it is read.
+
 ### A reset in the middle of a read leaves the bus locked
 
 **Symptom.** One boot in about eight halts at 0.2 s with `I2c(Timeout)` unwrapped out of the
@@ -409,7 +431,8 @@ more often the gate, because the gate leaves no reps to look at.
 
 **Cause.** A rep closed only after `|a|` stayed under 0.25 m/s² for 250 ms. A set nobody
 pauses through never produces that, so the span stayed open and ran from the first rep
-into the next: three reps of motion are already past `MAX_REP_MS` (8 s), and a span that
+into the next: three reps of motion are already past the longest a rep may be (8 s then,
+`MAX_SWING_MS` now), and a span that
 long was `return None` — thrown away whole, with no report and no log line. The one rep
 per set that did arrive was whichever closure landed inside 8 s.
 
@@ -439,43 +462,45 @@ pinned now; `calypso-core/tests/fusion.rs` is the filter under it and
 hand-written samples with answers worked out on paper, so a failure there says the maths
 is wrong rather than that a threshold moved.
 
-### A turn is a speed, so a gentle return is invisible
+### The speed has a floor, so a gentle return is invisible
 
-**Symptom.** A rep whose lowering is slow and controlled is not stored at all. For a bench
-the boundary sits between 0.12 and 0.14 m/s of peak return speed — at the very slow end
-of a deliberate negative, and inside the range of a lifter lowering under control.
+**Symptom.** A rep whose lowering is slow and controlled is not stored at all: the bar never
+reaches the speed the detector counts a stroke by, one half of the out-and-back is missing, and
+nothing closes. The boundary is `SWING_MPS` of the speed the detector estimates, which lands at
+the very slow end of a deliberate negative and inside the range of a lifter lowering under
+control.
 
-**Cause.** The detector delimits a rep by turning points, and a turn is the vertical speed
-falling below `VEL_MIN` (0.07 m/s) for `T_TURN_MS`. A stroke that never reaches that speed never
-turns, so it never becomes a leg, and no leg means no rep — regardless of how far the bar
-actually went.
+**Cause.** The detector's speed is a leaky integral, which is what keeps it from drifting
+through a set, and the leak attenuates slow strokes: the slower the stroke, the less speed it
+leaves. A stroke that never reaches `SWING_MPS` never crosses the threshold, so it never
+counts — regardless of how far the bar actually went.
 
-**Fix.** There is none yet, and this is a decision rather than an oversight: the turning
-point model fixed stalls and ROM fidelity, and the cost was accepted. Closing a leg
-on bounded travel as well as on a turn would cover it. Until then,
-`sim/tests/detector_tolerance.rs::a_gentle_return_is_not_detected_yet` pins the behaviour
-so it fails — loudly, with instructions — if it is ever fixed.
+**Fix.** There is none, and it is the price of the leak rather than an oversight: without the
+leak the speed drifts through a set by more than the stroke it is measuring, and no threshold on
+it means anything. Lowering the bar buys the slow strokes back at the cost of every noise floor
+the same bar is holding down.
+`sim/tests/detector_tolerance.rs::a_gentle_return_is_not_detected_yet` pins the behaviour so it
+fails — loudly, with instructions — if it is ever fixed.
 
 ### A turn read off the whole velocity never happens on a real frame
 
 **Symptom.** The device is recording — the sampler says the filter is settled and the detector
-line prints a bias and an acceleration — but `legs` climbs slowly or not at all and nothing is
-stored. `|v|` in that line never falls to the centimetres a turnaround should, while the
+line prints a bias and an acceleration — but the `halves` count climbs slowly or not at all and
+nothing is stored. `|v|` in that line never falls to the centimetres a turnaround should, while the
 acceleration it is integrating looks small.
 
-**Cause.** The turn test compared `VEL_MIN` against the *whole* velocity. A leg is a signed
-*vertical* travel measured on Z, but X and Y carry the frame's residue, and the fusion's own
+**Cause.** The turn test compared a small threshold on speed against the *whole* velocity. A rep
+is a *vertical* measurement on Z, but X and Y carry the frame's residue, and the fusion's own
 documentation allows a couple of degrees of it — `g·sin(2°)` is 0.34 m/s², which over a
-one-second stroke is 0.34 m/s of horizontal velocity, five times `VEL_MIN`, and it stays there
-because the detector damps velocity only while no leg is open. The bar turned; the speed did
-not. Nothing the sensor reads is wrong: the vertical is clean, and the horizontal was never
-part of the rep.
+one-second stroke is 0.34 m/s of horizontal velocity, more than the bar's own, and it stays
+there because nothing damps it while the bar is moving. The bar turned; the speed did not.
+Nothing the sensor reads is wrong: the vertical is clean, and the horizontal was never part of
+the rep.
 
-**Fix.** `Detector::vertical_speed` is what a turn is read on, and what `moved` is set from, so
-a bar carried sideways while it turns is still turning. `Detector::speed` still reports the whole
-velocity for the log — it is the number that says the frame is drifting — and it is deliberately
-not the number the turn test reads. `sim/tests/turns.rs` pins a gyro offset that arrives with the
-rep, which is how this arrives on a real device.
+**Fix.** Only the vertical decides. The detector integrates all three axes — the log prints the
+whole of it, which is the number that says the frame is drifting — and counts a swing on Z
+alone, so a bar carried sideways while it turns is still turning. `sim/tests/turns.rs` pins a
+gyro offset that arrives with the rep, which is how this arrives on a real device.
 
 ### A leg under the travel threshold consumes the rep before it
 
@@ -489,9 +514,14 @@ so a 3–6 cm leg arrived between a drive and its return — under `MIN_ROM_M`, 
 but it replaced the drive it followed. The drive was then the one thrown away, and the return
 that came after it had nothing to pair with.
 
-**Fix.** A leg under `MIN_ROM_M` is dropped and leaves the pending leg alone. The one exception
-is a same-direction leg with no rest between them, which is a stall inside a stroke: its travel
-is added to that stroke whatever its size. `sim/tests/turns.rs` pins the settle at three sizes.
+**Fix then.** A leg under `MIN_ROM_M` is dropped and leaves the pending leg alone. The one
+exception is a same-direction leg with no rest between them, which is a stall inside a stroke:
+its travel is added to that stroke whatever its size. `sim/tests/turns.rs` pins the settle at
+three sizes.
+
+**Now.** There is no pending leg to consume: a settle at the turnaround is a few centimetres at
+a speed far under `SWING_MPS`, so the swing's own minimum reads straight past it and the rep it
+belongs to is counted by the same crossings as before.
 
 ### A history ring answers a stale question with a default
 
@@ -530,17 +560,22 @@ ran.
 **Symptom.** Every rep after the first in a set reads high — 24% over travel — and the
 velocity the trace starts from is a bar descending at 0.29 m/s.
 
-**Cause.** Legs are contiguous by design: each turn is both the end of a leg and the start
-of the next, which is what makes a turnaround with no pause either side two legs. The
-consequence is that a leg can *open* in the middle of a hold, so the rep's span — and its
-`MARGIN_MS` — begins while the bar is still finishing the previous stroke, and the
-unexplained travel in the window is the previous stroke's tail.
+**Cause.** Legs were contiguous by design: each turn was both the end of a leg and the start
+of the next, which is what made a turnaround with no pause either side two legs. The
+consequence was that a leg could *open* in the middle of a hold, so the rep's span — and its
+`MARGIN_MS` — began while the bar was still finishing the previous stroke, and the
+unexplained travel in the window was the previous stroke's tail.
 
-**Fix.** A confirmed rest before the leg has moved abandons the open leg, and the next
+**Fix then.** A confirmed rest before the leg has moved abandons the open leg, and the next
 one starts at the motion onset instead. The rule is: a turn continues a chain, a hold
 breaks it. "Confirmed" is the filter's stillness — the reading holding at 1 g for 400 ms
 — rather than a threshold on a single sample, so the rule does not depend on how slowly
 the bar was set down.
+
+**Now.** A span opens at a quiet the filter's vertical velocity had: the turn the previous stroke
+ended on, or — for the first stroke after the detector starts — the quietest moment in the
+`MARGIN_MS` before its crossing, which is the bar parked where the swing began. The previous
+stroke's tail is outside the window by construction, and no rest has to be confirmed for it.
 
 ### A hole in the timeline is bridged as one step
 
@@ -1062,7 +1097,7 @@ the generated ones, because they are what the *maths* runs on rather than what t
   conversion per sample.
 - **`rep::TracePoint`** — 32 flat bytes (`pos: [f32; 3]`, `accel: [i16; 3]`,
   `quat: [i16; 4]`) against a `TraceSample` that carries a derived `t_offset_ms` and
-  the wire's quantized ints. A rep's trace is up to 512 points.
+  the wire's quantized ints. A rep's trace is at most `TRACE_POINTS`.
 
 What makes this more than tidiness: **a decoded message is ~2 KB** — a full trace chunk
 is stored inline in a `TraceSample` list — and a frame that size is real stack on a

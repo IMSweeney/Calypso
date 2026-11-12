@@ -143,5 +143,6 @@ not need the app: `espflash read-flash 0x190000 0x270000 log.bin`, then `cargo r
 only the device saw becomes a `.pblog` here.
 
 **Replaying one through the detector**: from `sim/`, `cargo run --example replay_capture
--- <path.pblog>` prints the spans today's detector finds in each stored window, and
-whether `MIN_ROM_M` would store them.
+-- <path.pblog>` prints the spans today's detector finds in each stored window, and `--spans`
+says where each rep's travel came from — the trace's own range, or the state the window was
+seeded with.

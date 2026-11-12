@@ -60,6 +60,10 @@ const GYRO_TAU_S: f32 = 0.25;
 const V_TAU_S: f32 = 0.5;
 /// Longest integration step honoured, so a hole in the samples cannot become a jump in velocity.
 const MAX_DT_S: f32 = 0.1;
+/// Largest specific force (m/s²) the sensor can have read: its configured clip.
+///
+/// A reading past the clip is not a bar: the device's stream carries a handful of corrupt samples a session, and each one is metres per second of velocity and a window of attitude that were never measured.
+const MAX_FORCE: f32 = crate::sampler::ACCEL_RANGE_G as f32 * GRAVITY;
 
 const RAD_PER_DPS: f32 = core::f32::consts::PI / 180.0;
 
@@ -206,6 +210,15 @@ impl Fusion {
             self.state.gyro_bias,
         );
         let raw = s.specific_force_f32();
+        // A sample the sensor cannot have read is not a measurement of the bar, so it moves the clock and nothing else.
+        if magnitude(raw) > MAX_FORCE {
+            return Filtered {
+                t_ms: s.t_ms,
+                linear_accel: [0.0; 3],
+                still: self.state.settled,
+                state: self.state,
+            };
+        }
 
         // The gyro carries the attitude whenever it is turning. Applied in the body frame.
         if dt > 0.0 {
