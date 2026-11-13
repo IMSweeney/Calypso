@@ -22,6 +22,9 @@ they are good to roughly half a minute — the recording's own clock is the auth
 | ~15:45:39 | 4 × 155 |
 | ~15:46:07 | stopped; recording saved (file last written 15:45:44) |
 
+The set rows are each set's `noted_at` in `captures/captures.json`. A note is typed after the set
+it records, so those times are an upper bound on when each set ended.
+
 Bench session: six loaded sets, 28 reps at 135–165, plus a 10-rep bar-only warmup.
 
 ## What the recording shows

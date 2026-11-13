@@ -19,6 +19,9 @@ they are good to roughly half a minute — the recording's own clock is the auth
 | ~16:03:10 | 5 × 185 |
 | ~16:03:36 | stopped; recording saved (file last written 16:03:12) |
 
+The set rows are each set's `noted_at` in `captures/captures.json`, and are after the set they
+record.
+
 Five sets of 5 at 185 after a 5 × 135 warmup.
 
 ## What the recording shows

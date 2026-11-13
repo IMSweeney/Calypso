@@ -1,5 +1,5 @@
 {
-  "about": "What each capture in the bucket is. A capture is recorded data rather than source, so the bytes live in the object store and only this file, the session notes beside it, and the plots drawn from them are in git. `tools/captures.sh` moves the bytes; `sim`'s tests read them through `calypso_sim::captures`.",
+  "about": "What each capture in the bucket is. A capture is recorded data rather than source, so the bytes live in the object store and only this file, the session notes beside it, and the plots drawn from them are in git. `tools/captures.sh` moves the bytes; `sim`'s tests read them through `calypso_sim::captures`. A set's `noted_at` is when its note was typed, in local time with the offset it was typed in, and it is after the set it records.",
   "captures": [
     {
       "name": "working-sets-2026-11-10.pblog",
@@ -10,13 +10,13 @@
       "about": "The first real session recorded through the live stream: a bar-only warmup of ten reps and six loaded sets, the device mounted on the bar, the detector off for the whole recording. Every sample the device took is here.",
       "expected": {
         "sets": [
-          { "reps": 10, "load_lb": null },
-          { "reps": 5, "load_lb": 135 },
-          { "reps": 5, "load_lb": 155 },
-          { "reps": 5, "load_lb": 165 },
-          { "reps": 5, "load_lb": 165 },
-          { "reps": 4, "load_lb": 165 },
-          { "reps": 4, "load_lb": 155 }
+          { "reps": 10, "load_lb": null, "noted_at": "2026-11-10T15:27:33-08:00" },
+          { "reps": 5, "load_lb": 135, "noted_at": "2026-11-10T15:29:21-08:00" },
+          { "reps": 5, "load_lb": 155, "noted_at": "2026-11-10T15:31:57-08:00" },
+          { "reps": 5, "load_lb": 165, "noted_at": "2026-11-10T15:34:09-08:00" },
+          { "reps": 5, "load_lb": 165, "noted_at": "2026-11-10T15:37:39-08:00" },
+          { "reps": 4, "load_lb": 165, "noted_at": "2026-11-10T15:41:33-08:00" },
+          { "reps": 4, "load_lb": 155, "noted_at": "2026-11-10T15:45:39-08:00" }
         ]
       }
     },
@@ -29,12 +29,12 @@
       "about": "The same device on the same boot, recorded straight after the bench session: a warmup and five sets of five. `seq` continues from the bench recording because the link never dropped.",
       "expected": {
         "sets": [
-          { "reps": 5, "load_lb": 135 },
-          { "reps": 5, "load_lb": 185 },
-          { "reps": 5, "load_lb": 185 },
-          { "reps": 5, "load_lb": 185 },
-          { "reps": 5, "load_lb": 185 },
-          { "reps": 5, "load_lb": 185 }
+          { "reps": 5, "load_lb": 135, "noted_at": "2026-11-10T15:51:28-08:00" },
+          { "reps": 5, "load_lb": 185, "noted_at": "2026-11-10T15:54:34-08:00" },
+          { "reps": 5, "load_lb": 185, "noted_at": "2026-11-10T15:56:58-08:00" },
+          { "reps": 5, "load_lb": 185, "noted_at": "2026-11-10T15:59:10-08:00" },
+          { "reps": 5, "load_lb": 185, "noted_at": "2026-11-10T16:01:28-08:00" },
+          { "reps": 5, "load_lb": 185, "noted_at": "2026-11-10T16:03:10-08:00" }
         ]
       }
     },

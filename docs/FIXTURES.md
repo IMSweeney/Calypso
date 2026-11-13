@@ -55,11 +55,18 @@ needs the capture pulled or `CAPTURES_REMOTE` naming the bucket: with neither it
 rather than passing on nothing. The two tests in `sim/tests/real_capture.rs` are
 `#[ignore]`d and run on purpose with `cargo test -- --ignored`.
 
-The manifest also carries what a session did — the reps in each set — for the captures
-where somebody wrote that down at the time. `sim/tests/captures.rs` replays such a
-recording through the real filter and detector and asserts the sets it closes are the
-sets that were performed, and no others. That is what makes a detector change answerable
-against a real session instead of against a fixture.
+The manifest also carries what a session did — the reps in each set, and the time the
+note recording that set was written — for the captures where somebody wrote that down at
+the time. `sim/tests/captures.rs` replays such a recording through the real filter and
+detector and asserts the sets it closes are the sets that were performed, and no others.
+That is what makes a detector change answerable against a real session instead of against
+a fixture.
+
+A set's `noted_at` is a local time with the offset it was taken in, because that is what
+a person types and the recording is dated by its own `BootClock`. A note is written once
+the set is done, so its time is an upper bound on when the set's last rep happened — and
+the only one that came from the performance rather than from the recording. The tests use
+it as one: a rep closed after it belongs to the rest.
 
 ## Generating them
 

@@ -52,12 +52,32 @@ pub fn samples(pblog: &[u8]) -> Vec<Sample> {
                     samples.push(s);
                 }
             }
-            // The boot's epoch, for dating the stream on a wall clock. Nothing here reads a calendar.
+            // The boot's epoch, for dating the stream on a wall clock; `epoch_s` is what reads it.
             Record::Clock(_) => {}
             other => panic!("a live stream recording cannot hold a {other:?}"),
         }
     }
     samples
+}
+
+/// The wall clock the recording's uptime counts from, in unix seconds.
+///
+/// The app writes one `BootClock` when it opens a file and writes it again if the phone's clock is re-set, and the device writes 0 at mount for a boot no client has dated yet; so the newest non-zero one is the epoch a recording is dated by.
+/// `None` is a recording whose boot never had a clock, which is undated rather than dated at 1970.
+pub fn epoch_s(pblog: &[u8]) -> Option<u32> {
+    let (records, truncated) = read_dump(pblog);
+    assert!(!truncated, "the recording is torn at the end");
+    let mut epoch_s = None;
+    for record in &records {
+        if let Record::Clock(clock) =
+            decode_record(record).expect("a record in the recording decodes")
+        {
+            if clock.epoch_s != 0 {
+                epoch_s = Some(clock.epoch_s);
+            }
+        }
+    }
+    epoch_s
 }
 
 /// Feed the whole stream through one filter and one detector, and close the reps it finds.

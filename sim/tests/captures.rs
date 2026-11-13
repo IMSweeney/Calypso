@@ -1,11 +1,11 @@
 //! What a session did, against what the detector makes of it.
 //!
-//! `captures/captures.json` says how many reps each set of a session had, written down by the person who performed them rather than read off the code under test. This runs the firmware's own filter and detector over the recording and asserts they found those sets and no others, which is the only check that says a detector change helps a real session and not just a fixture.
+//! `captures/captures.json` says what each set of a session was — how many reps it had, and when the note recording it was written — taken from the person who performed the work rather than read off the code under test. This runs the firmware's own filter and detector over the recording and asserts they found those sets, in the places those sets happened, which is the only check that says a detector change helps a real session and not just a fixture.
 //!
 //! The recordings are recorded data and live in the bucket, so a run needs them pulled into `captures/` or `CAPTURES_REMOTE` naming the bucket; without either they fail rather than read nothing.
 
 use calypso_core::rep::{DetectedRep, TracePoint, Zero};
-use calypso_sim::captures::{self, Capture};
+use calypso_sim::captures::{self, Capture, Set};
 use calypso_sim::stream;
 
 /// The gap that separates one set from the next.
@@ -44,6 +44,81 @@ fn a_session_is_the_sets_it_was() {
                 "{} ({}): the detector closed sets of {found:?}, and the session was {want:?}",
                 capture.name, capture.recorded
             ));
+        }
+    }
+    assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+}
+
+/// A set is over before the note that records it was written.
+///
+/// A note is typed once the set is done, so its time is an upper bound on when the set's last rep happened, and it is a bound the performance set rather than the recording. A rep the detector closes after it is made of the rest, not of the set.
+///
+/// Where the detector closed a different number of sets than the session had, there is nothing to pair them on, and `a_session_is_the_sets_it_was` has that.
+#[test]
+fn a_set_is_over_before_its_note_is_written() {
+    let mut wrong: Vec<String> = Vec::new();
+    for capture in captures::manifest()
+        .into_iter()
+        .filter(|c| c.expected.is_some())
+    {
+        let expected = capture.expected.as_ref().expect("filtered for it");
+        let pblog = captures::bytes(&capture.name);
+        let found = found_sets(&pblog);
+        if found.len() != expected.sets.len() {
+            continue;
+        }
+        let epoch_ms = epoch_ms(&capture.name, &pblog);
+        for (n, (set, want)) in found.iter().zip(&expected.sets).enumerate() {
+            let end_ms = set.last().expect("a set holds a rep").span.end_ms;
+            let late_ms = epoch_ms + i64::from(end_ms) - want.noted_at.0;
+            if late_ms > 0 {
+                wrong.push(format!(
+                    "{} ({}): set {}, {}, closed its last rep {:.1} s after the note that says it was over",
+                    capture.name,
+                    capture.recorded,
+                    n + 1,
+                    describe(want),
+                    late_ms as f64 / 1000.0
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+}
+
+/// Nothing the detector closes comes after the session's last note.
+///
+/// That note is written between the last set and the recording being stopped, so a rep closed after it is the bar going back in the rack or the phone being picked up, and never a rep.
+/// It is also the one placement check that needs no pairing, so it still says something on a session whose sets the detector got wrong.
+#[test]
+fn nothing_is_closed_after_the_session_was_noted_over() {
+    let mut wrong: Vec<String> = Vec::new();
+    for capture in captures::manifest()
+        .into_iter()
+        .filter(|c| c.expected.is_some())
+    {
+        let expected = capture.expected.as_ref().expect("filtered for it");
+        let over_at = expected
+            .sets
+            .last()
+            .expect("a session performed a set")
+            .noted_at
+            .0;
+        let pblog = captures::bytes(&capture.name);
+        let epoch_ms = epoch_ms(&capture.name, &pblog);
+        let out = stream::replay(&stream::samples(&pblog), &mut |_, _, _| {});
+        for rep in &out.reps {
+            let late_ms = epoch_ms + i64::from(rep.span.end_ms) - over_at;
+            if late_ms > 0 {
+                wrong.push(format!(
+                    "{} ({}): a rep closed {}..{} ms, {:.1} s after the note that ended the session",
+                    capture.name,
+                    capture.recorded,
+                    rep.span.start_ms,
+                    rep.span.end_ms,
+                    late_ms as f64 / 1000.0
+                ));
+            }
         }
     }
     assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
@@ -101,12 +176,32 @@ fn height_at(trace: &[TracePoint], t_ms: u32) -> Option<f32> {
 
 /// The reps the detector closes in one recording, counted per set.
 fn reps_per_set(name: &str) -> Vec<u32> {
-    let samples = stream::samples(&captures::bytes(name));
-    let out = stream::replay(&samples, &mut |_, _, _| {});
-    sets(&out.reps)
+    found_sets(&captures::bytes(name))
         .iter()
         .map(|set| u32::try_from(set.len()).expect("a set of reps"))
         .collect()
+}
+
+/// The sets the detector closes in one recording, in the order it closed them.
+fn found_sets(pblog: &[u8]) -> Vec<Vec<DetectedRep>> {
+    let samples = stream::samples(pblog);
+    sets(&stream::replay(&samples, &mut |_, _, _| {}).reps)
+}
+
+/// The wall clock the recording's uptime counts from, in unix milliseconds.
+fn epoch_ms(name: &str, pblog: &[u8]) -> i64 {
+    let epoch_s = stream::epoch_s(pblog).unwrap_or_else(|| {
+        panic!("{name}: the recording holds no clock, so nothing on its timeline can be dated")
+    });
+    i64::from(epoch_s) * 1000
+}
+
+/// A set as the note describes it, for a reader of a failure.
+fn describe(set: &Set) -> String {
+    match set.load_lb {
+        Some(lb) => format!("{} reps at {lb} lb", set.reps),
+        None => format!("{} reps bar only", set.reps),
+    }
 }
 
 /// The reps grouped back into the sets they were performed in, in order.

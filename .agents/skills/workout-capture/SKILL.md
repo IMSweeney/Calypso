@@ -62,7 +62,7 @@ The newest entry carries an absolute time and every other carries an offset from
 anchor on the newest and walk backwards. Then cross-check both ends against the file: its name gives
 the start, its modification time the end. Those offsets are rounded to about two figures, so the
 recovered times are good to roughly half a minute — say so in the write-up instead of implying the
-transcript is a stopwatch.
+transcript is a stopwatch. Each one goes into the manifest as its set's `noted_at`.
 
 ### d. Decode it and replay it
 
@@ -101,8 +101,8 @@ Numbers that move belong here, in the note. They do not belong in `docs/`.
   "about": "One sentence on what the session was and why it was recorded.",
   "expected": {
     "sets": [
-      { "reps": 5, "load_lb": 135 },
-      { "reps": 5, "load_lb": null }
+      { "reps": 5, "load_lb": 135, "noted_at": "2026-11-10T15:51:28-08:00" },
+      { "reps": 5, "load_lb": null, "noted_at": "2026-11-10T15:54:34-08:00" }
     ]
   }
 }
@@ -112,6 +112,11 @@ Numbers that move belong here, in the note. They do not belong in `docs/`.
 for a phone's own history. `expected` is the **ground truth from the user's notes**, in the order
 the sets were performed, never what the detector currently closes: `sim/tests/captures.rs` is
 supposed to be able to fail, and it does. Bar-only sets are `"load_lb": null`.
+
+`noted_at` is that set's time out of the notes, to the second, with the offset they were taken in
+— `-08:00` or whatever the session ran in, never a bare local time and never an epoch number. It
+is the time the note was typed, so it is after the set: the tests treat it as an upper bound on
+when the set ended, and nothing else.
 
 ### g. Upload it, and prove it landed
 
