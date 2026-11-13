@@ -1,20 +1,4 @@
 //! The attitude filter: the sensor's accelerometer and gyroscope in, a linear acceleration and an attitude out.
-//!
-//! The accelerometer measures **specific force**: gravity plus whatever the sensor is doing. Its
-//! *direction* is gravity whenever the bar's own acceleration is small compared with `g`, which is true for a barbell even mid-stroke: a vertical stroke's acceleration is along gravity and does not tilt the measured direction at all.
-//!
-//! So the attitude is a complementary filter. The gyro carries it through rotation, and the accelerometer pulls it toward the measured gravity at all times — fast when the bar is still, slowly while it moves. Pulling only while still is what a first version did, and a gyro bias of a degree per second then walks the vertical several degrees across a set. A tilted vertical leaks `g·sin(tilt)` into the horizontal, and integrating that is a bar that appears to travel metres sideways.
-//!
-//! **Stillness is a separate question.** The accelerometer cannot tell a still bar from one crossing zero acceleration at its fastest point, so "has stopped changing" is not enough.
-//! Stillness is asked of the **window**, not of the reading: a resting bar's specific force swings by a fraction of a m/s² from sample to sample, so no single reading and no spread of them can say the bar is not moving, while a stroke's acceleration changes sign inside a window and averages to nothing.
-//! Both halves of the question are needed. The window's mean is 1 g with the offset out, which a slow stroke cannot hold; and nothing in the window strays far from it, which a fast stroke cannot avoid.
-//! That is the gate for the accelerometer's offset and the zero-velocity update; it is not the gate for believing gravity.
-//!
-//! **The gyro's offset is a question for the accelerometer.** A bias turns the attitude while gravity stays put in the sensor's frame; a real rotation moves gravity through it. That difference is what lets a set learn the bias between reps, where it is never still long enough to be called at rest.
-//!
-//! **What is not observable.** Yaw, because there is no magnetometer; it drifts and nothing here can stop it. An accelerometer offset is indistinguishable from a tilt, so its sideways part stays in the attitude as a couple of degrees and cancels out of the linear acceleration exactly.
-//!
-//! **Velocity drifts; stillness bounds it.** Integrating acceleration cannot know its own error, so velocity is only trustworthy between two still moments. Every rest sets it to zero, which is what a bar on a rack or at the bottom of a set is doing anyway.
 
 use crate::sampler::Sample;
 
@@ -24,21 +8,13 @@ pub const GRAVITY: f32 = 9.80665;
 /// Samples in the stillness window: 400 ms at the device's 100 Hz.
 pub const STILL_WINDOW: usize = 40;
 /// How far the window's **mean** specific force may sit from 1 g, with the offset taken out, while the bar rests (m/s²).
-///
-/// The mean and not the spread: a resting bar's reading strays by a few tenths from sample to sample, so a bound on the spread is a bound on the platform's vibration.
-/// What a slow stroke cannot do is hold this mean for a window, because a stroke that did would be going nowhere.
 pub const STILL_GRAVITY: f32 = 0.12;
 /// How far any one sample in the window may sit from 1 g, with the offset taken out (m/s²).
-///
-/// The other half of the same question: a stroke's acceleration turns over inside a window and its mean comes back to 1 g while the bar is plainly moving.
-/// Loose enough for a resting bar to swing under it and tight enough that a stroke cannot hide in it.
 pub const STILL_STRAY: f32 = 0.8;
 /// The window's mean angular rate (dps) under which the sensor is not turning.
 pub const STILL_RATE_DPS: f32 = 2.0;
 
 /// Per-axis spread of the measured gravity *direction* under which the sensor is not turning.
-///
-/// A gyro bias and a vertical stroke both leave gravity pointing the same way in the sensor's frame, so the bias can be learned during a set; a real rotation moves that direction, which is what keeps a roll from being mistaken for a bias.
 const DIRECTION_SPREAD: f32 = 0.01;
 
 /// How long the reading must be quiet before the attitude is taken to know which way is down.
@@ -47,12 +23,8 @@ pub const READY_S: f32 = 1.0;
 /// Time constant of the attitude's pull toward measured gravity while the bar is still.
 const ATT_TAU_STILL_S: f32 = 1.0;
 /// The same while the bar is moving.
-///
-/// Slow enough that a stroke's own horizontal acceleration — a bench's bar path, a swing — is averaged rather than followed, fast enough that a changing gyro bias cannot walk the vertical.
 const ATT_TAU_MOVING_S: f32 = 10.0;
 /// Time constant of the accelerometer's offset, learned from a resting window.
-///
-/// Slow, because temperature moves it over minutes and a rest is the only reading that can be believed about it.
 const TRACK_TAU_S: f32 = 2.0;
 /// Time constant of the gyro's offset, learned whenever gravity is not moving in the sensor's frame.
 const GYRO_TAU_S: f32 = 0.25;
@@ -61,13 +33,10 @@ const V_TAU_S: f32 = 0.5;
 /// Longest integration step honoured, so a hole in the samples cannot become a jump in velocity.
 const MAX_DT_S: f32 = 0.1;
 /// Largest specific force (m/s²) the sensor can have read: its configured clip.
-///
-/// A reading past the clip is not a bar: the device's stream carries a handful of corrupt samples a session, and each one is metres per second of velocity and a window of attitude that were never measured.
 const MAX_FORCE: f32 = crate::sampler::ACCEL_RANGE_G as f32 * GRAVITY;
 
 const RAD_PER_DPS: f32 = core::f32::consts::PI / 180.0;
 
-/// Everything the filter remembers, which is also everything a replay needs to start where it did.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FusionState {
     /// World-frame velocity (m/s).
@@ -83,7 +52,6 @@ pub struct FusionState {
 }
 
 impl FusionState {
-    /// Level, still, and nothing learned: where a boot starts.
     pub const LEVEL: FusionState = FusionState {
         velocity: [0.0; 3],
         attitude: [1.0, 0.0, 0.0, 0.0],
@@ -99,7 +67,6 @@ impl Default for FusionState {
     }
 }
 
-/// What the filter says about one sample.
 #[derive(Debug, Clone, Copy)]
 pub struct Filtered {
     /// The sample's own timestamp.
@@ -112,7 +79,6 @@ pub struct Filtered {
     pub state: FusionState,
 }
 
-/// What the last [`STILL_WINDOW`] samples say about the bar.
 #[derive(Debug, Clone, Copy)]
 struct Window {
     /// Mean specific force, as the sensor read it (m/s²).
@@ -123,15 +89,11 @@ struct Window {
     stray: f32,
 }
 
-/// The filter. One of these runs for as long as the device is up, and another replays a stored window from its recorded state.
 #[derive(Debug, Clone)]
 pub struct Fusion {
     state: FusionState,
-    /// `None` until the first sample, because the step into the first one is not a step.
     prev_t_ms: Option<u32>,
-    /// The last [`STILL_WINDOW`] samples: the specific force and the angular rate, both as they were read, over storage that wraps.
-    ///
-    /// Both are kept **raw**, because the offset is what is learned from them, and judging either once the offset is out would put the estimate inside its own input.
+
     win: [[f32; 6]; STILL_WINDOW],
     win_head: usize,
     win_len: usize,
@@ -156,7 +118,6 @@ impl Fusion {
         }
     }
 
-    /// A filter starting where another one was, which is how a stored window is replayed.
     pub fn from_state(state: FusionState) -> Self {
         let mut fusion = Fusion {
             state,
@@ -164,14 +125,12 @@ impl Fusion {
             ..Fusion::new()
         };
         if state.settled {
-            // The state was taken in a rest, so the window the replay starts from is that rest: a filter seeded with one sample and then told the bar is still would have to earn the same window again, and the samples to earn it with are behind it.
             let up = rotate_by_quat(conjugate(state.attitude), [0.0, 0.0, 1.0]);
             let resting = [
                 up[0] * GRAVITY + state.accel_bias[0],
                 up[1] * GRAVITY + state.accel_bias[1],
                 up[2] * GRAVITY + state.accel_bias[2],
             ];
-            // The window holds the rate as it would have been read, so a rest carries the offset rather than a zero: what the predicates ask of it is the rate with that offset out.
             for _ in 0..STILL_WINDOW {
                 fusion.record(&resting, &state.gyro_bias);
             }
@@ -183,22 +142,18 @@ impl Fusion {
         self.state
     }
 
-    /// Put the velocity back to zero, which is what a replay does at every turn it is told about.
     pub fn zero_velocity(&mut self) {
         self.state.velocity = [0.0; 3];
     }
 
-    /// How long the bar could have been at rest, in seconds — what readiness is counted toward.
     pub fn still_for_s(&self) -> f32 {
         self.quiet_s
     }
 
-    /// Whether the attitude knows which way is down, which is the gate on recording anything.
     pub fn ready(&self) -> bool {
         self.ready
     }
 
-    /// Feed one sample and say what it means.
     pub fn update(&mut self, s: &Sample) -> Filtered {
         let dt = match self.prev_t_ms {
             None => 0.0,
@@ -211,7 +166,6 @@ impl Fusion {
             self.state.gyro_bias,
         );
         let raw = s.specific_force_f32();
-        // A sample the sensor cannot have read is not a measurement of the bar, so it moves the clock and nothing else.
         if magnitude(raw) > MAX_FORCE {
             return Filtered {
                 t_ms: s.t_ms,
@@ -221,7 +175,6 @@ impl Fusion {
             };
         }
 
-        // The gyro carries the attitude whenever it is turning. Applied in the body frame.
         if dt > 0.0 {
             let turn = quat_from_rotvec(scale(rate, dt));
             self.state.attitude = normalize(quat_mul(self.state.attitude, turn));
@@ -230,8 +183,6 @@ impl Fusion {
         self.record(&raw, &s.gyro_f32().map(|dps| dps * RAD_PER_DPS));
         let window = self.window();
         let full = self.win_len >= STILL_WINDOW;
-        // A window the bar could have been resting in: nothing in it strayed far from 1 g and it was not turning.
-        // What is left to ask is whether `1 g` is where its mean sits, which is a question about the offset rather than about the motion.
         let shaped = full && window.stray <= STILL_STRAY;
         let mean_rate = sub(window.mean_rate, self.state.gyro_bias);
         let resting = shaped && magnitude(mean_rate) < STILL_RATE_DPS * RAD_PER_DPS;
@@ -241,12 +192,9 @@ impl Fusion {
 
         self.quiet_s = if shaped { self.quiet_s + dt } else { 0.0 };
         if !self.ready {
-            // There is no attitude worth protecting at a boot, so the state is set rather than filtered: one exact rotation onto measured gravity, and both offsets set with it.
-            // A reading cannot say how much of itself is the bar's motion and how much is the sensor's error, and a filter would leave the difference as degrees and tenths of a m/s² for the rest of the session.
             if shaped {
                 self.set_attitude_from(&window.mean_force);
                 self.set_accel_offset(&window.mean_force);
-                // The same question the set asks of the gyro's offset, and for the same reason: a bar being carried turns gravity in the sensor's frame, and a turn taken for a bias is a turn the attitude then refuses to make.
                 if self.direction_is_quiet() {
                     self.set_gyro_offset(&window.mean_rate);
                 }
@@ -255,11 +203,6 @@ impl Fusion {
                 self.ready = true;
             }
         } else {
-            // From then on the gyro carries the attitude, and the accelerometer only pulls.
-            // Gravity's direction is a reference whenever it is stable: at rest, or mid-stroke on a vertical path, where the bar's own acceleration lies along gravity.
-            // The pull keys on that direction, not on magnitude.
-            // `still` also asks the magnitude, and a raw sensor's up axis can read 9.5 g instead of 9.81 g, which fails `still` and leaves a 90° mount's frame stuck wrong.
-            // An offset corrupts magnitude, not gravity's direction, so it must not demote the pull.
             let tau = if still || self.direction_is_quiet() {
                 ATT_TAU_STILL_S
             } else {
@@ -268,11 +211,9 @@ impl Fusion {
             self.pull_toward_gravity(&window.mean_force, dt / tau);
         }
 
-        // The accelerometer's offset is learned from a window the bar could have been resting in, and from nothing else. A stroke's shoulder holds one reading about as long as a rest does, so learning it from "the reading has stopped changing" teaches the offset the bar's own acceleration, in as many directions as the bar strokes — a bias that follows the motion, largest where the bar is fastest.
         if dt > 0.0 && resting {
             self.learn_accel_offset(&window.mean_force, dt, TRACK_TAU_S);
         }
-        // The gyro's offset is learned whenever gravity is not moving in the sensor's frame: a bias and a vertical stroke both leave it still, and a real rotation moves it, so a set teaches the gyro without ever being called at rest.
         if dt > 0.0 && self.direction_is_quiet() {
             for (bias, r) in self.state.gyro_bias.iter_mut().zip(rate.iter()) {
                 *bias += r * (dt / GYRO_TAU_S);
@@ -283,7 +224,6 @@ impl Fusion {
         let f_world = rotate_by_quat(self.state.attitude, f);
         let linear_accel = [f_world[0], f_world[1], f_world[2] - GRAVITY];
 
-        // Before gravity's direction is known there is no frame to integrate in. After it, the velocity is the integral, and a bar at rest is where that integral is put back to zero.
         if dt > 0.0 && self.ready {
             for (v, a) in self.state.velocity.iter_mut().zip(linear_accel) {
                 *v += a * dt;
@@ -303,14 +243,12 @@ impl Fusion {
         }
     }
 
-    /// Take one sample into the window, oldest dropping off.
     fn record(&mut self, raw: &[f32; 3], rate: &[f32; 3]) {
         self.win[self.win_head] = [raw[0], raw[1], raw[2], rate[0], rate[1], rate[2]];
         self.win_head = (self.win_head + 1) % STILL_WINDOW;
         self.win_len = (self.win_len + 1).min(STILL_WINDOW);
     }
 
-    /// What the window holds: the mean specific force and angular rate, and the furthest any one sample sat from 1 g.
     fn window(&self) -> Window {
         let n = self.win_len.max(1) as f32;
         let (mut force, mut rate, mut stray) = ([0.0f32; 3], [0.0f32; 3], 0.0f32);
@@ -333,7 +271,6 @@ impl Fusion {
         }
     }
 
-    /// Put the accelerometer's offset where the mean reading is exactly 1 g, which is what a boot has to do before any window can be judged.
     fn set_accel_offset(&mut self, raw: &[f32; 3]) {
         let up = rotate_by_quat(conjugate(self.state.attitude), [0.0, 0.0, 1.0]);
         for k in 0..3 {
@@ -341,14 +278,10 @@ impl Fusion {
         }
     }
 
-    /// Put the gyroscope's offset where the mean rate is zero, which is the same boot question asked of the other sensor.
-    ///
-    /// `rate` is the reading as it came, like [`Fusion::set_accel_offset`]'s force: a residual would make the offset its own input, and assigning that converges on half the true value while adding it diverges.
     fn set_gyro_offset(&mut self, rate: &[f32; 3]) {
         self.state.gyro_bias = *rate;
     }
 
-    /// Turn the attitude so the measured direction maps exactly onto the world's up.
     fn set_attitude_from(&mut self, raw: &[f32; 3]) {
         let measured = unit(*raw);
         if magnitude(measured) == 0.0 {
@@ -360,7 +293,6 @@ impl Fusion {
         if angle <= 1.0e-6 {
             return;
         }
-        // At a half turn the cross product vanishes and any axis across `up` is as good as another: the sensor is upside down, and which way it faces after that is yaw.
         let axis = if magnitude(err) > 1.0e-3 {
             unit(err)
         } else {
@@ -370,7 +302,6 @@ impl Fusion {
         self.state.attitude = normalize(quat_mul(self.state.attitude, turn));
     }
 
-    /// Rotate a fraction `k` of the way from the attitude's up toward measured gravity.
     fn pull_toward_gravity(&mut self, raw: &[f32; 3], k: f32) {
         if k <= 0.0 {
             return;
@@ -381,7 +312,6 @@ impl Fusion {
         self.state.attitude = normalize(quat_mul(self.state.attitude, turn));
     }
 
-    /// Whether gravity has stopped moving in the sensor's frame, which is what the gyro's own offset is learned from.
     fn direction_is_quiet(&self) -> bool {
         if self.win_len < STILL_WINDOW {
             return false;
@@ -400,11 +330,7 @@ impl Fusion {
         true
     }
 
-    /// Learn the accelerometer's offset from what gravity does not explain.
     fn learn_accel_offset(&mut self, raw: &[f32; 3], dt: f32, tau: f32) {
-        // `raw` is the measured gravity while the bar rests, so its own direction is up.
-        // Reading the offset off that direction, not off the attitude, keeps the offset out of the frame's still-converging guess.
-        // A wrong frame would hand the offset its own error as metres of bias.
         let expected = scale(unit(*raw), GRAVITY);
         for k in 0..3 {
             let offset = raw[k] - expected[k];
@@ -419,12 +345,10 @@ impl Default for Fusion {
     }
 }
 
-/// Length of a vector.
 pub fn magnitude(v: [f32; 3]) -> f32 {
     sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
 }
 
-/// Rotate a body-frame vector into the world frame by a unit quaternion `[w, x, y, z]`.
 pub fn rotate_by_quat(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
     let tx = 2.0 * (y * v[2] - z * v[1]);
@@ -437,7 +361,7 @@ pub fn rotate_by_quat(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Roll and pitch (degrees) from a unit quaternion. Yaw is not reported: it drifts without a magnetometer.
+///Yaw is not reported: it drifts without a magnetometer.
 pub fn roll_pitch_deg(q: [f32; 4]) -> (f32, f32) {
     let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
     let roll = atan2f(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y));
@@ -446,12 +370,10 @@ pub fn roll_pitch_deg(q: [f32; 4]) -> (f32, f32) {
     (roll.to_degrees(), pitch.to_degrees())
 }
 
-/// The quaternion conjugate, which rotates the other way: for a unit quaternion, the inverse.
 pub fn conjugate(q: [f32; 4]) -> [f32; 4] {
     [q[0], -q[1], -q[2], -q[3]]
 }
 
-/// `a ⊗ b`: the rotation `b` followed by the rotation `a`.
 fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     [
         a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
@@ -461,7 +383,6 @@ fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// The quaternion of a rotation vector: its direction is the axis and its length the angle.
 pub fn quat_from_rotvec(v: [f32; 3]) -> [f32; 4] {
     let angle = magnitude(v);
     if angle < 1.0e-6 {
@@ -487,7 +408,6 @@ fn unit(v: [f32; 3]) -> [f32; 3] {
     scale(v, 1.0 / n)
 }
 
-/// Any unit vector at right angles to `v`.
 fn across(v: [f32; 3]) -> [f32; 3] {
     let least = if absf(v[0]) <= absf(v[1]) && absf(v[0]) <= absf(v[2]) {
         [1.0, 0.0, 0.0]
