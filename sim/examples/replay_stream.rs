@@ -8,6 +8,7 @@
 use std::env;
 
 use calypso_core::motion::fusion::{Filtered, Fusion, GRAVITY};
+use calypso_core::motion::integrate::Integrated;
 use calypso_core::sampler::{Sample, SAMPLE_RATE_HZ};
 use calypso_sim::{captures, replay, stream};
 use libm::atan2f;
@@ -35,11 +36,11 @@ fn main() {
     holes(&samples, t0);
 
     // One line a sample: the acceleration, the filter's velocity, and the speed the detector counts on, which is what a threshold or a turn rule has to be read against; `tilt` is how far the world frame's gravity is off vertical, and a velocity that runs away is made of it.
-    let mut each = |s: &Sample, f: &Filtered, counted: f32| {
+    let mut each = |s: &Sample, f: &Filtered, m: &Integrated, counted: f32| {
         if !series {
             return;
         }
-        let v = f.state.velocity;
+        let v = m.velocity;
         let a = f.linear_accel;
         let tilt = atan2f((a[0] * a[0] + a[1] * a[1]).sqrt(), a[2] + GRAVITY).to_degrees();
         println!(
@@ -55,7 +56,13 @@ fn main() {
             counted
         );
     };
-    let out = replay::run(&samples, Fusion::new(), replay::TRACE_CAPACITY, &mut each);
+    let out = replay::run(
+        &samples,
+        Fusion::new(),
+        [0.0; 3],
+        replay::TRACE_CAPACITY,
+        &mut each,
+    );
 
     for (i, (rep, summary)) in out.reps.iter().zip(&out.summaries).enumerate() {
         println!(

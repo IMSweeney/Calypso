@@ -75,10 +75,10 @@ fn summary_round_trips() {
             assert_eq!(s.raw_len, summary.raw_len, "the raw trace's size survives");
             let state = pb::state_from_message(&s.state);
             assert_eq!(state.velocity[0], 0.12);
-            assert_eq!(state.attitude[3], 0.3);
-            assert_eq!(state.accel_bias[2], 0.03);
-            assert_eq!(state.gyro_bias[1], -0.002);
-            assert!(state.settled, "whether the bar was at rest survives");
+            assert_eq!(state.filter.attitude[3], 0.3);
+            assert_eq!(state.filter.accel_bias[2], 0.03);
+            assert_eq!(state.filter.gyro_bias[1], -0.002);
+            assert!(state.filter.settled, "whether the bar was at rest survives");
             assert_eq!(s.config.accel_range_g, 8);
             assert_eq!(s.config.detector_version, 1);
             assert_eq!(s.computed_chunks, 4);

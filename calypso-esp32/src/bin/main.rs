@@ -42,8 +42,11 @@ use calypso_core::flashlog::{self, FlashLog};
 use calypso_core::gatt::{
     CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncImuValue, SyncReportsValue,
 };
-use calypso_core::motion::fusion::{Fusion, FusionState};
-use calypso_core::motion::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, compute_rep};
+use calypso_core::motion::fusion::Fusion;
+use calypso_core::motion::integrate::Integration;
+use calypso_core::motion::rep::{
+    Detector, MARGIN_MS, RepSeed, RepSpan, TraceBuf, TracePoint, compute_rep,
+};
 use calypso_core::pb::msg;
 use calypso_core::pipe::{self, Session, Stalled};
 use calypso_core::report::Latch;
@@ -778,6 +781,7 @@ async fn main(spawner: Spawner) -> ! {
             // The detector runs inline at 100 Hz: it's a few comparisons per sample, and a closed rep does one trace computation.
             let mut fusion = Fusion::new();
             let mut detector = Detector::new();
+            let mut integration = Integration::new();
             // Whether the detector is being asked at all. The live stream turns it off (`DevMode`), because the flash write a closed rep ends in pauses this loop and puts a hole in the stream.
             let mut detecting = true;
             let mut reps: u32 = 0;
@@ -792,7 +796,7 @@ async fn main(spawner: Spawner) -> ! {
             // Whether the filter had settled, logged only when it changes, so "paused until the filter knows which way is down" is printed when it becomes true rather than 3,600 times an hour.
             let mut logged_ready: Option<bool> = None;
             // Record mode's open window: when it began, and where the filter stood then, because a window nine seconds old has nothing else to replay `compute_rep` from.
-            let mut recording: Option<(u32, FusionState)> = None;
+            let mut recording: Option<(u32, RepSeed)> = None;
             // The earliest moment the next recorded window may open, set past each append because an append stops the sampler for its duration.
             let mut next_record_ms: u32 = 0;
             // How long the last append took end to end, taken by the hole the tick after it reports: a hole with a flash in it and one with a sync arm in it read the same otherwise.
@@ -806,7 +810,8 @@ async fn main(spawner: Spawner) -> ! {
                 let streaming = STREAM_IMU.load(Ordering::Relaxed);
                 if streaming == detecting {
                     detecting = !streaming;
-                    detector.restart(t_ms);
+                    detector.restart();
+                    integration.restart(t_ms);
                     if detecting {
                         info!("dev mode off: the detector starts again from rest");
                     } else {
@@ -879,6 +884,13 @@ async fn main(spawner: Spawner) -> ! {
                 }
                 samples.borrow_mut().push(sample);
                 let filtered = fusion.update(&sample);
+                let integrated = integration.step(
+                    filtered.t_ms,
+                    filtered.linear_accel,
+                    filtered.still,
+                    filtered.ready,
+                    &[],
+                );
 
                 // Detect reps; on close, slice the window out of the ring and compute the ZUPT-anchored trace + summary, then persist it.
                 //
@@ -889,7 +901,13 @@ async fn main(spawner: Spawner) -> ! {
                         // Not before the filter knows which way is down: a window that opens first has no vertical for `compute_rep` to replay in, and its trace reads hundreds of metres.
                         // The price is that a device whose gate never opens records nothing — which the sampler's own line says, rather than leaving silence to be interpreted.
                         None if t_ms >= next_record_ms && fusion.ready() => {
-                            recording = Some((t_ms, filtered.state));
+                            recording = Some((
+                                t_ms,
+                                RepSeed {
+                                    filter: filtered.state,
+                                    velocity: integrated.velocity,
+                                },
+                            ));
                             info!(
                                 "record: window opened at {} ms, {} ms of samples to go",
                                 t_ms, RECORD_WINDOW_MS
@@ -945,7 +963,7 @@ async fn main(spawner: Spawner) -> ! {
                 } else if fusion.ready() && detecting {
                     // The filter is fed every sample, so its offsets and its attitude keep up with the sensor; only the detector is gated, and it starts from a real rest whenever the gate opens. The live stream is the other gate: a rep found while it runs would end in the flash write that leaves a hole in it.
                     detector
-                        .update(&filtered)
+                        .update(&filtered, &integrated)
                         .map(|rep| (rep.span, Some((rep.from_ms, rep.state)), Some(rep.turns)))
                 } else {
                     None
@@ -955,7 +973,7 @@ async fn main(spawner: Spawner) -> ! {
                     let closed_at = Instant::now();
                     // Where the window begins and where the filter stood: the detector's answer for a rep it closed, the snapshot taken when the window opened for one that was recorded. A detected rep's is not always `MARGIN_MS` before it, because one close behind the boot has no history that far back.
                     let (from_ms, state) =
-                        edge.unwrap_or((span.start_ms, calypso_core::motion::fusion::FusionState::LEVEL));
+                        edge.unwrap_or((span.start_ms, RepSeed::LEVEL));
                     let copied = samples
                         .borrow()
                         .copy_window(from_ms, span.end_ms, 0, MARGIN_MS, rep_window);
@@ -975,7 +993,7 @@ async fn main(spawner: Spawner) -> ! {
                     } else {
                         // Where the filter stood at the window's edge: the detector's for a real rep, level for a synthetic one the fake-reps build fabricates wholesale.
                         let state = if FAKE_REPS {
-                            calypso_core::motion::fusion::FusionState::LEVEL
+                            RepSeed::LEVEL
                         } else {
                             state
                         };

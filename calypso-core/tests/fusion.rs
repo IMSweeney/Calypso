@@ -1,11 +1,12 @@
 //! The filter, on its own: what the accelerometer and gyroscope say about where the bar is and which way is down.
 //!
-//! Everything here is a stream fed straight to [`Fusion`], so a failure names the filter rather than the detector or the trace. What the *pipeline* stores is `calypso-sim`'s.
+//! Everything here is a stream fed straight to [`Fusion`], so a failure names the filter rather than the detector or the trace. Velocity is the integrator's, and is tested there. What the *pipeline* stores is `calypso-sim`'s.
 
 use calypso_core::motion::fusion::{
     conjugate, magnitude, quat_from_rotvec, roll_pitch_deg, rotate_by_quat, Fusion, FusionState,
     GRAVITY,
 };
+use calypso_core::motion::integrate::Integration;
 use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, GYRO_SCALE};
 
 const DT_MS: u32 = 10;
@@ -56,11 +57,6 @@ fn a_still_sensor_reads_nothing_at_any_attitude() {
             assert!(
                 magnitude(last) < 0.05,
                 "{deg}° about axis {axis}: a resting sensor reads {last:?} m/s²"
-            );
-            assert!(
-                magnitude(fusion.state().velocity) < 0.05,
-                "{deg}° about axis {axis}: a resting bar has velocity {:?}",
-                fusion.state().velocity
             );
         }
     }
@@ -152,13 +148,22 @@ fn a_gyro_offset_does_not_rotate_gravity() {
 #[test]
 fn a_gyro_bias_that_arrives_during_a_set_does_not_walk_the_ground() {
     let mut fusion = Fusion::new();
+    let mut integration = Integration::new();
     let mut t = 0u32;
     let mut max_h = 0.0f32;
     let mut max_tilt = 0.0f32;
 
     // 1.6 s of lead-in rest, then twelve vertical reps with the pauses a bench has.
     for _ in 0..160 {
-        feed(&mut fusion, t, 0.0, 0.0, &mut max_h, &mut max_tilt);
+        feed(
+            &mut fusion,
+            &mut integration,
+            t,
+            0.0,
+            0.0,
+            &mut max_h,
+            &mut max_tilt,
+        );
         t += DT_MS;
     }
     for _ in 0..12 {
@@ -172,13 +177,29 @@ fn a_gyro_bias_that_arrives_during_a_set_does_not_walk_the_ground() {
             for i in 0..=steps {
                 let accel =
                     dir * peak * libm::cosf(core::f32::consts::PI * i as f32 / steps as f32);
-                feed(&mut fusion, t, accel, bias, &mut max_h, &mut max_tilt);
+                feed(
+                    &mut fusion,
+                    &mut integration,
+                    t,
+                    accel,
+                    bias,
+                    &mut max_h,
+                    &mut max_tilt,
+                );
                 t += DT_MS;
             }
             let pause = if dir > 0.0 { 150 } else { 300 };
             for _ in 0..(pause / DT_MS) {
                 let bias = if t < 5000 { 0.0 } else { 1.0 };
-                feed(&mut fusion, t, 0.0, bias, &mut max_h, &mut max_tilt);
+                feed(
+                    &mut fusion,
+                    &mut integration,
+                    t,
+                    0.0,
+                    bias,
+                    &mut max_h,
+                    &mut max_tilt,
+                );
                 t += DT_MS;
             }
         }
@@ -199,6 +220,7 @@ fn a_gyro_bias_that_arrives_during_a_set_does_not_walk_the_ground() {
 /// Feed one vertical sample and record the sideways speed and the tilt it left.
 fn feed(
     fusion: &mut Fusion,
+    integration: &mut Integration,
     t_ms: u32,
     accel: f32,
     gyro_dps: f32,
@@ -207,7 +229,8 @@ fn feed(
 ) {
     let s = Sample::from_f32(t_ms, [0.0, 0.0, GRAVITY + accel], [gyro_dps, 0.0, 0.0]);
     let f = fusion.update(&s);
-    let v = f.state.velocity;
+    let m = integration.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
+    let v = m.velocity;
     *max_h = max_h.max((v[0] * v[0] + v[1] * v[1]).sqrt());
     let (roll, pitch) = roll_pitch_deg(f.state.attitude);
     *max_tilt = max_tilt.max((roll * roll + pitch * pitch).sqrt());
@@ -229,7 +252,11 @@ fn a_boot_in_motion_is_not_ready_until_the_bar_stops() {
                 .map(|a| quantize(a, ACCEL_SCALE)),
             gyro: [0; 3],
         };
-        fusion.update(&s);
+        let f = fusion.update(&s);
+        assert!(
+            !f.ready,
+            "a filtered sample was ready during motion at {t} ms"
+        );
         assert!(!fusion.ready(), "ready during motion at {t} ms");
     }
 
@@ -238,6 +265,10 @@ fn a_boot_in_motion_is_not_ready_until_the_bar_stops() {
     }
     assert!(fusion.ready(), "not ready after three seconds at rest");
     let last = fusion.update(&rest(6000, [0.3, 0.0, 0.0], [0.0; 3], [0.0; 3]));
+    assert!(
+        last.ready,
+        "a filtered sample stayed unready after the rest"
+    );
     assert!(
         magnitude(last.linear_accel) < 0.05,
         "after the rest a still bar reads {:?}",
@@ -268,28 +299,36 @@ fn a_replay_from_a_state_reproduces_the_run() {
     // Past the boot, because a replay is not a boot: `from_state` takes the attitude as learned, so the state a stored window carries is always one taken after the filter was ready.
     let at = 150;
     let mut live = Fusion::new();
+    let mut live_motion = Integration::new();
     for s in &samples[..=at] {
-        live.update(s);
+        let f = live.update(s);
+        live_motion.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
     }
     let state = live.state();
+    let velocity = live_motion.velocity();
 
     // The window starts at the sample the state was taken at, so the replay is fed that one too: it is the replay's starting point rather than a step from one, so it changes nothing.
     let mut again = Fusion::from_state(state);
+    let mut again_motion = Integration::from_velocity(velocity);
     let mut replay = Fusion::from_state(state);
+    let mut replay_motion = Integration::from_velocity(velocity);
     for s in &samples[at..] {
         let a = again.update(s);
+        again_motion.step(a.t_ms, a.linear_accel, a.still, a.ready, &[]);
         let r = replay.update(s);
+        let rm = replay_motion.step(r.t_ms, r.linear_accel, r.still, r.ready, &[]);
         assert_eq!(a.state, r.state, "two replays diverged at {} ms", s.t_ms);
 
         let b = live.update(s);
+        let bm = live_motion.step(b.t_ms, b.linear_accel, b.still, b.ready, &[]);
         if s.t_ms > samples[at].t_ms {
             assert_eq!(r.state.attitude, b.state.attitude, "at {} ms", s.t_ms);
             assert_eq!(r.state.settled, b.state.settled, "at {} ms", s.t_ms);
             assert!(
                 magnitude([
-                    r.state.velocity[0] - b.state.velocity[0],
-                    r.state.velocity[1] - b.state.velocity[1],
-                    r.state.velocity[2] - b.state.velocity[2],
+                    rm.velocity[0] - bm.velocity[0],
+                    rm.velocity[1] - bm.velocity[1],
+                    rm.velocity[2] - bm.velocity[2],
                 ]) < 1e-4,
                 "the replay's velocity left the run's at {} ms",
                 s.t_ms
@@ -297,9 +336,9 @@ fn a_replay_from_a_state_reproduces_the_run() {
         }
     }
     assert!(
-        magnitude(replay.state().velocity) < 0.05,
+        magnitude(replay_motion.velocity()) < 0.05,
         "a replay that ended at rest carries velocity {:?}",
-        replay.state().velocity
+        replay_motion.velocity()
     );
     assert!(matches!(state, FusionState { .. }));
 }
@@ -307,9 +346,11 @@ fn a_replay_from_a_state_reproduces_the_run() {
 #[test]
 fn a_sample_the_sensor_cannot_have_read_does_not_move_the_bar() {
     let mut fusion = Fusion::new();
+    let mut integration = Integration::new();
     let mut t = 0u32;
     for _ in 0..300 {
-        fusion.update(&rest(t, [0.0; 3], [0.0; 3], [0.0; 3]));
+        let f = fusion.update(&rest(t, [0.0; 3], [0.0; 3], [0.0; 3]));
+        integration.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
         t += DT_MS;
     }
 
@@ -319,16 +360,17 @@ fn a_sample_the_sensor_cannot_have_read_does_not_move_the_bar() {
         accel: [0, 0, quantize(20.0 * GRAVITY, ACCEL_SCALE)],
         gyro: [0; 3],
     };
-    fusion.update(&spike);
+    let f = fusion.update(&spike);
+    integration.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
     assert!(
-        magnitude(fusion.state().velocity) < 0.05,
+        magnitude(integration.velocity()) < 0.05,
         "one unreadable sample left the bar moving at {:.2} m/s",
-        magnitude(fusion.state().velocity)
+        magnitude(integration.velocity())
     );
+    let f = fusion.update(&rest(t + DT_MS, [0.0; 3], [0.0; 3], [0.0; 3]));
+    integration.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
     assert!(
-        fusion
-            .update(&rest(t + DT_MS, [0.0; 3], [0.0; 3], [0.0; 3]))
-            .still,
+        f.still,
         "an unreadable sample broke the stillness of the window around it"
     );
 }

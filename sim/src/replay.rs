@@ -3,6 +3,7 @@
 //! Every replay in this crate — synthetic sets, a recording of the live stream, one stored window — is this loop with a different starting filter state, so the instruments and the tests cannot disagree about what the device would have done.
 
 use calypso_core::motion::fusion::{magnitude, Filtered, Fusion};
+use calypso_core::motion::integrate::{Integrated, Integration};
 use calypso_core::motion::rep::{
     compute_rep, DetectedRep, Detector, TraceBuf, TracePoint, MARGIN_MS,
 };
@@ -43,11 +44,13 @@ pub struct Replay {
 pub fn run(
     samples: &[Sample],
     mut fusion: Fusion,
+    velocity: [f32; 3],
     trace_capacity: usize,
-    each: &mut dyn FnMut(&Sample, &Filtered, f32),
+    each: &mut dyn FnMut(&Sample, &Filtered, &Integrated, f32),
 ) -> Replay {
     let mut ring_buf = vec![Sample::ZERO; RING];
     let mut ring = SampleRing::new(&mut ring_buf);
+    let mut integration = Integration::from_velocity(velocity);
     let mut det = Detector::new();
     let mut window = vec![Sample::ZERO; WINDOW_SAMPLES];
     let mut storage = vec![TracePoint::ZERO; trace_capacity];
@@ -65,10 +68,17 @@ pub fn run(
     for s in samples {
         ring.push(*s);
         let filtered = fusion.update(s);
+        let integrated = integration.step(
+            filtered.t_ms,
+            filtered.linear_accel,
+            filtered.still,
+            filtered.ready,
+            &[],
+        );
         if filtered.still {
             out.still += 1;
         }
-        let v = filtered.state.velocity;
+        let v = integrated.velocity;
         out.peak_speed = out.peak_speed.max(magnitude(v));
         out.peak_horizontal = out.peak_horizontal.max((v[0] * v[0] + v[1] * v[1]).sqrt());
         if out.ready_at_ms.is_none() && fusion.ready() {
@@ -76,7 +86,7 @@ pub fn run(
         }
         // The device gates the detector on the filter knowing which way is down, and so does this: before that there is no vertical for a rep to be measured against.
         if fusion.ready() {
-            if let Some(rep) = det.update(&filtered) {
+            if let Some(rep) = det.update(&filtered, &integrated) {
                 let n = ring.copy_window(rep.from_ms, rep.span.end_ms, 0, MARGIN_MS, &mut window);
                 if n > 0 {
                     let mut trace = TraceBuf::new(&mut storage);
@@ -88,7 +98,7 @@ pub fn run(
                 }
             }
         }
-        each(s, &filtered, det.vertical());
+        each(s, &filtered, &integrated, det.vertical());
     }
     out.halves = det.halves();
     out

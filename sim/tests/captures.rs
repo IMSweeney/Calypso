@@ -5,7 +5,7 @@
 //! The recordings are recorded data and live in the bucket, so a run needs them pulled into `captures/` or `CAPTURES_REMOTE` naming the bucket; without either they fail rather than read nothing.
 
 use calypso_core::motion::fusion::Fusion;
-use calypso_core::motion::rep::{DetectedRep, TracePoint, Zero};
+use calypso_core::motion::rep::{DetectedRep, TracePoint};
 use calypso_sim::captures::{self, Capture, Set};
 use calypso_sim::{replay, stream};
 
@@ -14,8 +14,9 @@ fn replay_recording(pblog: &[u8]) -> replay::Replay {
     replay::run(
         &stream::samples(pblog),
         Fusion::new(),
+        [0.0; 3],
         replay::TRACE_CAPACITY,
-        &mut |_, _, _| {},
+        &mut |_, _, _, _| {},
     )
 }
 
@@ -168,9 +169,7 @@ fn a_stored_rep_begins_and_ends_at_the_same_height() {
 ///
 /// The end is read at the rep's own last turn rather than at the window's last sample, because the window plots a margin past the rep and what the bar did in it is not what is being measured.
 fn shape(rep: &DetectedRep, trace: &[TracePoint]) -> Option<(f32, f32, f32)> {
-    let middle = rep.turns.zeros[1].map_or(rep.span.end_ms, |zero| match zero {
-        Zero::Rest(t_ms) | Zero::Turn(t_ms) => t_ms,
-    });
+    let middle = rep.turns.zeros[1].map_or(rep.span.end_ms, |anchor| anchor.t_ms);
     Some((
         trace.first()?.pos[2],
         height_at(trace, middle)?,

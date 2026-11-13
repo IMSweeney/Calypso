@@ -6,8 +6,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use calypso_core::motion::fusion::{FusionState, GRAVITY};
-use calypso_core::motion::rep::{compute_rep, TraceBuf, TracePoint, TRACE_POINTS};
+use calypso_core::motion::fusion::GRAVITY;
+use calypso_core::motion::rep::{compute_rep, RepSeed, TraceBuf, TracePoint, TRACE_POINTS};
 use calypso_core::pb::{self, msg};
 use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE};
 use calypso_core::store::RECORD_BUF_BYTES;
@@ -95,7 +95,7 @@ fn main() -> std::io::Result<()> {
 
         let mut storage = vec![TracePoint::ZERO; TRACE_POINTS];
         let mut trace = TraceBuf::new(&mut storage);
-        let mut summary = compute_rep(window, &FusionState::LEVEL, None, &mut trace);
+        let mut summary = compute_rep(window, &RepSeed::LEVEL, None, &mut trace);
         assert!(
             summary.computed_len as usize <= TRACE_POINTS
                 && summary.computed_len as usize > TRACE_POINTS / 2,

@@ -1,5 +1,6 @@
 //! The attitude filter: the sensor's accelerometer and gyroscope in, a linear acceleration and an attitude out.
 
+use crate::motion::MAX_DT_S;
 use crate::sampler::Sample;
 
 /// Standard gravity (m/s²): the specific force a sensor at rest reads up the world's up axis.
@@ -28,10 +29,6 @@ const ATT_TAU_MOVING_S: f32 = 10.0;
 const TRACK_TAU_S: f32 = 2.0;
 /// Time constant of the gyro's offset, learned whenever gravity is not moving in the sensor's frame.
 const GYRO_TAU_S: f32 = 0.25;
-/// Time constant over which velocity is pulled back to zero while the bar is still.
-const V_TAU_S: f32 = 0.5;
-/// Longest integration step honoured, so a hole in the samples cannot become a jump in velocity.
-const MAX_DT_S: f32 = 0.1;
 /// Largest specific force (m/s²) the sensor can have read: its configured clip.
 const MAX_FORCE: f32 = crate::sampler::ACCEL_RANGE_G as f32 * GRAVITY;
 
@@ -39,8 +36,6 @@ const RAD_PER_DPS: f32 = core::f32::consts::PI / 180.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FusionState {
-    /// World-frame velocity (m/s).
-    pub velocity: [f32; 3],
     /// Attitude, body to world, as `[w, x, y, z]`.
     pub attitude: [f32; 4],
     /// The accelerometer's offset in the sensor's own frame (m/s²).
@@ -53,7 +48,6 @@ pub struct FusionState {
 
 impl FusionState {
     pub const LEVEL: FusionState = FusionState {
-        velocity: [0.0; 3],
         attitude: [1.0, 0.0, 0.0, 0.0],
         accel_bias: [0.0; 3],
         gyro_bias: [0.0; 3],
@@ -75,6 +69,8 @@ pub struct Filtered {
     pub linear_accel: [f32; 3],
     /// Whether the bar has been at rest across the last window.
     pub still: bool,
+    /// Whether the filter has seen gravity at least once.
+    pub ready: bool,
     /// Where the filter stands after this sample.
     pub state: FusionState,
 }
@@ -142,10 +138,6 @@ impl Fusion {
         self.state
     }
 
-    pub fn zero_velocity(&mut self) {
-        self.state.velocity = [0.0; 3];
-    }
-
     pub fn still_for_s(&self) -> f32 {
         self.quiet_s
     }
@@ -171,6 +163,7 @@ impl Fusion {
                 t_ms: s.t_ms,
                 linear_accel: [0.0; 3],
                 still: self.state.settled,
+                ready: self.ready,
                 state: self.state,
             };
         }
@@ -224,21 +217,11 @@ impl Fusion {
         let f_world = rotate_by_quat(self.state.attitude, f);
         let linear_accel = [f_world[0], f_world[1], f_world[2] - GRAVITY];
 
-        if dt > 0.0 && self.ready {
-            for (v, a) in self.state.velocity.iter_mut().zip(linear_accel) {
-                *v += a * dt;
-            }
-            if still {
-                for v in self.state.velocity.iter_mut() {
-                    *v -= *v * (dt / V_TAU_S);
-                }
-            }
-        }
-
         Filtered {
             t_ms: s.t_ms,
             linear_accel,
             still,
+            ready: self.ready,
             state: self.state,
         }
     }

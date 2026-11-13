@@ -5,7 +5,8 @@
 //!
 //! The firmware never calls any of this: the generators live outside `calypso-core` so that the device's library carries nothing it does not use.
 
-use calypso_core::motion::fusion::{Fusion, FusionState, GRAVITY};
+use calypso_core::motion::fusion::{Fusion, GRAVITY};
+use calypso_core::motion::rep::RepSeed;
 use calypso_core::motion::rep::{TracePoint, DETECTOR_VERSION};
 use calypso_core::pb::{self, msg};
 use calypso_core::sampler::{quantize, RepConfig, Sample, ACCEL_SCALE, SAMPLE_RATE_HZ};
@@ -56,7 +57,13 @@ pub fn detect_and_trace(
     samples: &[Sample],
     trace_capacity: usize,
 ) -> Vec<(msg::RepSummary, Vec<TracePoint>)> {
-    let out = replay::run(samples, Fusion::new(), trace_capacity, &mut |_, _, _| {});
+    let out = replay::run(
+        samples,
+        Fusion::new(),
+        [0.0; 3],
+        trace_capacity,
+        &mut |_, _, _, _| {},
+    );
     out.summaries
         .into_iter()
         .zip(out.traces)
@@ -155,7 +162,7 @@ pub struct Window {
     pub t_start_ms: u32,
     /// The travel the device's own summary reports, for comparison with what a replay makes of it.
     pub rom: f32,
-    pub state: FusionState,
+    pub state: RepSeed,
     pub samples: Vec<Sample>,
 }
 

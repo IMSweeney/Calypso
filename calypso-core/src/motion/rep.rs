@@ -1,13 +1,12 @@
 //! Rep detection and per-rep trace computation.
 
 use crate::motion::fusion::{magnitude, roll_pitch_deg, Filtered, Fusion, FusionState};
+use crate::motion::integrate::{Anchor, Integrated, Integration};
 use crate::pb::msg;
 use crate::sampler::{quantize, Sample, QUAT_SCALE};
 
 /// Speed (m/s) the bar has to reach going each way for a stroke to be a leg.
 pub const SWING_MPS: f32 = 0.30;
-/// Time constant (s) over which the speed is pulled back toward zero.
-pub const SPEED_TAU_S: f32 = 1.0;
 /// Shortest rep (ms): the turn it started at to the turn it ended at.
 pub const MIN_SWING_MS: u32 = 400;
 /// Longest rep (ms): past this the bar is being carried rather than lifted. The pauses at either end of a stroke are inside it, which is what makes it longer than a stroke.
@@ -22,8 +21,6 @@ const HIST: usize = 64;
 pub const TRACE_POINTS: usize = 128;
 /// Smallest dominant-axis travel (metres) a stored summary can report and still be called a rep.
 pub const MIN_ROM_M: f32 = 0.07;
-/// Longest integration step honoured, so a stalled sampler cannot turn a gap in the samples into a jump in speed.
-const MAX_DT_S: f32 = 0.1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RepSpan {
@@ -37,6 +34,26 @@ impl RepSpan {
     }
 }
 
+/// What a replay of a window starts from: the filter's snapshot and the velocity the bar was carrying.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RepSeed {
+    pub filter: FusionState,
+    pub velocity: [f32; 3],
+}
+
+impl RepSeed {
+    pub const LEVEL: RepSeed = RepSeed {
+        filter: FusionState::LEVEL,
+        velocity: [0.0; 3],
+    };
+}
+
+impl Default for RepSeed {
+    fn default() -> Self {
+        Self::LEVEL
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RepTurns {
     /// The rep's own span: the turn the bar came into it from.
@@ -44,7 +61,7 @@ pub struct RepTurns {
     /// The rep's own end: the turn the bar came back to.
     pub end_ms: u32,
     /// Where the speed reached zero at each of the three instants that delimit the rep, oldest first, where a cue could say.
-    pub zeros: [Option<Zero>; 3],
+    pub zeros: [Option<Anchor>; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -53,30 +70,22 @@ pub struct DetectedRep {
     pub turns: RepTurns,
     /// Where the stored window starts, which is the turn the rep opened at: the samples before it are what the filter had to settle on, and the window's own margin is at its end.
     pub from_ms: u32,
-    /// The filter state where that window starts, which is what the replay is seeded with.
-    pub state: FusionState,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Zero {
-    /// The bar was already at rest when this sample's step began — an onset, or a hold. The step is the motion that follows the instant, so the zero goes in before it is integrated.
-    Rest(u32),
-    /// The bar's speed reached zero at this sample: it turned. The step carries the deceleration that led to the turn, so the zero goes in after it is integrated.
-    Turn(u32),
+    /// The state where that window starts, which is what the replay is seeded with.
+    pub state: RepSeed,
 }
 
 #[derive(Clone, Copy)]
 struct Note {
     t_ms: u32,
     vz: f32,
-    state: FusionState,
+    state: RepSeed,
 }
 
 impl Note {
     const ZERO: Note = Note {
         t_ms: 0,
         vz: 0.0,
-        state: FusionState::LEVEL,
+        state: RepSeed::LEVEL,
     };
 }
 
@@ -123,9 +132,9 @@ impl Hist {
         best
     }
 
-    fn state_at(&self, t_ms: u32) -> FusionState {
-        let mut newest: Option<(u32, FusionState)> = None;
-        let mut oldest: Option<(u32, FusionState)> = None;
+    fn state_at(&self, t_ms: u32) -> RepSeed {
+        let mut newest: Option<(u32, RepSeed)> = None;
+        let mut oldest: Option<(u32, RepSeed)> = None;
         for i in self.slots() {
             let note = self.notes[i];
             if oldest.is_none_or(|(bt, _)| note.t_ms < bt) {
@@ -135,28 +144,26 @@ impl Hist {
                 newest = Some((note.t_ms, note.state));
             }
         }
-        newest.or(oldest).map_or(FusionState::LEVEL, |(_, s)| s)
+        newest.or(oldest).map_or(RepSeed::LEVEL, |(_, s)| s)
     }
 }
 
 #[derive(Clone, Copy)]
 struct Turn {
     ms: u32,
-    state: FusionState,
+    state: RepSeed,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct Leg {
     start_ms: u32,
     end_ms: u32,
-    /// The filter state where the stroke started, which is what a stored window is seeded with.
-    state: FusionState,
+    /// The state where the stroke started, which is what a stored window is seeded with.
+    state: RepSeed,
 }
 struct Legs {
-    /// The bar's speed on all three axes: the vertical is the one that decides, and the log reads the whole.
-    v: [f32; 3],
-    /// Timestamp of the previous sample, for the integration step.
-    prev_t_ms: u32,
+    /// The last motion the detector saw, for the readouts a caller takes between samples.
+    last: Integrated,
     /// The side of ±[`SWING_MPS`] the speed last cleared, so a wobble about one of them is not two crossings.
     side: i8,
     /// The turn the stroke in progress left, waiting for the turn that ends it.
@@ -172,20 +179,13 @@ struct Legs {
 impl Legs {
     const fn new() -> Self {
         Legs {
-            v: [0.0; 3],
-            prev_t_ms: 0,
+            last: Integrated::ZERO,
             side: 0,
             prev: None,
             ending: None,
             hist: Hist::new(),
             halves: 0,
         }
-    }
-
-    fn step_ms(&mut self, t_ms: u32) -> f32 {
-        let dt = (t_ms.saturating_sub(self.prev_t_ms) as f32 / 1000.0).min(MAX_DT_S);
-        self.prev_t_ms = t_ms;
-        dt
     }
 
     fn take(&mut self) -> Option<Leg> {
@@ -201,19 +201,17 @@ impl Legs {
         })
     }
 
-    fn update(&mut self, f: &Filtered) -> Option<Leg> {
-        let dt = self.step_ms(f.t_ms);
-        if dt > 0.0 {
-            for k in 0..3 {
-                self.v[k] += f.linear_accel[k] * dt - self.v[k] * (dt / SPEED_TAU_S);
-            }
-        }
-        let vz = self.v[2];
-        let bar = f.state.velocity[2];
+    fn update(&mut self, f: &Filtered, m: &Integrated) -> Option<Leg> {
+        let vz = m.v_cross[2];
+        let bar = m.velocity[2];
+        self.last = *m;
         self.hist.push(Note {
             t_ms: f.t_ms,
             vz: bar,
-            state: f.state,
+            state: RepSeed {
+                filter: f.state,
+                velocity: m.velocity,
+            },
         });
         if let Some(ending) = &mut self.ending {
             if absf(bar) < ending.quietest {
@@ -326,9 +324,9 @@ fn join(first: Leg, second: Leg) -> Option<DetectedRep> {
             start_ms: span.start_ms,
             end_ms: span.end_ms,
             zeros: [
-                Some(Zero::Rest(span.start_ms)),
-                Some(Zero::Turn(first.end_ms)),
-                Some(Zero::Turn(span.end_ms)),
+                Some(Anchor::rest(span.start_ms)),
+                Some(Anchor::turn(first.end_ms)),
+                Some(Anchor::turn(span.end_ms)),
             ],
         },
         from_ms: span.start_ms,
@@ -349,29 +347,24 @@ impl Detector {
         }
     }
 
-    pub fn restart(&mut self, t_ms: u32) {
+    pub fn restart(&mut self) {
         *self = Self::new();
-        self.legs.prev_t_ms = t_ms;
     }
 
     pub fn halves(&self) -> u32 {
         self.legs.halves
     }
 
-    pub fn speed(&self) -> f32 {
-        magnitude(self.legs.v)
-    }
-
     pub fn vertical(&self) -> f32 {
-        self.legs.v[2]
+        self.legs.last.velocity[2]
     }
 
     pub fn rep_open(&self) -> bool {
         self.reps.pending.is_some()
     }
 
-    pub fn update(&mut self, f: &Filtered) -> Option<DetectedRep> {
-        let leg = self.legs.update(f);
+    pub fn update(&mut self, f: &Filtered, m: &Integrated) -> Option<DetectedRep> {
+        let leg = self.legs.update(f, m);
         self.reps.update(f.t_ms, f.still, leg)
     }
 }
@@ -467,7 +460,7 @@ impl msg::RepSummary {
 
 pub fn compute_rep(
     samples: &[Sample],
-    from: &FusionState,
+    from: &RepSeed,
     turns: Option<RepTurns>,
     out: &mut TraceBuf<'_>,
 ) -> msg::RepSummary {
@@ -496,31 +489,24 @@ pub fn compute_rep(
     };
     let first = if capacity == 0 { 0 } else { (n - 1) % stride };
 
-    let mut fusion = Fusion::from_state(*from);
+    let mut fusion = Fusion::from_state(from.filter);
+    let mut integration = Integration::from_velocity(from.velocity);
     let mut p = [0.0f32; 3];
     let mut v_prev = from.velocity;
-    let mut before = [0u32; 3];
-    let mut before_len = 0usize;
-    let mut after = [0u32; 3];
-    let mut after_len = 0usize;
+    let mut anchors = [Anchor::rest(0); 3];
+    let mut anchor_len = 0usize;
     if let Some(t) = turns {
-        for zero in t.zeros.into_iter().flatten() {
-            match zero {
-                Zero::Rest(ms) => {
-                    before[before_len] = ms;
-                    before_len += 1;
-                }
-                Zero::Turn(ms) => {
-                    after[after_len] = ms;
-                    after_len += 1;
-                }
-            }
+        for anchor in t.zeros.into_iter().flatten() {
+            anchors[anchor_len] = anchor;
+            anchor_len += 1;
         }
     }
-    let before = &before[..before_len];
-    let after = &after[..after_len];
-    let mut next_before = 0usize;
-    let mut next_after = 0usize;
+    for anchor in &mut anchors[..anchor_len] {
+        if let Some(sample) = samples.iter().find(|s| s.t_ms >= anchor.t_ms) {
+            anchor.t_ms = sample.t_ms;
+        }
+    }
+    let anchors = &anchors[..anchor_len];
     let (span_start, span_end) = turns.map_or((u32::MIN, u32::MAX), |t| (t.start_ms, t.end_ms));
     let mut v_max = 0.0f32;
     let mut lo = [f32::MAX; 3];
@@ -530,16 +516,15 @@ pub fn compute_rep(
     let mut roll_seen = false;
 
     for i in 0..n {
-        while next_before < before.len() && samples[i].t_ms >= before[next_before] {
-            fusion.zero_velocity();
-            next_before += 1;
-        }
         let filtered = fusion.update(&samples[i]);
-        while next_after < after.len() && samples[i].t_ms >= after[next_after] {
-            fusion.zero_velocity();
-            next_after += 1;
-        }
-        let v = fusion.state().velocity;
+        integration.step(
+            samples[i].t_ms,
+            filtered.linear_accel,
+            filtered.still,
+            filtered.ready,
+            anchors,
+        );
+        let v = integration.velocity();
         if i > 0 {
             let dt = (samples[i].t_ms - samples[i - 1].t_ms) as f32 / 1000.0;
             for k in 0..3 {
@@ -607,17 +592,17 @@ pub fn compute_rep(
         vx: from.velocity[0],
         vy: from.velocity[1],
         vz: from.velocity[2],
-        qw: from.attitude[0],
-        qx: from.attitude[1],
-        qy: from.attitude[2],
-        qz: from.attitude[3],
-        accel_bias_x: from.accel_bias[0],
-        accel_bias_y: from.accel_bias[1],
-        accel_bias_z: from.accel_bias[2],
-        gyro_bias_x: from.gyro_bias[0],
-        gyro_bias_y: from.gyro_bias[1],
-        gyro_bias_z: from.gyro_bias[2],
-        settled: from.settled,
+        qw: from.filter.attitude[0],
+        qx: from.filter.attitude[1],
+        qy: from.filter.attitude[2],
+        qz: from.filter.attitude[3],
+        accel_bias_x: from.filter.accel_bias[0],
+        accel_bias_y: from.filter.accel_bias[1],
+        accel_bias_z: from.filter.accel_bias[2],
+        gyro_bias_x: from.filter.gyro_bias[0],
+        gyro_bias_y: from.filter.gyro_bias[1],
+        gyro_bias_z: from.filter.gyro_bias[2],
+        settled: from.filter.settled,
     });
     summary
 }
