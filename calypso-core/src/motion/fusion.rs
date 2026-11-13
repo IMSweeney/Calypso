@@ -142,6 +142,36 @@ impl Fusion {
         fusion
     }
 
+    /// A replay entry point: a window the detector confirmed at rest fixes the frame and both offsets.
+    ///
+    /// The last [`STILL_WINDOW`] samples are used, so a longer window adds nothing, and the step after it is measured from its last sample.
+    pub fn from_rest(samples: &[Sample]) -> Option<Self> {
+        let tail = samples.get(samples.len().saturating_sub(STILL_WINDOW)..)?;
+        let last = tail.last()?;
+        let mut fusion = Fusion {
+            state: FusionState {
+                resting: true,
+                ready: true,
+                ..FusionState::LEVEL
+            },
+            ..Fusion::new()
+        };
+        for s in tail {
+            let rate = s.gyro_f32().map(|dps| dps * RAD_PER_DPS);
+            fusion.record(&s.specific_force_f32(), &rate);
+        }
+        let window = fusion.window();
+        if magnitude(window.mean_force) < 0.5 * GRAVITY {
+            return None;
+        }
+        fusion.set_attitude_from(&window.mean_force);
+        fusion.set_accel_offset(&window.mean_force);
+        fusion.set_gyro_offset(&window.mean_rate);
+        fusion.prev_t_ms = Some(last.t_ms);
+        fusion.quiet_s = READY_S;
+        Some(fusion)
+    }
+
     pub fn state(&self) -> FusionState {
         self.state
     }

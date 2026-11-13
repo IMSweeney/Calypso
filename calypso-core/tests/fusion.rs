@@ -122,6 +122,55 @@ fn a_constant_offset_is_learned_from_the_still_window() {
     }
 }
 
+/// A confirmed rest window is enough to replay from: it fixes the frame and both offsets before the first step.
+///
+/// Detection confirms rest once; the filter should not have to spend the replay's first second relearning what that window already says. The last samples are used, so a longer window adds nothing and a short one is still a seed.
+#[test]
+fn a_confirmed_rest_window_seeds_the_frame_and_both_offsets() {
+    let mount = [core::f32::consts::FRAC_PI_2, 0.0, 0.0];
+    let offset = [0.21, -0.3, 0.12];
+    let gyro = [2.0, -1.0, 0.5];
+
+    for window_ms in [150, 400] {
+        let mut samples = Vec::new();
+        for t in (0..window_ms).step_by(DT_MS as usize) {
+            samples.push(rest(t, mount, offset, gyro));
+        }
+        let mut fusion = Fusion::from_rest(&samples).expect("a rest window seeds the filter");
+        let next = fusion.update(&rest(window_ms, mount, offset, gyro));
+
+        assert!(next.ready, "{window_ms} ms: the seed is not ready");
+        assert!(
+            magnitude(next.linear_accel) < 0.05,
+            "{window_ms} ms: a still bar reads {:?} m/s² after the seed",
+            next.linear_accel
+        );
+        let learned = fusion.state().gyro_bias;
+        for (k, dps) in gyro.iter().enumerate() {
+            assert!(
+                (learned[k] - dps.to_radians()).abs() < 1e-3,
+                "{window_ms} ms: axis {k} learned {:.3} dps, not {dps}",
+                learned[k].to_degrees()
+            );
+        }
+    }
+}
+
+/// A window with no gravity in it is not a rest seed.
+#[test]
+fn a_window_without_gravity_is_not_a_rest_seed() {
+    assert!(Fusion::from_rest(&[]).is_none(), "no samples, no seed");
+    let no_force = [Sample {
+        t_ms: 0,
+        accel: [0; 3],
+        gyro: [0; 3],
+    }];
+    assert!(
+        Fusion::from_rest(&no_force).is_none(),
+        "a window reading no force cannot say which way is down"
+    );
+}
+
 /// A gyroscope that reports a rate while nothing is turning does not rotate the ground.
 ///
 /// The attitude is integrated from the gyro, so an offset in it is a slow tilt that never stops — and a tilt is gravity leaking into the horizontal, which is the acceleration a detector would read as a bar being carried. The offset is learned from the same still window as the accelerometer's.
