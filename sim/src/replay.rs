@@ -2,6 +2,7 @@
 //!
 //! Every replay in this crate — synthetic sets, a recording of the live stream, one stored window — is this loop with a different starting filter state, so the instruments and the tests cannot disagree about what the device would have done.
 
+use calypso_core::motion::cues::CueReader;
 use calypso_core::motion::fusion::{magnitude, Filtered, Fusion};
 use calypso_core::motion::integrate::{Integrated, Integration};
 use calypso_core::motion::rep::{
@@ -51,6 +52,7 @@ pub fn run(
     let mut ring_buf = vec![Sample::ZERO; RING];
     let mut ring = SampleRing::new(&mut ring_buf);
     let mut integration = Integration::from_velocity(velocity);
+    let mut cue_reader = CueReader::new();
     let mut det = Detector::new();
     let mut window = vec![Sample::ZERO; WINDOW_SAMPLES];
     let mut storage = vec![TracePoint::ZERO; trace_capacity];
@@ -75,6 +77,7 @@ pub fn run(
             filtered.ready,
             &[],
         );
+        let cues = cue_reader.update(&filtered);
         if filtered.resting {
             out.resting += 1;
         }
@@ -86,7 +89,7 @@ pub fn run(
         }
         // The device gates the detector on the filter knowing which way is down, and so does this: before that there is no vertical for a rep to be measured against.
         if fusion.ready() {
-            if let Some(rep) = det.update(&filtered, &integrated) {
+            if let Some(rep) = det.update(&filtered, &integrated, &cues) {
                 let n = ring.copy_window(rep.from_ms, rep.span.end_ms, 0, MARGIN_MS, &mut window);
                 if n > 0 {
                     let mut trace = TraceBuf::new(&mut storage);

@@ -1,5 +1,6 @@
 //! Rep detection and per-rep trace computation.
 
+use crate::motion::cues::Cues;
 use crate::motion::fusion::{magnitude, roll_pitch_deg, Filtered, Fusion, FusionState};
 use crate::motion::integrate::{Anchor, Integrated, Integration};
 use crate::pb::msg;
@@ -7,6 +8,8 @@ use crate::sampler::{quantize, Sample, QUAT_SCALE};
 
 /// Speed (m/s) the bar has to reach going each way for a stroke to be a leg.
 pub const SWING_MPS: f32 = 0.30;
+/// Speed (m/s) the integrated velocity must get under for the crossing alone to confirm a turn.
+const TURN_QUIET_MPS: f32 = SWING_MPS;
 /// Shortest rep (ms): the turn it started at to the turn it ended at.
 pub const MIN_SWING_MS: u32 = 400;
 /// Longest rep (ms): past this the bar is being carried rather than lifted. The pauses at either end of a stroke are inside it, which is what makes it longer than a stroke.
@@ -191,6 +194,9 @@ impl Legs {
 
     fn take(&mut self) -> Option<Leg> {
         let ending = self.ending.take()?;
+        if ending.quietest > TURN_QUIET_MPS && ending.cue_ms.is_none() {
+            return None;
+        }
         let ended = Turn {
             ms: ending.quietest_ms,
             state: self.hist.state_at(ending.quietest_ms),
@@ -202,7 +208,7 @@ impl Legs {
         })
     }
 
-    fn update(&mut self, f: &Filtered, m: &Integrated) -> Option<Leg> {
+    fn update(&mut self, f: &Filtered, m: &Integrated, cues: &Cues) -> Option<Leg> {
         let vz = m.v_cross[2];
         let bar = m.velocity[2];
         self.last = *m;
@@ -215,6 +221,9 @@ impl Legs {
             },
         });
         if let Some(ending) = &mut self.ending {
+            if cues.sign_change && ending.cue_ms.is_none() {
+                ending.cue_ms = Some(f.t_ms);
+            }
             if absf(bar) < ending.quietest {
                 ending.quietest = absf(bar);
                 ending.quietest_ms = f.t_ms;
@@ -250,6 +259,7 @@ impl Legs {
             self.ending = Some(Ending {
                 quietest_ms: f.t_ms,
                 quietest: absf(bar),
+                cue_ms: None,
             });
             return ended;
         }
@@ -264,6 +274,8 @@ impl Legs {
 struct Ending {
     quietest_ms: u32,
     quietest: f32,
+    /// The first acceleration reversal since the crossing, which is the cue that confirms the turn.
+    cue_ms: Option<u32>,
 }
 struct Reps {
     /// The leg waiting for its partner.
@@ -364,8 +376,8 @@ impl Detector {
         self.reps.pending.is_some()
     }
 
-    pub fn update(&mut self, f: &Filtered, m: &Integrated) -> Option<DetectedRep> {
-        let leg = self.legs.update(f, m);
+    pub fn update(&mut self, f: &Filtered, m: &Integrated, cues: &Cues) -> Option<DetectedRep> {
+        let leg = self.legs.update(f, m, cues);
         self.reps.update(f.t_ms, f.resting, leg)
     }
 }

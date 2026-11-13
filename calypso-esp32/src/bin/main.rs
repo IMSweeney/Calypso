@@ -42,6 +42,7 @@ use calypso_core::flashlog::{self, FlashLog};
 use calypso_core::gatt::{
     CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncImuValue, SyncReportsValue,
 };
+use calypso_core::motion::cues::CueReader;
 use calypso_core::motion::fusion::Fusion;
 use calypso_core::motion::integrate::Integration;
 use calypso_core::motion::rep::{
@@ -782,6 +783,7 @@ async fn main(spawner: Spawner) -> ! {
             let mut fusion = Fusion::new();
             let mut detector = Detector::new();
             let mut integration = Integration::new();
+            let mut cue_reader = CueReader::new();
             // Whether the detector is being asked at all. The live stream turns it off (`DevMode`), because the flash write a closed rep ends in pauses this loop and puts a hole in the stream.
             let mut detecting = true;
             let mut reps: u32 = 0;
@@ -891,6 +893,7 @@ async fn main(spawner: Spawner) -> ! {
                     filtered.ready,
                     &[],
                 );
+                let cues = cue_reader.update(&filtered);
 
                 // Detect reps; on close, slice the window out of the ring and compute the ZUPT-anchored trace + summary, then persist it.
                 //
@@ -963,7 +966,7 @@ async fn main(spawner: Spawner) -> ! {
                 } else if fusion.ready() && detecting {
                     // The filter is fed every sample, so its offsets and its attitude keep up with the sensor; only the detector is gated, and it starts from a real rest whenever the gate opens. The live stream is the other gate: a rep found while it runs would end in the flash write that leaves a hole in it.
                     detector
-                        .update(&filtered, &integrated)
+                        .update(&filtered, &integrated, &cues)
                         .map(|rep| (rep.span, Some((rep.from_ms, rep.state)), Some(rep.turns)))
                 } else {
                     None

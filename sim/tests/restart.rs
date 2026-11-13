@@ -2,6 +2,7 @@
 //!
 //! The two things that would otherwise cross it are a stroke left open — whose turn would pair with a stroke from the far side of the stream as one rep spanning it — and a first step measured from the last sample before it, which would integrate minutes of nothing as motion.
 
+use calypso_core::motion::cues::CueReader;
 use calypso_core::motion::fusion::{Filtered, FusionState};
 use calypso_core::motion::integrate::Integration;
 use calypso_core::motion::rep::Detector;
@@ -20,11 +21,18 @@ fn sample(t_ms: u32, linear: [f32; 3], resting: bool) -> Filtered {
     }
 }
 
-fn rest(det: &mut Detector, integration: &mut Integration, t: &mut u32, ms: u32) {
+fn rest(
+    det: &mut Detector,
+    integration: &mut Integration,
+    cues: &mut CueReader,
+    t: &mut u32,
+    ms: u32,
+) {
     for _ in 0..ms / DT_MS {
         let f = sample(*t, [0.0; 3], true);
         let m = integration.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
-        det.update(&f, &m);
+        let cue = cues.update(&f);
+        det.update(&f, &m, &cue);
         *t += DT_MS;
     }
 }
@@ -33,13 +41,15 @@ fn rest(det: &mut Detector, integration: &mut Integration, t: &mut u32, ms: u32)
 fn a_pause_ends_the_stroke_it_interrupted_instead_of_stretching_it() {
     let mut det = Detector::new();
     let mut integration = Integration::new();
+    let mut cues = CueReader::new();
     let mut t = 0;
-    rest(&mut det, &mut integration, &mut t, 2000);
+    rest(&mut det, &mut integration, &mut cues, &mut t, 2000);
     // A drive, still moving when the stream is asked for.
     for _ in 0..300 / DT_MS {
         let f = sample(t, [0.0, 0.0, 4.0], false);
         let m = integration.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
-        det.update(&f, &m);
+        let cue = cues.update(&f);
+        det.update(&f, &m, &cue);
         t += DT_MS;
     }
     assert_eq!(det.halves(), 1, "the drive is a stroke the bar made");
@@ -58,12 +68,14 @@ fn a_pause_ends_the_stroke_it_interrupted_instead_of_stretching_it() {
 fn the_first_sample_after_a_pause_is_not_a_step() {
     let mut det = Detector::new();
     let mut integration = Integration::new();
+    let mut cues = CueReader::new();
     // The device restarts on the tick that notices the switch, so the sample it is about to be asked about carries that tick's own timestamp.
     det.restart();
     integration.restart(600_000);
     let f = sample(600_000, [0.0, 0.0, 4.0], false);
     let m = integration.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
-    det.update(&f, &m);
+    let cue = cues.update(&f);
+    det.update(&f, &m, &cue);
 
     assert_eq!(
         det.vertical(),
