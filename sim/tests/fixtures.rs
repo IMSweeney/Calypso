@@ -1,5 +1,4 @@
-use calypso_core::motion::rep::RepSeed;
-use calypso_core::motion::trace::{compute_rep, TraceBuf, TracePoint, TRACE_POINTS};
+use calypso_core::motion::trace::TracePoint;
 use calypso_core::pb::{self, msg, Record};
 use calypso_core::store::RECORD_BUF_BYTES;
 use calypso_core::uuid::fixture_uuid;
@@ -127,26 +126,6 @@ fn empty_and_single_point_dumps_are_valid() {
         }
         other => panic!("expected a summary, got {other:?}"),
     }
-}
-
-#[test]
-fn decimation_keeps_the_last_point() {
-    let samples = Rep::cosine(1.2, 10_000).samples();
-    let lead_in = fixtures::LEAD_IN_MS as usize / fixtures::SAMPLE_DT_MS as usize;
-    // Half a second either side, so the filter sees the bar at rest at both ends.
-    let window = &samples[lead_in - 50..lead_in + 1_000 + 50];
-
-    let mut storage = vec![TracePoint::ZERO; TRACE_POINTS];
-    let mut trace = TraceBuf::new(&mut storage);
-    let summary = compute_rep(window, &RepSeed::LEVEL, None, &mut trace);
-    assert!(summary.computed_len as usize <= TRACE_POINTS);
-    assert_eq!(summary.computed_len as usize, trace.len());
-    assert_eq!(
-        trace.get(trace.len() - 1).unwrap().t_ms,
-        window.last().unwrap().t_ms,
-        "the last trace point should be the last sample"
-    );
-    assert!(trace.get(1).unwrap().t_ms > trace.get(0).unwrap().t_ms + 10);
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! The arithmetic inside a rep: what `compute_rep` makes of a known motion, and the pieces a stored trace and summary are built from — the position it integrates, the angles it reports, and the decimation that fits it into the device's buffer.
+//! The replay inside a rep: what `compute_rep` makes of a known motion, and the pieces a stored trace and summary are built from — the position it integrates, the angles it reports, and the decimation that fits it into the device's buffer.
 //!
 //! **The detector is not in this file.** Whether a given motion is a rep is pinned in `calypso-sim`, against the motion generators (`sim/src/motion.rs`) and the sets they assemble, because that question needs a stream rather than a sample list and because a detector change is measured on the sweeps there. Nothing here should grow one: these tests are the seam below it, where a failure says the integration or the angles are wrong rather than that the thresholds moved.
 //!
@@ -203,6 +203,10 @@ fn trace_is_decimated_when_it_does_not_fit() {
     assert_eq!(
         buf.get(buf.len() - 1).unwrap().t_ms,
         samples.last().unwrap().t_ms
+    );
+    assert!(
+        buf.get(1).unwrap().t_ms > buf.get(0).unwrap().t_ms + DT_MS,
+        "the trace is decimated rather than kept whole"
     );
 }
 

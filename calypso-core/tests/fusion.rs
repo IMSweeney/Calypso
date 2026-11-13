@@ -389,7 +389,6 @@ fn a_replay_from_a_state_reproduces_the_run() {
         "a replay that ended at rest carries velocity {:?}",
         replay_motion.velocity()
     );
-    assert!(matches!(state, FusionState { .. }));
 }
 
 #[test]
