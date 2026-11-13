@@ -12,7 +12,7 @@
 //! The trace cursor lives here too: a trace is a sequence of transfers, so it is the state that must survive between event loop iterations, and [`Session::trace_storage`] is where `store::read_trace` reads a rep into.
 
 use crate::gatt::pipe_sync;
-use crate::motion::rep::TracePoint;
+use crate::motion::trace::TracePoint;
 use crate::pb::{self, msg, TRACE_CHUNK_SAMPLES};
 use crate::sampler::Sample;
 use crate::uuid::RepUuid;

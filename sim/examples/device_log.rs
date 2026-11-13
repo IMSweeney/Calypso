@@ -12,7 +12,7 @@ use std::fs;
 
 use calypso_core::flashlog::FlashLog;
 use calypso_core::motion::fusion::{magnitude, roll_pitch_deg};
-use calypso_core::motion::rep::{TraceBuf, TracePoint};
+use calypso_core::motion::trace::{TraceBuf, TracePoint};
 use calypso_core::pb::msg;
 use calypso_core::pb::summary_uuid;
 use calypso_core::sampler::QUAT_SCALE;

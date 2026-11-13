@@ -6,7 +6,8 @@
 //! Log layout: each rep is one `RepSummary` record followed by its `computed_chunks` `TraceChunk` records and then, on a device that recorded them, its `raw_chunks` `RawChunk` records — all carrying the same `rep_uuid` — because a log record must fit one 4 KB erase sector (see [`crate::flashlog`]). The order is what lets a trace be found from the summary's record id alone.
 
 use crate::motion::fusion::FusionState;
-use crate::motion::rep::{RepSeed, TracePoint};
+use crate::motion::rep::RepSeed;
+use crate::motion::trace::TracePoint;
 use crate::sampler::{quantize, RepConfig, Sample, QUAT_SCALE};
 use crate::uuid::{RepUuid, UUID_LEN};
 use micropb::MessageDecode;

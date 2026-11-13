@@ -1,7 +1,7 @@
 mod common;
 
 use calypso_core::flashlog::FlashLog;
-use calypso_core::motion::rep::{TraceBuf, TracePoint};
+use calypso_core::motion::trace::{TraceBuf, TracePoint};
 use calypso_core::pb::msg;
 use calypso_core::sampler::{Sample, QUAT_SCALE};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
@@ -438,7 +438,7 @@ fn clock_records_sit_among_the_reps_without_disturbing_them() {
     assert_eq!(back.len(), 1);
     assert_eq!(back[0].computed_len, traces[0].len() as u32);
 
-    let mut storage = vec![calypso_core::motion::rep::TracePoint::ZERO; traces[0].len()];
+    let mut storage = vec![calypso_core::motion::trace::TracePoint::ZERO; traces[0].len()];
     let mut trace = TraceBuf::new(&mut storage);
     let points =
         store::read_trace(&mut log, &mut buf, &mut rec, fixture_uuid(1), &mut trace).unwrap();

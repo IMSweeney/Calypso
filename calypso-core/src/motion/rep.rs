@@ -1,10 +1,9 @@
-//! Rep detection and per-rep trace computation.
+//! Rep detection and set validation.
 
 use crate::motion::cues::Cues;
-use crate::motion::fusion::{magnitude, roll_pitch_deg, Filtered, Fusion, FusionState};
-use crate::motion::integrate::{Anchor, Integrated, Integration};
+use crate::motion::fusion::{Filtered, FusionState};
+use crate::motion::integrate::{Anchor, Integrated};
 use crate::pb::msg;
-use crate::sampler::{quantize, Sample, QUAT_SCALE};
 
 /// Speed (m/s) the bar has to reach going each way for a stroke to be a leg.
 pub const SWING_MPS: f32 = 0.30;
@@ -20,8 +19,6 @@ pub const REST_MS: u32 = 10_000;
 pub const MARGIN_MS: u32 = 500;
 /// Sample times and filter states the detector keeps, so the state a stored window is seeded from can be found after the fact: `MARGIN_MS` of samples, plus headroom.
 const HIST: usize = 64;
-/// How many points a rep's **plotted** trace keeps, however long the rep is.
-pub const TRACE_POINTS: usize = 128;
 /// Smallest dominant-axis travel (metres) a stored summary can report and still be called a rep.
 pub const MIN_ROM_M: f32 = 0.07;
 
@@ -396,226 +393,10 @@ fn absf(x: f32) -> f32 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct TracePoint {
-    pub t_ms: u32,
-    /// ZUPT-anchored displacement from the rep start (m).
-    pub pos: [f32; 3],
-    /// The attitude the filter computed at this point `[w, x, y, z]` (`sampler::QUAT_SCALE` LSB).
-    pub quat: [i16; 4],
-}
-
-impl TracePoint {
-    pub const ZERO: TracePoint = TracePoint {
-        t_ms: 0,
-        pos: [0.0; 3],
-        quat: [0; 4],
-    };
-}
-
-pub struct TraceBuf<'a> {
-    points: &'a mut [TracePoint],
-    len: usize,
-}
-
-impl<'a> TraceBuf<'a> {
-    pub fn new(points: &'a mut [TracePoint]) -> Self {
-        TraceBuf { points, len: 0 }
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.points.len()
-    }
-
-    pub fn get(&self, i: usize) -> Option<&TracePoint> {
-        if i < self.len {
-            self.points.get(i)
-        } else {
-            None
-        }
-    }
-
-    pub fn iter(&self) -> core::slice::Iter<'_, TracePoint> {
-        self.points[..self.len].iter()
-    }
-
-    pub fn as_slice(&self) -> &[TracePoint] {
-        &self.points[..self.len]
-    }
-
-    pub fn push(&mut self, p: TracePoint) {
-        if self.len < self.points.len() {
-            self.points[self.len] = p;
-            self.len += 1;
-        }
-    }
-
-    fn clear(&mut self) {
-        self.len = 0;
-    }
-}
-
-pub const DETECTOR_VERSION: u32 = 7;
+pub const DETECTOR_VERSION: u32 = 8;
 
 impl msg::RepSummary {
     pub fn is_a_rep(&self) -> bool {
         self.rom >= MIN_ROM_M
     }
-}
-
-pub fn compute_rep(
-    samples: &[Sample],
-    from: &RepSeed,
-    turns: Option<RepTurns>,
-    out: &mut TraceBuf<'_>,
-) -> msg::RepSummary {
-    out.clear();
-    let mut summary = msg::RepSummary {
-        roll_min_deg: f32::MAX,
-        roll_max_deg: f32::MIN,
-        pitch_min_deg: f32::MAX,
-        pitch_max_deg: f32::MIN,
-        ..Default::default()
-    };
-    let n = samples.len();
-    if n == 0 {
-        summary.roll_min_deg = 0.0;
-        summary.roll_max_deg = 0.0;
-        summary.pitch_min_deg = 0.0;
-        summary.pitch_max_deg = 0.0;
-        return summary;
-    }
-
-    let capacity = out.capacity();
-    let stride = if capacity == 0 {
-        n
-    } else {
-        n.div_ceil(capacity).max(1)
-    };
-    let first = if capacity == 0 { 0 } else { (n - 1) % stride };
-
-    let mut fusion = Fusion::from_state(from.filter);
-    let mut integration = Integration::from_velocity(from.velocity);
-    let mut p = [0.0f32; 3];
-    let mut v_prev = from.velocity;
-    let mut anchors = [Anchor::rest(0); 3];
-    let mut anchor_len = 0usize;
-    if let Some(t) = turns {
-        for anchor in t.zeros.into_iter().flatten() {
-            anchors[anchor_len] = anchor;
-            anchor_len += 1;
-        }
-    }
-    for anchor in &mut anchors[..anchor_len] {
-        if let Some(sample) = samples.iter().find(|s| s.t_ms >= anchor.t_ms) {
-            anchor.t_ms = sample.t_ms;
-        }
-    }
-    let anchors = &anchors[..anchor_len];
-    let (span_start, span_end) = turns.map_or((u32::MIN, u32::MAX), |t| (t.start_ms, t.end_ms));
-    let mut v_max = 0.0f32;
-    let mut lo = [f32::MAX; 3];
-    let mut hi = [f32::MIN; 3];
-    let mut roll_offset = 0.0f32;
-    let mut roll_prev = 0.0f32;
-    let mut roll_seen = false;
-
-    for i in 0..n {
-        let filtered = fusion.update(&samples[i]);
-        integration.step(
-            samples[i].t_ms,
-            filtered.linear_accel,
-            filtered.resting,
-            filtered.ready,
-            anchors,
-        );
-        let v = integration.velocity();
-        if i > 0 {
-            let dt = (samples[i].t_ms - samples[i - 1].t_ms) as f32 / 1000.0;
-            for k in 0..3 {
-                p[k] += 0.5 * (v_prev[k] + v[k]) * dt;
-            }
-        }
-        v_prev = v;
-
-        let speed = magnitude(v);
-        if speed > v_max {
-            v_max = speed;
-        }
-        if samples[i].t_ms >= span_start && samples[i].t_ms <= span_end {
-            for k in 0..3 {
-                if p[k] < lo[k] {
-                    lo[k] = p[k];
-                }
-                if p[k] > hi[k] {
-                    hi[k] = p[k];
-                }
-            }
-        }
-
-        let (roll, pitch) = roll_pitch_deg(filtered.state.attitude);
-        if roll_seen {
-            let step = roll - roll_prev;
-            if step > 180.0 {
-                roll_offset -= 360.0;
-            } else if step < -180.0 {
-                roll_offset += 360.0;
-            }
-        }
-        roll_seen = true;
-        roll_prev = roll;
-        let roll = roll + roll_offset;
-        if roll < summary.roll_min_deg {
-            summary.roll_min_deg = roll;
-        }
-        if roll > summary.roll_max_deg {
-            summary.roll_max_deg = roll;
-        }
-        if pitch < summary.pitch_min_deg {
-            summary.pitch_min_deg = pitch;
-        }
-        if pitch > summary.pitch_max_deg {
-            summary.pitch_max_deg = pitch;
-        }
-
-        if i >= first && (i - first) % stride == 0 {
-            out.push(TracePoint {
-                t_ms: samples[i].t_ms,
-                pos: p,
-                quat: filtered.state.attitude.map(|q| quantize(q, QUAT_SCALE)),
-            });
-        }
-    }
-
-    summary.rom = if hi[2] >= lo[2] { hi[2] - lo[2] } else { 0.0 };
-    summary.t_start_ms = samples[0].t_ms;
-    summary.t_end_ms = samples[n - 1].t_ms;
-    summary.duration_ms = summary.t_end_ms - summary.t_start_ms;
-    summary.peak_velocity = v_max;
-    summary.computed_len = out.len() as u32;
-    summary.set_state(msg::RepState {
-        vx: from.velocity[0],
-        vy: from.velocity[1],
-        vz: from.velocity[2],
-        qw: from.filter.attitude[0],
-        qx: from.filter.attitude[1],
-        qy: from.filter.attitude[2],
-        qz: from.filter.attitude[3],
-        accel_bias_x: from.filter.accel_bias[0],
-        accel_bias_y: from.filter.accel_bias[1],
-        accel_bias_z: from.filter.accel_bias[2],
-        gyro_bias_x: from.filter.gyro_bias[0],
-        gyro_bias_y: from.filter.gyro_bias[1],
-        gyro_bias_z: from.filter.gyro_bias[2],
-        settled: from.filter.resting,
-    });
-    summary
 }

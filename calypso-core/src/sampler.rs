@@ -112,7 +112,7 @@ pub fn quantize(v: f32, scale: i32) -> i16 {
 
 /// Fixed-capacity ring of samples, oldest dropped on overflow.
 ///
-/// Borrows its buffer rather than owning it, like [`crate::motion::rep::TraceBuf`]: a 30 s window as an owned value is 54 KB on the stack before it can move to the heap, and the caller has to decide whether it is a `static` or leaked.
+/// Borrows its buffer rather than owning it, like [`crate::motion::trace::TraceBuf`]: a 30 s window as an owned value is 54 KB on the stack before it can move to the heap, and the caller has to decide whether it is a `static` or leaked.
 /// The buffer must not be empty.
 /// Samples are pushed at a fixed rate, so the timestamp of any element is `get(i).t_ms`.
 pub struct SampleRing<'a> {

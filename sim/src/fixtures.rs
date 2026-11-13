@@ -6,8 +6,8 @@
 //! The firmware never calls any of this: the generators live outside `calypso-core` so that the device's library carries nothing it does not use.
 
 use calypso_core::motion::fusion::{Fusion, GRAVITY};
-use calypso_core::motion::rep::RepSeed;
-use calypso_core::motion::rep::{TracePoint, DETECTOR_VERSION};
+use calypso_core::motion::rep::{RepSeed, DETECTOR_VERSION};
+use calypso_core::motion::trace::TracePoint;
 use calypso_core::pb::{self, msg};
 use calypso_core::sampler::{quantize, RepConfig, Sample, ACCEL_SCALE, SAMPLE_RATE_HZ};
 use calypso_core::store::RECORD_BUF_BYTES;

@@ -45,9 +45,8 @@ use calypso_core::gatt::{
 use calypso_core::motion::cues::CueReader;
 use calypso_core::motion::fusion::Fusion;
 use calypso_core::motion::integrate::Integration;
-use calypso_core::motion::rep::{
-    Detector, MARGIN_MS, RepSeed, RepSpan, TraceBuf, TracePoint, compute_rep,
-};
+use calypso_core::motion::rep::{Detector, MARGIN_MS, RepSeed, RepSpan};
+use calypso_core::motion::trace::{TraceBuf, TracePoint, compute_rep};
 use calypso_core::pb::msg;
 use calypso_core::pipe::{self, Session, Stalled};
 use calypso_core::report::Latch;
@@ -236,7 +235,7 @@ fn log_changed() {
 /// Ten seconds, and not the nine a window can ask for: a window is inclusive at both ends, so the longest one is 901 samples, and a buffer that fits it exactly would drop the newest sample — the one a trace is most worth having.
 const REP_WINDOW_SAMPLES: usize = 1000;
 /// Trace points kept per rep; longer reps are decimated uniformly.
-const TRACE_POINTS: usize = calypso_core::motion::rep::TRACE_POINTS;
+const TRACE_POINTS: usize = calypso_core::motion::trace::TRACE_POINTS;
 
 // A default app-descriptor, required by the esp-idf bootloader: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();

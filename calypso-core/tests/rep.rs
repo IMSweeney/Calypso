@@ -5,7 +5,8 @@
 //! The motion here is written out by hand (`known_motion`), not generated: each one is a case with an answer worked out on paper — a cosine out-and-back whose travel is known, a still sensor whose offset must come out as nothing.
 
 use calypso_core::motion::fusion::{roll_pitch_deg, Fusion, GRAVITY};
-use calypso_core::motion::rep::{compute_rep, RepSeed, TraceBuf, TracePoint, MARGIN_MS};
+use calypso_core::motion::rep::{RepSeed, RepTurns, MARGIN_MS};
+use calypso_core::motion::trace::{compute_rep, TraceBuf, TracePoint};
 use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, QUAT_SCALE};
 
 const HZ: u32 = 100;
@@ -86,6 +87,44 @@ fn compute_rep_recovers_known_displacement() {
         last.pos[2].abs() < 0.15 * a,
         "a rep that came back to where it started ends {} m away",
         last.pos[2]
+    );
+}
+
+/// A rep removes the travel that the accelerometer's bias added to it.
+///
+/// A constant bias is a linear velocity ramp, so a rep that starts and ends at rest has an end speed the bar never had. Taking that ramp out of the replay is what makes the endpoints meet without moving the peak.
+#[test]
+fn a_rep_removes_the_velocity_its_bias_carried() {
+    let a = 0.4f32;
+    let bias = 0.05f32;
+    let samples = known_motion(a, 1500, 0);
+    let bias_lsb = quantize(bias, ACCEL_SCALE);
+    let samples: Vec<Sample> = samples
+        .into_iter()
+        .map(|mut s| {
+            s.accel[2] = s.accel[2].saturating_add(bias_lsb);
+            s
+        })
+        .collect();
+    let turns = RepTurns {
+        start_ms: samples[0].t_ms,
+        end_ms: samples.last().unwrap().t_ms,
+        zeros: [None; 3],
+    };
+
+    let mut storage = [TracePoint::ZERO; TRACE_CAP];
+    let mut buf = TraceBuf::new(&mut storage);
+    let sum = compute_rep(&samples, &RepSeed::LEVEL, Some(turns), &mut buf);
+
+    let last = buf.get(buf.len() - 1).unwrap().pos[2];
+    assert!(
+        last.abs() < 0.02,
+        "a rep that came back to its start ended {last:.3} m away"
+    );
+    assert!(
+        (sum.rom - a).abs() < 0.2 * a,
+        "rom {:.3} for {a} m of travel",
+        sum.rom
     );
 }
 

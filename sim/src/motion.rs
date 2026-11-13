@@ -16,7 +16,7 @@ use crate::fixtures::{at, detect_and_trace, LEAD_IN_MS, SAMPLE_DT_MS};
 const LEAD_OUT_MS: u32 = 1000;
 
 /// The trace capacity a scenario replays through, which is the plotted budget a device stores.
-pub use calypso_core::motion::rep::TRACE_POINTS;
+pub use calypso_core::motion::trace::TRACE_POINTS;
 
 const PI: f32 = core::f32::consts::PI;
 

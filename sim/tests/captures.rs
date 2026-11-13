@@ -5,7 +5,8 @@
 //! The recordings are recorded data and live in the bucket, so a run needs them pulled into `captures/` or `CAPTURES_REMOTE` naming the bucket; without either they fail rather than read nothing.
 
 use calypso_core::motion::fusion::Fusion;
-use calypso_core::motion::rep::{DetectedRep, TracePoint};
+use calypso_core::motion::rep::DetectedRep;
+use calypso_core::motion::trace::TracePoint;
 use calypso_sim::captures::{self, Capture, Set};
 use calypso_sim::{replay, stream};
 

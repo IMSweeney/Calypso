@@ -1,4 +1,5 @@
-use calypso_core::motion::rep::{compute_rep, RepSeed, TraceBuf, TracePoint, TRACE_POINTS};
+use calypso_core::motion::rep::RepSeed;
+use calypso_core::motion::trace::{compute_rep, TraceBuf, TracePoint, TRACE_POINTS};
 use calypso_core::pb::{self, msg, Record};
 use calypso_core::store::RECORD_BUF_BYTES;
 use calypso_core::uuid::fixture_uuid;

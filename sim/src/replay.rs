@@ -5,9 +5,8 @@
 use calypso_core::motion::cues::CueReader;
 use calypso_core::motion::fusion::{magnitude, Filtered, Fusion};
 use calypso_core::motion::integrate::{Integrated, Integration};
-use calypso_core::motion::rep::{
-    compute_rep, DetectedRep, Detector, TraceBuf, TracePoint, MARGIN_MS,
-};
+use calypso_core::motion::rep::{DetectedRep, Detector, MARGIN_MS};
+use calypso_core::motion::trace::{compute_rep, TraceBuf, TracePoint};
 use calypso_core::pb::msg;
 use calypso_core::sampler::{Sample, SampleRing};
 
