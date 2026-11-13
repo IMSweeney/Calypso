@@ -2,7 +2,7 @@
 
 Turns raw accelerometer and gyroscope samples into rep spans, traces, and summaries.
 
-**Status: planned.** This describes the target shape of the module; the implementation plan at the end is the delta from the current code.
+**Status: the layers and the replay are in place.** This describes the module's shape; the implementation plan below records the order it was built in.
 
 ## Design
 
