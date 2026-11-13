@@ -1,6 +1,9 @@
 //! Pins for the `Set` generator: a set is the unrack, several reps, and the re-rack assembled into one stream, so these are the invariants about how several motions *coexist* — the thing a single-rep scenario cannot express.
 
-use calypso_sim::motion::{stored_set, Push, Rep, Set};
+use calypso_core::fusion::GRAVITY;
+use calypso_core::sampler::Sample;
+use calypso_sim::fixtures::{detect_and_trace, LEAD_IN_MS, SAMPLE_DT_MS};
+use calypso_sim::motion::{stored_set, Push, Rep, Set, TRACE_POINTS};
 
 /// A comfortable set (rest between every rep) comes back as its reps, in time order, with each ROM reading its travel.
 #[test]
@@ -117,4 +120,49 @@ fn a_substantial_unrack_is_not_merged_into_the_first_rep() {
             set.rep.travel
         );
     }
+}
+
+/// Still samples at 1 g, appended from `t`: a bar on the rack, or the lead-in before a set.
+fn still(out: &mut Vec<Sample>, t: &mut u32, ms: u32) {
+    for _ in 0..(ms / SAMPLE_DT_MS) {
+        out.push(Sample::from_f32(*t, [0.0, 0.0, GRAVITY], [0.0; 3]));
+        *t += SAMPLE_DT_MS;
+    }
+}
+
+/// A motion's own stream, moved to the end of what has been built so far.
+fn append(out: &mut Vec<Sample>, t: &mut u32, samples: Vec<Sample>) {
+    for mut s in samples {
+        s.t_ms += *t;
+        out.push(s);
+    }
+    *t = out.last().map_or(*t, |s| s.t_ms + SAMPLE_DT_MS);
+}
+
+/// A set after a long rest counts from its own first stroke.
+///
+/// The bar on the rack is not still in the stroke that carried it there: the turn the next stroke leaves is in the rest, not back at the previous set's last turn. A detector that keeps the old turn starts the first leg of the set that far back, has it refused as a rep's half, and pairs every stroke after it one out of phase — five presses counted as four.
+#[test]
+fn a_set_after_a_long_rest_counts_all_five() {
+    let set = Set {
+        rep: Rep::bench(),
+        reps: 5,
+        inter_rep_rest_ms: 3000,
+        unrack: None,
+        rerack: None,
+    };
+
+    let mut samples = Vec::new();
+    let mut t = 0u32;
+    still(&mut samples, &mut t, LEAD_IN_MS);
+    append(&mut samples, &mut t, Rep::bench().samples());
+    still(&mut samples, &mut t, 20_000);
+    append(&mut samples, &mut t, set.samples());
+
+    let reps = detect_and_trace(&samples, TRACE_POINTS)
+        .into_iter()
+        .map(|(summary, _)| summary)
+        .filter(|s| s.is_a_rep())
+        .count();
+    assert_eq!(reps, 6, "one rep, the bar put down, then five more");
 }

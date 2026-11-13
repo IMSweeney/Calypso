@@ -288,6 +288,17 @@ impl Legs {
             }
         }
 
+        // A bar parked for longer than a set's rest is not still in the stroke that carried it there: the next stroke leaves a turn inside the rest, not back at the old one.
+        // Only with no stroke in flight, because a turn is what that stroke's leg is cut from.
+        if f.still
+            && self.ending.is_none()
+            && self
+                .prev
+                .is_some_and(|turn| f.t_ms.saturating_sub(turn.ms) > REST_MS)
+        {
+            self.prev = None;
+        }
+
         // The stroke that has just cleared the threshold. A side cannot repeat without the speed passing zero in between, so a stroke is at most one of each.
         let side = if vz >= SWING_MPS {
             1
