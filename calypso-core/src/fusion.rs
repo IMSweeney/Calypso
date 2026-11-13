@@ -117,7 +117,7 @@ pub struct Filtered {
 struct Window {
     /// Mean specific force, as the sensor read it (m/s²).
     mean_force: [f32; 3],
-    /// Mean angular rate with the gyro's offset out (rad/s).
+    /// Mean angular rate as the gyroscope read it (rad/s).
     mean_rate: [f32; 3],
     /// The furthest any one sample sat from 1 g, with the accelerometer's offset out (m/s²).
     stray: f32,
@@ -129,9 +129,9 @@ pub struct Fusion {
     state: FusionState,
     /// `None` until the first sample, because the step into the first one is not a step.
     prev_t_ms: Option<u32>,
-    /// The last [`STILL_WINDOW`] samples: the specific force as it was read, then the angular rate with the gyro's offset out, over storage that wraps.
+    /// The last [`STILL_WINDOW`] samples: the specific force and the angular rate, both as they were read, over storage that wraps.
     ///
-    /// The specific force is kept **raw**, because the offset is what is learned from it, and judging it once the offset is out would put the estimate inside its own input.
+    /// Both are kept **raw**, because the offset is what is learned from them, and judging either once the offset is out would put the estimate inside its own input.
     win: [[f32; 6]; STILL_WINDOW],
     win_head: usize,
     win_len: usize,
@@ -171,8 +171,9 @@ impl Fusion {
                 up[1] * GRAVITY + state.accel_bias[1],
                 up[2] * GRAVITY + state.accel_bias[2],
             ];
+            // The window holds the rate as it would have been read, so a rest carries the offset rather than a zero: what the predicates ask of it is the rate with that offset out.
             for _ in 0..STILL_WINDOW {
-                fusion.record(&resting, &[0.0; 3]);
+                fusion.record(&resting, &state.gyro_bias);
             }
         }
         fusion
@@ -226,13 +227,14 @@ impl Fusion {
             self.state.attitude = normalize(quat_mul(self.state.attitude, turn));
         }
 
-        self.record(&raw, &rate);
+        self.record(&raw, &s.gyro_f32().map(|dps| dps * RAD_PER_DPS));
         let window = self.window();
         let full = self.win_len >= STILL_WINDOW;
         // A window the bar could have been resting in: nothing in it strayed far from 1 g and it was not turning.
         // What is left to ask is whether `1 g` is where its mean sits, which is a question about the offset rather than about the motion.
         let shaped = full && window.stray <= STILL_STRAY;
-        let resting = shaped && magnitude(window.mean_rate) < STILL_RATE_DPS * RAD_PER_DPS;
+        let mean_rate = sub(window.mean_rate, self.state.gyro_bias);
+        let resting = shaped && magnitude(mean_rate) < STILL_RATE_DPS * RAD_PER_DPS;
         let offset_out = sub(window.mean_force, self.state.accel_bias);
         let still = resting && absf(magnitude(offset_out) - GRAVITY) <= STILL_GRAVITY;
         self.state.settled = still;
@@ -244,14 +246,21 @@ impl Fusion {
             if shaped {
                 self.set_attitude_from(&window.mean_force);
                 self.set_accel_offset(&window.mean_force);
-                self.set_gyro_offset(&window.mean_rate);
+                // The same question the set asks of the gyro's offset, and for the same reason: a bar being carried turns gravity in the sensor's frame, and a turn taken for a bias is a turn the attitude then refuses to make.
+                if self.direction_is_quiet() {
+                    self.set_gyro_offset(&window.mean_rate);
+                }
             }
             if self.quiet_s >= READY_S {
                 self.ready = true;
             }
         } else {
-            // From then on the gyro carries it and the accelerometer only pulls: hard while the bar is still, gently while it moves. Gently is enough, because gravity's direction is not corrupted by a vertical stroke.
-            let tau = if still {
+            // From then on the gyro carries the attitude, and the accelerometer only pulls.
+            // Gravity's direction is a reference whenever it is stable: at rest, or mid-stroke on a vertical path, where the bar's own acceleration lies along gravity.
+            // The pull keys on that direction, not on magnitude.
+            // `still` also asks the magnitude, and a raw sensor's up axis can read 9.5 g instead of 9.81 g, which fails `still` and leaves a 90° mount's frame stuck wrong.
+            // An offset corrupts magnitude, not gravity's direction, so it must not demote the pull.
+            let tau = if still || self.direction_is_quiet() {
                 ATT_TAU_STILL_S
             } else {
                 ATT_TAU_MOVING_S
@@ -333,6 +342,8 @@ impl Fusion {
     }
 
     /// Put the gyroscope's offset where the mean rate is zero, which is the same boot question asked of the other sensor.
+    ///
+    /// `rate` is the reading as it came, like [`Fusion::set_accel_offset`]'s force: a residual would make the offset its own input, and assigning that converges on half the true value while adding it diverges.
     fn set_gyro_offset(&mut self, rate: &[f32; 3]) {
         self.state.gyro_bias = *rate;
     }
@@ -391,8 +402,10 @@ impl Fusion {
 
     /// Learn the accelerometer's offset from what gravity does not explain.
     fn learn_accel_offset(&mut self, raw: &[f32; 3], dt: f32, tau: f32) {
-        let up = rotate_by_quat(conjugate(self.state.attitude), [0.0, 0.0, 1.0]);
-        let expected = scale(up, GRAVITY);
+        // `raw` is the measured gravity while the bar rests, so its own direction is up.
+        // Reading the offset off that direction, not off the attitude, keeps the offset out of the frame's still-converging guess.
+        // A wrong frame would hand the offset its own error as metres of bias.
+        let expected = scale(unit(*raw), GRAVITY);
         for k in 0..3 {
             let offset = raw[k] - expected[k];
             self.state.accel_bias[k] += (offset - self.state.accel_bias[k]) * (dt / tau);

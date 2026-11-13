@@ -3,7 +3,8 @@
 //! Everything here is a stream fed straight to [`Fusion`], so a failure names the filter rather than the detector or the trace. What the *pipeline* stores is `calypso-sim`'s.
 
 use calypso_core::fusion::{
-    magnitude, quat_from_rotvec, roll_pitch_deg, rotate_by_quat, Fusion, FusionState, GRAVITY,
+    conjugate, magnitude, quat_from_rotvec, roll_pitch_deg, rotate_by_quat, Fusion, FusionState,
+    GRAVITY,
 };
 use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, GYRO_SCALE};
 
@@ -63,6 +64,48 @@ fn a_still_sensor_reads_nothing_at_any_attitude() {
             );
         }
     }
+}
+
+/// A still sensor at a 90° mount whose up axis reads 9.5 g, not 9.81 g, still finds its frame.
+///
+/// A chip read raw carries per-axis offsets of a few hundred mg, so `still`'s ±0.12 g magnitude
+/// check fails on a sensor whose up axis is short by 0.3 m/s². The frame must still converge on
+/// gravity's *direction*, which an offset does not corrupt: a still 90° mount left wrong by this
+/// double-integrates metres of travel. The filter starts already wrong, as a replay of a window
+/// whose stored attitude is, so it has to pull onto the direction rather than be handed it.
+#[test]
+fn a_ninety_degree_mount_with_a_magnitude_offset_recovers_its_frame() {
+    // Gravity along the sensor's Y axis, and a 0.3 m/s² shortfall on that same axis: the reading
+    // the capture's broken window held, |f| ≈ 9.5 g.
+    let mount = [core::f32::consts::FRAC_PI_2, 0.0, 0.0];
+    let up = rotate_by_quat(quat_from_rotvec(mount), [0.0, 0.0, 1.0]);
+    let offset = up.map(|c| c * -0.3);
+
+    // Ready but not settled, with no window behind it: what a stored state replays from.
+    let mut fusion = Fusion::from_state(FusionState::LEVEL);
+    let mut last = [0.0f32; 3];
+    for t in (0..10000).step_by(DT_MS as usize) {
+        last = fusion
+            .update(&rest(t, mount, offset, [0.0; 3]))
+            .linear_accel;
+    }
+
+    // The frame pulled onto gravity's direction: the filter's up is the mount's up.
+    let frame_up = rotate_by_quat(conjugate(fusion.state().attitude), [0.0, 0.0, 1.0]);
+    let aligned = frame_up[0] * up[0] + frame_up[1] * up[1] + frame_up[2] * up[2];
+    assert!(
+        aligned > 0.9,
+        "the frame is {:.0}° off gravity at a still 90° mount (dot {aligned:.2})",
+        aligned.min(1.0).acos().to_degrees()
+    );
+    assert!(
+        fusion.state().settled,
+        "a still bar at a 90° mount never passed the stillness gate"
+    );
+    assert!(
+        magnitude(last) < 0.05,
+        "a still bar at a 90° mount still reads {last:?} m/s²"
+    );
 }
 
 /// An accelerometer offset is learned while the bar is still, and a still bar does not accelerate because of it.
