@@ -78,7 +78,7 @@ fn summary_round_trips() {
             assert_eq!(state.filter.attitude[3], 0.3);
             assert_eq!(state.filter.accel_bias[2], 0.03);
             assert_eq!(state.filter.gyro_bias[1], -0.002);
-            assert!(state.filter.settled, "whether the bar was at rest survives");
+            assert!(state.filter.resting, "whether the bar was at rest survives");
             assert_eq!(s.config.accel_range_g, 8);
             assert_eq!(s.config.detector_version, 1);
             assert_eq!(s.computed_chunks, 4);

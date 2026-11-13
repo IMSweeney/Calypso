@@ -52,7 +52,7 @@ fn main() {
             a[0],
             a[1],
             tilt,
-            if f.still { 1 } else { 0 },
+            if f.resting { 1 } else { 0 },
             counted
         );
     };
@@ -79,8 +79,8 @@ fn main() {
         format!("{:.2} s", t.saturating_sub(t0) as f32 / 1000.0)
     });
     println!(
-        "  filter      ready at {ready}, still {:.0}% of the stream, peak |v| {:.2} m/s (horiz {:.2})",
-        out.still as f32 * 100.0 / samples.len() as f32,
+        "  filter      ready at {ready}, resting {:.0}% of the stream, peak |v| {:.2} m/s (horiz {:.2})",
+        out.resting as f32 * 100.0 / samples.len() as f32,
         out.peak_speed,
         out.peak_horizontal
     );

@@ -42,8 +42,10 @@ pub struct FusionState {
     pub accel_bias: [f32; 3],
     /// The gyroscope's offset in the sensor's own frame (rad/s).
     pub gyro_bias: [f32; 3],
-    /// Whether the bar was already at rest when this was taken.
-    pub settled: bool,
+    /// Whether the bar was at rest when this was taken, which is what seeds the stillness window.
+    pub resting: bool,
+    /// Whether the filter has seen gravity at least once.
+    pub ready: bool,
 }
 
 impl FusionState {
@@ -51,7 +53,17 @@ impl FusionState {
         attitude: [1.0, 0.0, 0.0, 0.0],
         accel_bias: [0.0; 3],
         gyro_bias: [0.0; 3],
-        settled: false,
+        resting: false,
+        ready: false,
+    };
+
+    /// Level, with the frame already found: what a stored window starts from.
+    pub const LEVEL_READY: FusionState = FusionState {
+        attitude: [1.0, 0.0, 0.0, 0.0],
+        accel_bias: [0.0; 3],
+        gyro_bias: [0.0; 3],
+        resting: false,
+        ready: true,
     };
 }
 
@@ -68,7 +80,7 @@ pub struct Filtered {
     /// Specific force with gravity and the sensor's offset taken out, in the world frame (m/s²).
     pub linear_accel: [f32; 3],
     /// Whether the bar has been at rest across the last window.
-    pub still: bool,
+    pub resting: bool,
     /// Whether the filter has seen gravity at least once.
     pub ready: bool,
     /// Where the filter stands after this sample.
@@ -96,8 +108,6 @@ pub struct Fusion {
 
     /// Seconds of unbroken quiet, which is what readiness is counted toward.
     quiet_s: f32,
-    /// Whether the attitude has been aligned to gravity at least once.
-    ready: bool,
 }
 
 impl Fusion {
@@ -110,17 +120,15 @@ impl Fusion {
             win_len: 0,
 
             quiet_s: 0.0,
-            ready: false,
         }
     }
 
     pub fn from_state(state: FusionState) -> Self {
         let mut fusion = Fusion {
             state,
-            ready: true,
             ..Fusion::new()
         };
-        if state.settled {
+        if state.resting {
             let up = rotate_by_quat(conjugate(state.attitude), [0.0, 0.0, 1.0]);
             let resting = [
                 up[0] * GRAVITY + state.accel_bias[0],
@@ -138,12 +146,8 @@ impl Fusion {
         self.state
     }
 
-    pub fn still_for_s(&self) -> f32 {
-        self.quiet_s
-    }
-
     pub fn ready(&self) -> bool {
-        self.ready
+        self.state.ready
     }
 
     pub fn update(&mut self, s: &Sample) -> Filtered {
@@ -162,8 +166,8 @@ impl Fusion {
             return Filtered {
                 t_ms: s.t_ms,
                 linear_accel: [0.0; 3],
-                still: self.state.settled,
-                ready: self.ready,
+                resting: self.state.resting,
+                ready: self.state.ready,
                 state: self.state,
             };
         }
@@ -178,13 +182,13 @@ impl Fusion {
         let full = self.win_len >= STILL_WINDOW;
         let shaped = full && window.stray <= STILL_STRAY;
         let mean_rate = sub(window.mean_rate, self.state.gyro_bias);
-        let resting = shaped && magnitude(mean_rate) < STILL_RATE_DPS * RAD_PER_DPS;
+        let quiet = shaped && magnitude(mean_rate) < STILL_RATE_DPS * RAD_PER_DPS;
         let offset_out = sub(window.mean_force, self.state.accel_bias);
-        let still = resting && absf(magnitude(offset_out) - GRAVITY) <= STILL_GRAVITY;
-        self.state.settled = still;
+        let resting = quiet && absf(magnitude(offset_out) - GRAVITY) <= STILL_GRAVITY;
+        self.state.resting = resting;
 
         self.quiet_s = if shaped { self.quiet_s + dt } else { 0.0 };
-        if !self.ready {
+        if !self.state.ready {
             if shaped {
                 self.set_attitude_from(&window.mean_force);
                 self.set_accel_offset(&window.mean_force);
@@ -193,10 +197,10 @@ impl Fusion {
                 }
             }
             if self.quiet_s >= READY_S {
-                self.ready = true;
+                self.state.ready = true;
             }
         } else {
-            let tau = if still || self.direction_is_quiet() {
+            let tau = if resting || self.direction_is_quiet() {
                 ATT_TAU_STILL_S
             } else {
                 ATT_TAU_MOVING_S
@@ -204,7 +208,7 @@ impl Fusion {
             self.pull_toward_gravity(&window.mean_force, dt / tau);
         }
 
-        if dt > 0.0 && resting {
+        if dt > 0.0 && quiet {
             self.learn_accel_offset(&window.mean_force, dt, TRACK_TAU_S);
         }
         if dt > 0.0 && self.direction_is_quiet() {
@@ -220,8 +224,8 @@ impl Fusion {
         Filtered {
             t_ms: s.t_ms,
             linear_accel,
-            still,
-            ready: self.ready,
+            resting,
+            ready: self.state.ready,
             state: self.state,
         }
     }

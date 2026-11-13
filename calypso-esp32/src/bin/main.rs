@@ -887,7 +887,7 @@ async fn main(spawner: Spawner) -> ! {
                 let integrated = integration.step(
                     filtered.t_ms,
                     filtered.linear_accel,
-                    filtered.still,
+                    filtered.resting,
                     filtered.ready,
                     &[],
                 );

@@ -27,8 +27,8 @@ pub struct Replay {
     pub traces: Vec<Vec<TracePoint>>,
     /// Where the filter first knew which way is down, on the device's clock.
     pub ready_at_ms: Option<u32>,
-    /// How many samples it called still.
-    pub still: usize,
+    /// How many samples it called resting.
+    pub resting: usize,
     /// The largest speed the filter reached, and the largest of it that was horizontal.
     ///
     /// Splitting the two is what tells a bar that moved from a gravity that leaked: a tilt puts speed into the horizontal plane, where nothing a rep does ought to put metres per second.
@@ -59,7 +59,7 @@ pub fn run(
         summaries: Vec::new(),
         traces: Vec::new(),
         ready_at_ms: None,
-        still: 0,
+        resting: 0,
         peak_speed: 0.0,
         peak_horizontal: 0.0,
         halves: 0,
@@ -71,12 +71,12 @@ pub fn run(
         let integrated = integration.step(
             filtered.t_ms,
             filtered.linear_accel,
-            filtered.still,
+            filtered.resting,
             filtered.ready,
             &[],
         );
-        if filtered.still {
-            out.still += 1;
+        if filtered.resting {
+            out.resting += 1;
         }
         let v = integrated.velocity;
         out.peak_speed = out.peak_speed.max(magnitude(v));

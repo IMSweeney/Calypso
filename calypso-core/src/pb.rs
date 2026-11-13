@@ -106,7 +106,8 @@ pub fn state_from_message(s: &msg::RepState) -> RepSeed {
             attitude: [s.qw, s.qx, s.qy, s.qz],
             accel_bias: [s.accel_bias_x, s.accel_bias_y, s.accel_bias_z],
             gyro_bias: [s.gyro_bias_x, s.gyro_bias_y, s.gyro_bias_z],
-            settled: s.settled,
+            resting: s.settled,
+            ready: true,
         },
         velocity: [s.vx, s.vy, s.vz],
     }

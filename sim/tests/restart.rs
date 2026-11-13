@@ -9,11 +9,11 @@ use calypso_core::motion::rep::Detector;
 const DT_MS: u32 = 10;
 
 /// One filtered sample as the detector reads it: `linear` is the bar's own acceleration, gravity already out.
-fn sample(t_ms: u32, linear: [f32; 3], still: bool) -> Filtered {
+fn sample(t_ms: u32, linear: [f32; 3], resting: bool) -> Filtered {
     Filtered {
         t_ms,
         linear_accel: linear,
-        still,
+        resting,
         ready: true,
         state: FusionState::LEVEL,
     }
@@ -22,7 +22,7 @@ fn sample(t_ms: u32, linear: [f32; 3], still: bool) -> Filtered {
 fn rest(det: &mut Detector, integration: &mut Integration, t: &mut u32, ms: u32) {
     for _ in 0..ms / DT_MS {
         let f = sample(*t, [0.0; 3], true);
-        let m = integration.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
+        let m = integration.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
         det.update(&f, &m);
         *t += DT_MS;
     }
@@ -37,7 +37,7 @@ fn a_pause_ends_the_stroke_it_interrupted_instead_of_stretching_it() {
     // A drive, still moving when the stream is asked for.
     for _ in 0..300 / DT_MS {
         let f = sample(t, [0.0, 0.0, 4.0], false);
-        let m = integration.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
+        let m = integration.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
         det.update(&f, &m);
         t += DT_MS;
     }
@@ -61,7 +61,7 @@ fn the_first_sample_after_a_pause_is_not_a_step() {
     det.restart();
     integration.restart(600_000);
     let f = sample(600_000, [0.0, 0.0, 4.0], false);
-    let m = integration.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
+    let m = integration.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
     det.update(&f, &m);
 
     assert_eq!(

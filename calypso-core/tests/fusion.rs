@@ -72,8 +72,8 @@ fn a_ninety_degree_mount_with_a_magnitude_offset_recovers_its_frame() {
     let up = rotate_by_quat(quat_from_rotvec(mount), [0.0, 0.0, 1.0]);
     let offset = up.map(|c| c * -0.3);
 
-    // Ready but not settled, with no window behind it: what a stored state replays from.
-    let mut fusion = Fusion::from_state(FusionState::LEVEL);
+    // Ready but not resting, with no window behind it: what a stored state replays from.
+    let mut fusion = Fusion::from_state(FusionState::LEVEL_READY);
     let mut last = [0.0f32; 3];
     for t in (0..10000).step_by(DT_MS as usize) {
         last = fusion
@@ -90,7 +90,7 @@ fn a_ninety_degree_mount_with_a_magnitude_offset_recovers_its_frame() {
         aligned.min(1.0).acos().to_degrees()
     );
     assert!(
-        fusion.state().settled,
+        fusion.state().resting,
         "a still bar at a 90° mount never passed the stillness gate"
     );
     assert!(
@@ -229,7 +229,7 @@ fn feed(
 ) {
     let s = Sample::from_f32(t_ms, [0.0, 0.0, GRAVITY + accel], [gyro_dps, 0.0, 0.0]);
     let f = fusion.update(&s);
-    let m = integration.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
+    let m = integration.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
     let v = m.velocity;
     *max_h = max_h.max((v[0] * v[0] + v[1] * v[1]).sqrt());
     let (roll, pitch) = roll_pitch_deg(f.state.attitude);
@@ -302,7 +302,7 @@ fn a_replay_from_a_state_reproduces_the_run() {
     let mut live_motion = Integration::new();
     for s in &samples[..=at] {
         let f = live.update(s);
-        live_motion.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
+        live_motion.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
     }
     let state = live.state();
     let velocity = live_motion.velocity();
@@ -314,16 +314,16 @@ fn a_replay_from_a_state_reproduces_the_run() {
     let mut replay_motion = Integration::from_velocity(velocity);
     for s in &samples[at..] {
         let a = again.update(s);
-        again_motion.step(a.t_ms, a.linear_accel, a.still, a.ready, &[]);
+        again_motion.step(a.t_ms, a.linear_accel, a.resting, a.ready, &[]);
         let r = replay.update(s);
-        let rm = replay_motion.step(r.t_ms, r.linear_accel, r.still, r.ready, &[]);
+        let rm = replay_motion.step(r.t_ms, r.linear_accel, r.resting, r.ready, &[]);
         assert_eq!(a.state, r.state, "two replays diverged at {} ms", s.t_ms);
 
         let b = live.update(s);
-        let bm = live_motion.step(b.t_ms, b.linear_accel, b.still, b.ready, &[]);
+        let bm = live_motion.step(b.t_ms, b.linear_accel, b.resting, b.ready, &[]);
         if s.t_ms > samples[at].t_ms {
             assert_eq!(r.state.attitude, b.state.attitude, "at {} ms", s.t_ms);
-            assert_eq!(r.state.settled, b.state.settled, "at {} ms", s.t_ms);
+            assert_eq!(r.state.resting, b.state.resting, "at {} ms", s.t_ms);
             assert!(
                 magnitude([
                     rm.velocity[0] - bm.velocity[0],
@@ -350,7 +350,7 @@ fn a_sample_the_sensor_cannot_have_read_does_not_move_the_bar() {
     let mut t = 0u32;
     for _ in 0..300 {
         let f = fusion.update(&rest(t, [0.0; 3], [0.0; 3], [0.0; 3]));
-        integration.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
+        integration.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
         t += DT_MS;
     }
 
@@ -361,16 +361,16 @@ fn a_sample_the_sensor_cannot_have_read_does_not_move_the_bar() {
         gyro: [0; 3],
     };
     let f = fusion.update(&spike);
-    integration.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
+    integration.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
     assert!(
         magnitude(integration.velocity()) < 0.05,
         "one unreadable sample left the bar moving at {:.2} m/s",
         magnitude(integration.velocity())
     );
     let f = fusion.update(&rest(t + DT_MS, [0.0; 3], [0.0; 3], [0.0; 3]));
-    integration.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
+    integration.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
     assert!(
-        f.still,
+        f.resting,
         "an unreadable sample broke the stillness of the window around it"
     );
 }

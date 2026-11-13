@@ -42,8 +42,9 @@ pub struct RepSeed {
 }
 
 impl RepSeed {
+    /// A level seed that has already found gravity, which is what a replay of a stored window starts from.
     pub const LEVEL: RepSeed = RepSeed {
-        filter: FusionState::LEVEL,
+        filter: FusionState::LEVEL_READY,
         velocity: [0.0; 3],
     };
 }
@@ -220,7 +221,7 @@ impl Legs {
             }
         }
 
-        if f.still
+        if f.resting
             && self.ending.is_none()
             && self
                 .prev
@@ -252,7 +253,7 @@ impl Legs {
             });
             return ended;
         }
-        if f.still {
+        if f.resting {
             return self.take();
         }
         None
@@ -282,8 +283,8 @@ impl Reps {
         }
     }
 
-    fn update(&mut self, t_ms: u32, still: bool, leg: Option<Leg>) -> Option<DetectedRep> {
-        if still {
+    fn update(&mut self, t_ms: u32, resting: bool, leg: Option<Leg>) -> Option<DetectedRep> {
+        if resting {
             let since = *self.resting_since.get_or_insert(t_ms);
             if t_ms.saturating_sub(since) >= REST_MS {
                 self.rested = true;
@@ -365,7 +366,7 @@ impl Detector {
 
     pub fn update(&mut self, f: &Filtered, m: &Integrated) -> Option<DetectedRep> {
         let leg = self.legs.update(f, m);
-        self.reps.update(f.t_ms, f.still, leg)
+        self.reps.update(f.t_ms, f.resting, leg)
     }
 }
 
@@ -520,7 +521,7 @@ pub fn compute_rep(
         integration.step(
             samples[i].t_ms,
             filtered.linear_accel,
-            filtered.still,
+            filtered.resting,
             filtered.ready,
             anchors,
         );
@@ -602,7 +603,7 @@ pub fn compute_rep(
         gyro_bias_x: from.filter.gyro_bias[0],
         gyro_bias_y: from.filter.gyro_bias[1],
         gyro_bias_z: from.filter.gyro_bias[2],
-        settled: from.filter.settled,
+        settled: from.filter.resting,
     });
     summary
 }

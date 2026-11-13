@@ -73,7 +73,7 @@ fn print_series(w: &Window) {
     println!("{}\tt_ms\ta_z\tv_z\tv_h\ta_x\ta_y\ttilt\tstill", w.uuid);
     for s in &w.samples {
         let f = fusion.update(s);
-        let m = integration.step(f.t_ms, f.linear_accel, f.still, f.ready, &[]);
+        let m = integration.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
         let v = m.velocity;
         // Where the world frame thinks gravity is, in degrees off vertical: zero if the attitude is right, and at a moment the bar is not accelerating, the attitude's own error.
         let a = f.linear_accel;
@@ -88,7 +88,7 @@ fn print_series(w: &Window) {
             a[0],
             a[1],
             tilt,
-            if f.still { 1 } else { 0 }
+            if f.resting { 1 } else { 0 }
         );
     }
 }
@@ -100,13 +100,13 @@ fn report(label: &str, r: replay::Replay) {
         .map(|s| format!("{:.2}", s.rom))
         .collect();
     println!(
-        "  {label} halves {}  spans {}  rom [{}]  peak |v| {:.2} m/s (horiz {:.2})  still {} samples",
+        "  {label} halves {}  spans {}  rom [{}]  peak |v| {:.2} m/s (horiz {:.2})  resting {} samples",
         r.halves,
         r.summaries.len(),
         roms.join(", "),
         r.peak_speed,
         r.peak_horizontal,
-        r.still
+        r.resting
     );
 }
 
