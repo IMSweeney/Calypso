@@ -2,7 +2,7 @@
 //!
 //! `captures/captures.json` says how many reps each set of a session had, written down by the person who performed them rather than read off the code under test. This runs the firmware's own filter and detector over the recording and asserts they found those sets and no others, which is the only check that says a detector change helps a real session and not just a fixture.
 //!
-//! The recordings are recorded data and live in the bucket, so these tests are `#[ignore]`d: run them with `cargo test -- --ignored` once `CAPTURES_REMOTE` names the bucket, or after pulling the captures into `captures/`.
+//! The recordings are recorded data and live in the bucket, so a run needs them pulled into `captures/` or `CAPTURES_REMOTE` naming the bucket; without either they fail rather than read nothing.
 
 use calypso_core::rep::{DetectedRep, TracePoint, Zero};
 use calypso_sim::captures::{self, Capture};
@@ -19,7 +19,6 @@ const SET_GAP_MS: u32 = 30_000;
 const CLOSED_SLACK: f32 = 0.15;
 
 #[test]
-#[ignore = "reads the captures from the bucket"]
 fn a_session_is_the_sets_it_was() {
     let described: Vec<Capture> = captures::manifest()
         .into_iter()
@@ -54,7 +53,6 @@ fn a_session_is_the_sets_it_was() {
 ///
 /// This is the property the app needs — one bar path per rep is a rep that starts and ends at the same place — and it is the one a count cannot see. A span half a stroke out of phase is still one rep per stroke, and the trace it carries is an hourglass rather than a stroke.
 #[test]
-#[ignore = "reads the captures from the bucket"]
 fn a_stored_rep_begins_and_ends_at_the_same_height() {
     let mut wrong: Vec<String> = Vec::new();
     for capture in captures::manifest()

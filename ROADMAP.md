@@ -267,7 +267,7 @@ Where Calypso is and what is left. Feature documentation lives in
       reach, the leak's time constant, and the two duration bounds — sit where a handful of
       shapes put them, not where real sessions did. The instrument exists: `captures/` holds
       whole sessions with the sets that were performed written down beside them, and
-      `cargo test -- --ignored` in `sim` reports what the detector closed against what happened.
+      `cargo test --test captures` in `sim` reports what the detector closed against what happened.
       Run on the two sessions it has, the sets land where they were performed for the most part
       and the counts are not right: the deadlift comes back a rep short in half its sets, and the
       bench's first two are the worst of it — one cut to a single rep, the next taking in the rest

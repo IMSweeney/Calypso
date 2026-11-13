@@ -50,9 +50,10 @@ tools/captures.sh pull working-sets-2026-11-10.pblog
 
 `calypso_sim::captures` reads the manifest and a capture's bytes, from `captures/` if it
 has been pulled and out of the bucket if not, so a test or an example names a capture
-and never asks where it is. Everything that reads one is `#[ignore]`d anyway: a suite
-that needs the network to answer is not one that runs on a train, so those are run on
-purpose with `cargo test -- --ignored`.
+and never asks where it is. `sim/tests/captures.rs` runs as part of `cargo test`, so it
+needs the capture pulled or `CAPTURES_REMOTE` naming the bucket: with neither it fails
+rather than passing on nothing. The two tests in `sim/tests/real_capture.rs` are
+`#[ignore]`d and run on purpose with `cargo test -- --ignored`.
 
 The manifest also carries what a session did — the reps in each set — for the captures
 where somebody wrote that down at the time. `sim/tests/captures.rs` replays such a

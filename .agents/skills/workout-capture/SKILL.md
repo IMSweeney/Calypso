@@ -130,7 +130,7 @@ repository or in a file.
 
 ```sh
 CAPTURES_REMOTE=r2/calypso-captures cargo test --release --manifest-path sim/Cargo.toml \
-  --test captures -- --ignored
+  --test captures
 ```
 
 It reads the captures from the bucket, replays them, and compares the sets it closes with the
