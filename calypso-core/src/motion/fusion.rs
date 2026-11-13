@@ -79,6 +79,8 @@ pub struct Filtered {
     pub t_ms: u32,
     /// Specific force with gravity and the sensor's offset taken out, in the world frame (m/s²).
     pub linear_accel: [f32; 3],
+    /// Bias-corrected angular rate in the sensor's own frame (rad/s).
+    pub rate: [f32; 3],
     /// Whether the bar has been at rest across the last window.
     pub resting: bool,
     /// Whether the filter has seen gravity at least once.
@@ -196,6 +198,7 @@ impl Fusion {
             return Filtered {
                 t_ms: s.t_ms,
                 linear_accel: [0.0; 3],
+                rate,
                 resting: self.state.resting,
                 ready: self.state.ready,
                 state: self.state,
@@ -254,6 +257,7 @@ impl Fusion {
         Filtered {
             t_ms: s.t_ms,
             linear_accel,
+            rate,
             resting,
             ready: self.state.ready,
             state: self.state,

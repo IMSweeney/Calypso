@@ -1,5 +1,6 @@
 //! The bar's motion: the attitude filter, the integrator, and the detector that reads a rep out of what they produce.
 
+pub mod cues;
 pub mod fusion;
 pub mod integrate;
 pub mod rep;

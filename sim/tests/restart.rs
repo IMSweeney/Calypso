@@ -13,6 +13,7 @@ fn sample(t_ms: u32, linear: [f32; 3], resting: bool) -> Filtered {
     Filtered {
         t_ms,
         linear_accel: linear,
+        rate: [0.0; 3],
         resting,
         ready: true,
         state: FusionState::LEVEL,
