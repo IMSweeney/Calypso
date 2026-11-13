@@ -68,14 +68,12 @@ pub struct RepTurns {
 
 /// A detected rep: its span, the turns it was measured between, and where its window starts.
 ///
-/// Everything the caller needs to store it, answered at the moment it closes rather than left in
-/// the detector to be read back before the next sample.
+/// Everything the caller needs to store it, answered at the moment it closes rather than left in the detector to be read back before the next sample.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DetectedRep {
     pub span: RepSpan,
     pub turns: RepTurns,
-    /// Where the stored window starts, which is the turn the rep opened at: the samples before it are
-    /// what the filter had to settle on, and the window's own margin is at its end.
+    /// Where the stored window starts, which is the turn the rep opened at: the samples before it are what the filter had to settle on, and the window's own margin is at its end.
     pub from_ms: u32,
     /// The filter state where that window starts, which is what the replay is seeded with.
     pub state: FusionState,
@@ -187,30 +185,15 @@ struct Leg {
     state: FusionState,
 }
 
-/// The bar's speed, integrated from its vertical acceleration and pulled back toward zero with a
-/// [`SPEED_TAU_S`] time constant, and the strokes the bar makes with it.
+/// The bar's speed, integrated from its vertical acceleration and pulled back toward zero with a [`SPEED_TAU_S`] time constant, and the strokes the bar makes with it.
 ///
-/// **The leak is the design.** An integral cannot know its own error, so an unfiltered one walks away
-/// as soon as the acceleration carries a bias, and a working set is twenty seconds with no rest in it
-/// long enough to correct that: a couple of degrees of tilt is `g·sin θ` for the whole set, and the
-/// drift it leaves is larger than the stroke being measured. Pulling the integral toward zero makes
-/// the speed a measurement of *now*, so a bar that is not moving has no speed — continuously, without
-/// a rest having to be judged and without waiting for one.
+/// **The leak is the design.** An integral cannot know its own error, so an unfiltered one walks away as soon as the acceleration carries a bias, and a working set is twenty seconds with no rest in it long enough to correct that: a couple of degrees of tilt is `g·sin θ` for the whole set, and the drift it leaves is larger than the stroke being measured. Pulling the integral toward zero makes the speed a measurement of *now*, so a bar that is not moving has no speed — continuously, without a rest having to be judged and without waiting for one.
 ///
-/// A **leg** is one stroke, from the turn the bar left to the turn it arrived at. A turn is the
-/// quietest moment in the stretch the bar is in — the speed's own minimum, which no threshold has to
-/// announce — so a leg is named by the measurement rather than by a check on it. Nothing here says
-/// whether a leg is half a rep: that is the next stage's question, and it is asked the same way of
-/// every stroke the bar makes.
+/// A **leg** is one stroke, from the turn the bar left to the turn it arrived at. A turn is the quietest moment in the stretch the bar is in — the speed's own minimum, which no threshold has to announce — so a leg is named by the measurement rather than by a check on it. Nothing here says whether a leg is half a rep: that is the next stage's question, and it is asked the same way of every stroke the bar makes.
 ///
-/// The bars are asked to know when a stroke *ended*, which is a turn: a crossing is only the middle of
-/// one. So the crossing opens a wait, the bar's own speed is watched to its quietest moment, and the
-/// leg is taken when the bar comes to rest on it — or when the next stroke starts, whichever is first.
+/// The bars are asked to know when a stroke *ended*, which is a turn: a crossing is only the middle of one. So the crossing opens a wait, the bar's own speed is watched to its quietest moment, and the leg is taken when the bar comes to rest on it — or when the next stroke starts, whichever is first.
 ///
-/// What it cannot see. A stroke whose peak speed stays under [`SWING_MPS`] is not a leg to it, which is
-/// the price of asking the question once. And two strokes in the same direction with a pause between
-/// them are *one* leg, because the speed never changes side for the turn to be a turn — which is what
-/// an unrack followed by a drive looks like.
+/// What it cannot see. A stroke whose peak speed stays under [`SWING_MPS`] is not a leg to it, which is the price of asking the question once. And two strokes in the same direction with a pause between them are *one* leg, because the speed never changes side for the turn to be a turn — which is what an unrack followed by a drive looks like.
 struct Legs {
     /// The bar's speed on all three axes: the vertical is the one that decides, and the log reads the whole.
     v: [f32; 3],
@@ -250,9 +233,7 @@ impl Legs {
 
     /// Take the stroke the open crossing ended, answering with the leg it made.
     ///
-    /// The turn it ended on is the quietest moment in the wait, which is the instant the replay will
-    /// put its own integral back to zero — the same question asked of the same velocity, so the two
-    /// agree about where the bar stopped instead of each inventing an answer.
+    /// The turn it ended on is the quietest moment in the wait, which is the instant the replay will put its own integral back to zero — the same question asked of the same velocity, so the two agree about where the bar stopped instead of each inventing an answer.
     fn take(&mut self) -> Option<Leg> {
         let ending = self.ending.take()?;
         let ended = Turn {
@@ -343,12 +324,7 @@ struct Ending {
 
 /// Which legs are the two halves of a rep.
 ///
-/// A rep is one leg and the leg that follows it: out, turn, and back. Which *pair* of legs is a rep is
-/// the only real question, and it is a question about where the set started rather than about the
-/// motion — both pairings are the same shape and give the same count, half a stroke apart. A set says
-/// it the one way it can: the bar is parked at one end before the first rep, so the first stroke after
-/// a rest begins a rep and the pairing follows from there. Anything carried across a set instead — a
-/// parity that every stroke votes on — is a pairing a stray stroke flips for the rest of the session.
+/// A rep is one leg and the leg that follows it: out, turn, and back. Which *pair* of legs is a rep is the only real question, and it is a question about where the set started rather than about the motion — both pairings are the same shape and give the same count, half a stroke apart. A set says it the one way it can: the bar is parked at one end before the first rep, so the first stroke after a rest begins a rep and the pairing follows from there. Anything carried across a set instead — a parity that every stroke votes on — is a pairing a stray stroke flips for the rest of the session.
 struct Reps {
     /// The leg waiting for its partner.
     pending: Option<Leg>,
@@ -425,12 +401,9 @@ fn join(first: Leg, second: Leg) -> Option<DetectedRep> {
 
 /// The detector: the bar's strokes, and which of them are the halves of a rep.
 ///
-/// Two stages, and the split is where the thresholds belong. The first measures a speed and cuts it at
-/// its turns, which needs no opinion: every stroke the bar makes is a leg. The second decides what a
-/// leg means — how long a rep takes, whether the bar came back, and where the next one begins.
+/// Two stages, and the split is where the thresholds belong. The first measures a speed and cuts it at its turns, which needs no opinion: every stroke the bar makes is a leg. The second decides what a leg means — how long a rep takes, whether the bar came back, and where the next one begins.
 ///
-/// Both run on the sample as it arrives, so a rep is decided a fraction of a stroke after it ended and
-/// not a session later: the whole of the pending state is the one leg waiting for its partner.
+/// Both run on the sample as it arrives, so a rep is decided a fraction of a stroke after it ended and not a session later: the whole of the pending state is the one leg waiting for its partner.
 pub struct Detector {
     legs: Legs,
     reps: Reps,

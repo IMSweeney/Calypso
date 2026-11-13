@@ -1,13 +1,9 @@
-//! Replay a phone's recording of the live stream through the filter and the detector, and print the
-//! reps it finds.
+//! Replay a phone's recording of the live stream through the filter and the detector, and print the reps it finds.
 //!
-//! A `.pblog` the app writes while it records holds samples and nothing else, so `calypso_sim::stream`
-//! puts them back through the firmware's own `Fusion` and `Detector`, and this prints what came out.
-//! It is the instrument for one session; what a session is *supposed* to look like lives in
-//! `captures/captures.json` and is checked by `tests/captures.rs`.
+//! A `.pblog` the app writes while it records holds samples and nothing else, so `calypso_sim::stream` puts them back through the firmware's own `Fusion` and `Detector`, and this prints what came out.
+//! It is the instrument for one session; what a session is *supposed* to look like lives in `captures/captures.json` and is checked by `tests/captures.rs`.
 //!
-//! Usage: `cargo run --release --example replay_stream -- <capture.pblog> [--series]`, where the
-//! capture is a name in `captures/` or one the bucket holds.
+//! Usage: `cargo run --release --example replay_stream -- <capture.pblog> [--series]`, where the capture is a name in `captures/` or one the bucket holds.
 
 use std::env;
 
@@ -90,9 +86,7 @@ fn main() {
 
 /// Where the stream has a gap in it, which is the sampler stalling rather than anything the filter did.
 ///
-/// A hole matters here for the same reason it matters on the device: the detector's windows are cut
-/// from the ring by time, so a stall is missing samples inside a rep, and a rep that reads short is
-/// the stall's doing before it is the detector's.
+/// A hole matters here for the same reason it matters on the device: the detector's windows are cut from the ring by time, so a stall is missing samples inside a rep, and a rep that reads short is the stall's doing before it is the detector's.
 fn holes(samples: &[Sample], t0: u32) {
     let expected = 1000 / SAMPLE_RATE_HZ;
     let mut found: Vec<(u32, u32)> = samples

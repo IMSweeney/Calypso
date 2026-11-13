@@ -285,12 +285,12 @@ impl Fusion {
 
         // Before gravity's direction is known there is no frame to integrate in. After it, the velocity is the integral, and a bar at rest is where that integral is put back to zero.
         if dt > 0.0 && self.ready {
-            for k in 0..3 {
-                self.state.velocity[k] += linear_accel[k] * dt;
+            for (v, a) in self.state.velocity.iter_mut().zip(linear_accel) {
+                *v += a * dt;
             }
             if still {
-                for k in 0..3 {
-                    self.state.velocity[k] += (0.0 - self.state.velocity[k]) * (dt / V_TAU_S);
+                for v in self.state.velocity.iter_mut() {
+                    *v -= *v * (dt / V_TAU_S);
                 }
             }
         }

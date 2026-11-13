@@ -2,11 +2,7 @@
 //!
 //! This is the one place a stored window is judged, and it is here because a synthetic stream cannot make the motion that broke the old turn rule. A stroke is measured through an attitude the filter can only correct while the bar is still, so a set with almost no rest carries a tilt that the integrated velocity turns into metres per second — and a turn read off a speed that never comes back to zero is a turn that never happens. On this capture it stored nothing at all from four reps, each time.
 //!
-//! The windows are `captures/sets-2026-11-04.pblog`: three still ones and these two. A capture is
-//! recorded data, so the bytes are in the bucket and this reads them through `calypso_sim::captures`
-//! — from `captures/` if it has been pulled, and from `CAPTURES_REMOTE` if not. Both tests are
-//! `#[ignore]`d for that reason: a suite that needs the network to answer is not one you can run on a
-//! train, so they are run on purpose with `cargo test -- --ignored`.
+//! The windows are `captures/sets-2026-11-04.pblog`: three still ones and these two. A capture is recorded data, so the bytes are in the bucket and this reads them through `calypso_sim::captures` — from `captures/` if it has been pulled, and from `CAPTURES_REMOTE` if not. Both tests are `#[ignore]`d for that reason: a suite that needs the network to answer is not one you can run on a train, so they are run on purpose with `cargo test -- --ignored`.
 
 use calypso_core::fusion::{Fusion, FusionState};
 use calypso_core::pb::msg;

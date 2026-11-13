@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# A capture is recorded data rather than source: the bytes live in a bucket and the repository keeps
-# what describes them. This moves them, and nothing about it belongs to the repository — the store is
-# whoever's account holds it, so it arrives as CAPTURES_REMOTE, an `mc` alias and bucket:
+# A capture is recorded data rather than source: the bytes live in a bucket and the repository keeps what describes them. This moves them, and nothing about it belongs to the repository — the store is whoever's account holds it, so it arrives as CAPTURES_REMOTE, an `mc` alias and bucket:
 #
 #   export CAPTURES_REMOTE=r2/calypso-captures
 #

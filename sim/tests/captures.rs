@@ -1,13 +1,8 @@
 //! What a session did, against what the detector makes of it.
 //!
-//! `captures/captures.json` says how many reps each set of a session had, written down by the person
-//! who performed them rather than read off the code under test. This runs the firmware's own filter
-//! and detector over the recording and asserts they found those sets and no others, which is the only
-//! check that says a detector change helps a real session and not just a fixture.
+//! `captures/captures.json` says how many reps each set of a session had, written down by the person who performed them rather than read off the code under test. This runs the firmware's own filter and detector over the recording and asserts they found those sets and no others, which is the only check that says a detector change helps a real session and not just a fixture.
 //!
-//! The recordings are recorded data and live in the bucket, so these tests are `#[ignore]`d: run them
-//! with `cargo test -- --ignored` once `CAPTURES_REMOTE` names the bucket, or after pulling the
-//! captures into `captures/`.
+//! The recordings are recorded data and live in the bucket, so these tests are `#[ignore]`d: run them with `cargo test -- --ignored` once `CAPTURES_REMOTE` names the bucket, or after pulling the captures into `captures/`.
 
 use calypso_core::rep::{DetectedRep, TracePoint, Zero};
 use calypso_sim::captures::{self, Capture};
@@ -15,16 +10,12 @@ use calypso_sim::stream;
 
 /// The gap that separates one set from the next.
 ///
-/// The rest between sets is minutes; the longest gap between two reps of one set is the pause at the
-/// top of a stroke, which is a couple of seconds.
+/// The rest between sets is minutes; the longest gap between two reps of one set is the pause at the top of a stroke, which is a couple of seconds.
 const SET_GAP_MS: u32 = 30_000;
 
 /// How far a stored rep's bar path may end from where it began, as a fraction of the travel it made.
 ///
-/// A rep is out and back, so its path closes at the turn it ends on. What is left over is the turn
-/// itself — a sample or two either side of the bar really stopping — and the velocity the window was
-/// seeded with, which is the device's rather than the true one. Half a stroke out of phase is nothing
-/// like that small.
+/// A rep is out and back, so its path closes at the turn it ends on. What is left over is the turn itself — a sample or two either side of the bar really stopping — and the velocity the window was seeded with, which is the device's rather than the true one. Half a stroke out of phase is nothing like that small.
 const CLOSED_SLACK: f32 = 0.15;
 
 #[test]
@@ -59,12 +50,9 @@ fn a_session_is_the_sets_it_was() {
     assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
 }
 
-/// Every stored rep's bar path closes: it begins at a turn, and comes back to the same height, with the
-/// turn between its halves as far from both as the rep's own travel.
+/// Every stored rep's bar path closes: it begins at a turn, and comes back to the same height, with the turn between its halves as far from both as the rep's own travel.
 ///
-/// This is the property the app needs — one bar path per rep is a rep that starts and ends at the same
-/// place — and it is the one a count cannot see. A span half a stroke out of phase is still one rep per
-/// stroke, and the trace it carries is an hourglass rather than a stroke.
+/// This is the property the app needs — one bar path per rep is a rep that starts and ends at the same place — and it is the one a count cannot see. A span half a stroke out of phase is still one rep per stroke, and the trace it carries is an hourglass rather than a stroke.
 #[test]
 #[ignore = "reads the captures from the bucket"]
 fn a_stored_rep_begins_and_ends_at_the_same_height() {
@@ -94,8 +82,7 @@ fn a_stored_rep_begins_and_ends_at_the_same_height() {
 
 /// The height a rep's trace begins at, is at the turn between its halves, and ends at.
 ///
-/// The end is read at the rep's own last turn rather than at the window's last sample, because the
-/// window plots a margin past the rep and what the bar did in it is not what is being measured.
+/// The end is read at the rep's own last turn rather than at the window's last sample, because the window plots a margin past the rep and what the bar did in it is not what is being measured.
 fn shape(rep: &DetectedRep, trace: &[TracePoint]) -> Option<(f32, f32, f32)> {
     let middle = rep.turns.zeros[1].map_or(rep.span.end_ms, |zero| match zero {
         Zero::Rest(t_ms) | Zero::Turn(t_ms) => t_ms,

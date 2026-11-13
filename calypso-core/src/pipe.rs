@@ -460,9 +460,4 @@ impl<'a> Session<'a> {
             next: 0,
         });
     }
-
-    /// Stop streaming a trace, whatever is left of it.
-    pub fn stop_trace(&mut self) {
-        self.trace = None;
-    }
 }

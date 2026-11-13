@@ -99,26 +99,6 @@ pub fn config_message(c: &RepConfig) -> msg::RepConfig {
     }
 }
 
-/// The filter state a stored window begins from, in its wire form.
-pub fn state_message(state: &FusionState) -> msg::RepState {
-    msg::RepState {
-        vx: state.velocity[0],
-        vy: state.velocity[1],
-        vz: state.velocity[2],
-        qw: state.attitude[0],
-        qx: state.attitude[1],
-        qy: state.attitude[2],
-        qz: state.attitude[3],
-        accel_bias_x: state.accel_bias[0],
-        accel_bias_y: state.accel_bias[1],
-        accel_bias_z: state.accel_bias[2],
-        gyro_bias_x: state.gyro_bias[0],
-        gyro_bias_y: state.gyro_bias[1],
-        gyro_bias_z: state.gyro_bias[2],
-        settled: state.settled,
-    }
-}
-
 /// Back-convert a wire state, which is what a stored rep is replayed from.
 pub fn state_from_message(s: &msg::RepState) -> FusionState {
     FusionState {
@@ -131,7 +111,7 @@ pub fn state_from_message(s: &msg::RepState) -> FusionState {
 }
 
 /// One point of the plotted trace, with the time relative to `t0_ms` (the rep's first sample).
-pub fn computed_point_message(p: &TracePoint, t0_ms: u32) -> msg::TraceComputedPoint {
+fn computed_point_message(p: &TracePoint, t0_ms: u32) -> msg::TraceComputedPoint {
     msg::TraceComputedPoint {
         t_offset_ms: p.t_ms.saturating_sub(t0_ms),
         px: p.pos[0],
@@ -145,7 +125,7 @@ pub fn computed_point_message(p: &TracePoint, t0_ms: u32) -> msg::TraceComputedP
 }
 
 /// One sample of the raw trace, with the time relative to `t0_ms` (the rep's first sample).
-pub fn raw_point_message(s: &Sample, t0_ms: u32) -> msg::TraceRawPoint {
+fn raw_point_message(s: &Sample, t0_ms: u32) -> msg::TraceRawPoint {
     msg::TraceRawPoint {
         t_offset_ms: s.t_ms.saturating_sub(t0_ms),
         ax: s.accel[0] as i32,
@@ -305,14 +285,6 @@ pub fn encode_clock(epoch_s: u32, out: &mut [u8]) -> Result<usize, Error> {
         msg::RepRecord_::Body::Clock(msg::BootClock { epoch_s }),
         out,
     )
-}
-
-/// The clock a record carries, if it is one.
-pub fn record_clock(rec: &msg::RepRecord) -> Option<&msg::BootClock> {
-    match &rec.body {
-        Some(msg::RepRecord_::Body::Clock(clock)) => Some(clock),
-        _ => None,
-    }
 }
 
 /// Encode a sync message (device -> app).

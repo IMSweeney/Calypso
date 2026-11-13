@@ -1,20 +1,16 @@
 //! The captures: recorded data that lives in an object store rather than in the repository.
 //!
-//! A recording is far too big to be source, and it never changes, so the bytes belong in a bucket and
-//! what belongs here is the description of them — [`manifest`], read out of `captures/captures.json`.
-//! Nothing in this module names a bucket: the store is whoever's account is holding it, so an `mc`
-//! alias and bucket arrive as `CAPTURES_REMOTE` when a capture is not already on disk.
+//! A recording is far too big to be source, and it never changes, so the bytes belong in a bucket and what belongs here is the description of them — [`manifest`], read out of `captures/captures.json`.
+//! Nothing in this module names a bucket: the store is whoever's account is holding it, so an `mc` alias and bucket arrive as `CAPTURES_REMOTE` when a capture is not already on disk.
 //!
-//! Both readers here start from `captures/` beside the crate, which is where `tools/captures.sh`
-//! puts what it pulls.
+//! Both readers here start from `captures/` beside the crate, which is where `tools/captures.sh` puts what it pulls.
 
 use std::path::PathBuf;
 use std::process::Command;
 
 use serde::Deserialize;
 
-/// Where the manifest and any pulled capture are, from a test or an example: both run with the crate
-/// root as their working directory.
+/// Where the manifest and any pulled capture are, from a test or an example: both run with the crate root as their working directory.
 const DIR: &str = "../captures";
 
 /// One capture as the manifest describes it.
@@ -24,8 +20,7 @@ pub struct Capture {
     pub name: String,
     /// The day it was recorded, `YYYY-MM-DD`.
     pub recorded: String,
-    /// What produced the bytes: `live-stream` for the app's record button, `device-log` for a
-    /// `record-mode` build's flash, `device-archive` for a phone's own history.
+    /// What produced the bytes: `live-stream` for the app's record button, `device-log` for a `record-mode` build's flash, `device-archive` for a phone's own history.
     pub kind: String,
     /// What was lifted, where the file is a workout.
     #[serde(default)]
@@ -37,8 +32,7 @@ pub struct Capture {
     pub about: String,
     /// What the detector should make of it: the reps per set, in the order they were performed.
     ///
-    /// The value is the session's own — written down by the person who did the work — and not what
-    /// the code under test currently answers, which is the whole reason it is here.
+    /// The value is the session's own — written down by the person who did the work — and not what the code under test currently answers, which is the whole reason it is here.
     #[serde(default)]
     pub expected: Option<Expected>,
 }
@@ -74,8 +68,7 @@ pub fn manifest() -> Vec<Capture> {
 
 /// The bytes of one capture, from `captures/` if it has been pulled and out of the bucket if not.
 ///
-/// A missing bucket name or a failed transfer is a panic rather than an empty document: a test that
-/// read no records would pass without having read anything.
+/// A missing bucket name or a failed transfer is a panic rather than an empty document: a test that read no records would pass without having read anything.
 pub fn bytes(name: &str) -> Vec<u8> {
     let local = local_path(name);
     if local.exists() {

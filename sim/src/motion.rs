@@ -12,8 +12,7 @@ use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, GYRO_SCALE};
 
 use crate::fixtures::{at, detect_and_trace, LEAD_IN_MS, SAMPLE_DT_MS};
 
-/// Rest appended after a motion, because a recording does not end where the bar does: the last stroke
-/// needs its quiet to be read as a turn, and the device is still sampling while the bar is put down.
+/// Rest appended after a motion, because a recording does not end where the bar does: the last stroke needs its quiet to be read as a turn, and the device is still sampling while the bar is put down.
 const LEAD_OUT_MS: u32 = 1000;
 
 /// The trace capacity a scenario replays through, which is the plotted budget a device stores.

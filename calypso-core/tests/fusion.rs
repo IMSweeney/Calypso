@@ -68,15 +68,10 @@ fn a_still_sensor_reads_nothing_at_any_attitude() {
 
 /// A still sensor at a 90° mount whose up axis reads 9.5 g, not 9.81 g, still finds its frame.
 ///
-/// A chip read raw carries per-axis offsets of a few hundred mg, so `still`'s ±0.12 g magnitude
-/// check fails on a sensor whose up axis is short by 0.3 m/s². The frame must still converge on
-/// gravity's *direction*, which an offset does not corrupt: a still 90° mount left wrong by this
-/// double-integrates metres of travel. The filter starts already wrong, as a replay of a window
-/// whose stored attitude is, so it has to pull onto the direction rather than be handed it.
+/// A chip read raw carries per-axis offsets of a few hundred mg, so `still`'s ±0.12 g magnitude check fails on a sensor whose up axis is short by 0.3 m/s². The frame must still converge on gravity's *direction*, which an offset does not corrupt: a still 90° mount left wrong by this double-integrates metres of travel. The filter starts already wrong, as a replay of a window whose stored attitude is, so it has to pull onto the direction rather than be handed it.
 #[test]
 fn a_ninety_degree_mount_with_a_magnitude_offset_recovers_its_frame() {
-    // Gravity along the sensor's Y axis, and a 0.3 m/s² shortfall on that same axis: the reading
-    // the capture's broken window held, |f| ≈ 9.5 g.
+    // Gravity along the sensor's Y axis, and a 0.3 m/s² shortfall on that same axis: the reading the capture's broken window held, |f| ≈ 9.5 g.
     let mount = [core::f32::consts::FRAC_PI_2, 0.0, 0.0];
     let up = rotate_by_quat(quat_from_rotvec(mount), [0.0, 0.0, 1.0]);
     let offset = up.map(|c| c * -0.3);

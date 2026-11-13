@@ -1,15 +1,8 @@
-//! What the detector makes of a recorded stream, which is the only way to ask what it made of a real
-//! session.
+//! What the detector makes of a recorded stream, which is the only way to ask what it made of a real session.
 //!
-//! A phone's recording holds samples and nothing else: the device was streaming for the whole session
-//! and stored no window, no summary and no state. So the samples go back through the same `Fusion` and
-//! `Detector` the firmware runs, from the state a device that has just powered on starts in, and what
-//! comes out is what the device would have stored had it been detecting.
+//! A phone's recording holds samples and nothing else: the device was streaming for the whole session and stored no window, no summary and no state. So the samples go back through the same `Fusion` and `Detector` the firmware runs, from the state a device that has just powered on starts in, and what comes out is what the device would have stored had it been detecting.
 //!
-//! One thing a replay cannot recover is the stream's own beginning. A recording starts wherever the
-//! record button was pressed, so the filter spends its first `READY_S` of quiet earning a gate the
-//! device had already earned before the recording began — a rep inside that stretch is unmeasurable
-//! here and was measurable on the device.
+//! One thing a replay cannot recover is the stream's own beginning. A recording starts wherever the record button was pressed, so the filter spends its first `READY_S` of quiet earning a gate the device had already earned before the recording began — a rep inside that stretch is unmeasurable here and was measurable on the device.
 
 use calypso_core::fusion::{magnitude, Filtered, Fusion};
 use calypso_core::pb::{decode_record, raw_point_from_message, Record};
@@ -37,8 +30,7 @@ pub struct Replay {
     pub still: usize,
     /// The largest speed the filter reached, and the largest of it that was horizontal.
     ///
-    /// Splitting the two is what tells a bar that moved from a gravity that leaked: a tilt puts speed
-    /// into the horizontal plane, where nothing a rep does ought to put metres per second.
+    /// Splitting the two is what tells a bar that moved from a gravity that leaked: a tilt puts speed into the horizontal plane, where nothing a rep does ought to put metres per second.
     pub peak_speed: f32,
     pub peak_horizontal: f32,
     pub halves: u32,
@@ -46,8 +38,7 @@ pub struct Replay {
 
 /// The samples one recording holds, on the device's own clock.
 ///
-/// A point's time is an offset from its chunk's `first_t_ms`, which is the uptime of the chunk's first
-/// sample: adding it back is what puts the whole session on the clock the detector steps in.
+/// A point's time is an offset from its chunk's `first_t_ms`, which is the uptime of the chunk's first sample: adding it back is what puts the whole session on the clock the detector steps in.
 pub fn samples(pblog: &[u8]) -> Vec<Sample> {
     let (records, truncated) = read_dump(pblog);
     assert!(!truncated, "the recording is torn at the end");
@@ -71,9 +62,7 @@ pub fn samples(pblog: &[u8]) -> Vec<Sample> {
 
 /// Feed the whole stream through one filter and one detector, and close the reps it finds.
 ///
-/// `each` sees every sample, where the filter stood after it, and the speed the detector counted on it,
-/// which is what a report on the signals the detections are made of is; a caller that only wants the
-/// reps passes a no-op.
+/// `each` sees every sample, where the filter stood after it, and the speed the detector counted on it, which is what a report on the signals the detections are made of is; a caller that only wants the reps passes a no-op.
 pub fn replay(samples: &[Sample], each: &mut dyn FnMut(&Sample, &Filtered, f32)) -> Replay {
     let mut ring_buf = vec![Sample::ZERO; RING];
     let mut ring = SampleRing::new(&mut ring_buf);
