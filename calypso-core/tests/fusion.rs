@@ -2,7 +2,7 @@
 //!
 //! Everything here is a stream fed straight to [`Fusion`], so a failure names the filter rather than the detector or the trace. What the *pipeline* stores is `calypso-sim`'s.
 
-use calypso_core::fusion::{
+use calypso_core::motion::fusion::{
     conjugate, magnitude, quat_from_rotvec, roll_pitch_deg, rotate_by_quat, Fusion, FusionState,
     GRAVITY,
 };

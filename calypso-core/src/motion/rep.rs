@@ -1,6 +1,6 @@
 //! Rep detection and per-rep trace computation.
 
-use crate::fusion::{magnitude, roll_pitch_deg, Filtered, Fusion, FusionState};
+use crate::motion::fusion::{magnitude, roll_pitch_deg, Filtered, Fusion, FusionState};
 use crate::pb::msg;
 use crate::sampler::{quantize, Sample, QUAT_SCALE};
 

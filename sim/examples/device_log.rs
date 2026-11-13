@@ -11,10 +11,10 @@ use std::env;
 use std::fs;
 
 use calypso_core::flashlog::FlashLog;
-use calypso_core::fusion::{magnitude, roll_pitch_deg};
+use calypso_core::motion::fusion::{magnitude, roll_pitch_deg};
+use calypso_core::motion::rep::{TraceBuf, TracePoint};
 use calypso_core::pb::msg;
 use calypso_core::pb::summary_uuid;
-use calypso_core::rep::{TraceBuf, TracePoint};
 use calypso_core::sampler::QUAT_SCALE;
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::uuid::RepUuid;

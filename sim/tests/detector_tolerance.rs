@@ -2,7 +2,7 @@
 //!
 //! These are the complements to the sweep examples (the maps). The maps are broad and read by eye;
 //! these are the one-sentence invariants that must not regress. Nothing here is a captured rep: a stored window has no rest at either end, so a detector cannot be judged on one.
-//! `real_capture.rs` is where real motion is pinned.
+//! `captures.rs` is where real motion is pinned.
 
 use calypso_sim::motion::{stored, Motion, Push, Rep, Rng, Stall};
 
@@ -32,7 +32,7 @@ fn each_nominal_is_exactly_one_stored_rep() {
     }
 }
 
-/// The generated non-reps — a one-way push and an oscillation — stay rejected. The push is under [`calypso_core::rep::MIN_ROM_M`] outright; the oscillation never even closes a span.
+/// The generated non-reps — a one-way push and an oscillation — stay rejected. The push is under [`calypso_core::motion::rep::MIN_ROM_M`] outright; the oscillation never even closes a span.
 /// The harder cases — a full-height push (which pairs no leg, so its travel is never measured) or an oscillation big enough to matter — are what the false-positive map sweeps, not these two points.
 #[test]
 fn generated_non_reps_stay_rejected() {

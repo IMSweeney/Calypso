@@ -8,5 +8,6 @@ pub mod false_positive;
 pub mod fixtures;
 pub mod map;
 pub mod motion;
+pub mod replay;
 pub mod stats;
 pub mod stream;

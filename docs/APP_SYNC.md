@@ -302,7 +302,8 @@ turned off when the link goes away because the device's stream ends with it.
   it, and a session that captured nothing is deleted rather than left behind.
 - **A record-mode build still stores raw windows in the log.** That is a build flag,
   not the client switch, and it is what a capture for the fixture set comes from.
-- **What the samples are is [`RAW_IMU.md`](RAW_IMU.md)'s subject.**
+- **What the samples are is the sensor's own readings**: raw accelerometer and
+  gyroscope, not the chip's fused output, as `proto/calypso.proto` declares them.
 
 ## The archive
 

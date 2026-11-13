@@ -76,7 +76,7 @@ fn a_uuid_survives_both_record_kinds() {
     };
     assert_eq!(pb::summary_uuid(&summary), Some(uuid));
 
-    let points = [calypso_core::rep::TracePoint::ZERO];
+    let points = [calypso_core::motion::rep::TracePoint::ZERO];
     let chunk = pb::computed_chunk_message(uuid, 0, 0, 1, &points);
     assert_eq!(pb::computed_uuid(&chunk), Some(uuid));
 

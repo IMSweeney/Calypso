@@ -27,7 +27,7 @@ fn trace_request_of(bytes: &[u8]) -> Option<msg::TraceRequest> {
 
 #[test]
 fn worst_case_chunk_fits_a_transfer() {
-    use calypso_core::rep::TracePoint;
+    use calypso_core::motion::rep::TracePoint;
 
     let worst = TracePoint {
         t_ms: u32::MAX,

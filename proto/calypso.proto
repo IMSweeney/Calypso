@@ -89,7 +89,7 @@ message RepConfig {
   uint32 accel_bandwidth_hz = 3;  // the accelerometer's configured bandwidth
   uint32 gyro_bandwidth_hz = 4;
   uint32 sample_rate_hz = 5;
-  // Which detection logic closed this rep (`DETECTOR_VERSION` in `calypso_core::rep`).
+  // Which detection logic closed this rep (`DETECTOR_VERSION` in `calypso_core::motion::rep`).
   // A summary recomputed by newer logic is a different summary, and this is what says so rather than leaving two numbers to be compared as if they were one.
   uint32 detector_version = 6;
 }

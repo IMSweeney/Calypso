@@ -1,15 +1,15 @@
 //! Replay a phone's recording of the live stream through the filter and the detector, and print the reps it finds.
 //!
-//! A `.pblog` the app writes while it records holds samples and nothing else, so `calypso_sim::stream` puts them back through the firmware's own `Fusion` and `Detector`, and this prints what came out.
+//! A `.pblog` the app writes while it records holds samples and nothing else, so `calypso_sim::replay` puts them back through the firmware's own `Fusion` and `Detector`, and this prints what came out.
 //! It is the instrument for one session; what a session is *supposed* to look like lives in `captures/captures.json` and is checked by `tests/captures.rs`.
 //!
 //! Usage: `cargo run --release --example replay_stream -- <capture.pblog> [--series]`, where the capture is a name in `captures/` or one the bucket holds.
 
 use std::env;
 
-use calypso_core::fusion::{Filtered, GRAVITY};
+use calypso_core::motion::fusion::{Filtered, Fusion, GRAVITY};
 use calypso_core::sampler::{Sample, SAMPLE_RATE_HZ};
-use calypso_sim::{captures, stream};
+use calypso_sim::{captures, replay, stream};
 use libm::atan2f;
 
 fn main() {
@@ -55,16 +55,16 @@ fn main() {
             counted
         );
     };
-    let out = stream::replay(&samples, &mut each);
+    let out = replay::run(&samples, Fusion::new(), replay::TRACE_CAPACITY, &mut each);
 
-    for (i, (rep, rom)) in out.reps.iter().zip(&out.roms).enumerate() {
+    for (i, (rep, summary)) in out.reps.iter().zip(&out.summaries).enumerate() {
         println!(
             "  rep {:>2}  {:.2} s .. {:.2} s  ({} ms)  rom {:.2} m",
             i + 1,
             rep.span.start_ms.saturating_sub(t0) as f32 / 1000.0,
             rep.span.end_ms.saturating_sub(t0) as f32 / 1000.0,
             rep.span.duration_ms(),
-            rom
+            summary.rom
         );
     }
 

@@ -1,16 +1,25 @@
-use calypso_core::fusion::FusionState;
+use calypso_core::motion::fusion::FusionState;
+use calypso_core::motion::rep::{compute_rep, TraceBuf, TracePoint, TRACE_POINTS};
 use calypso_core::pb::{self, msg, Record};
-use calypso_core::rep::{compute_rep, TraceBuf, TracePoint, TRACE_POINTS};
 use calypso_core::store::RECORD_BUF_BYTES;
 use calypso_core::uuid::fixture_uuid;
-use calypso_sim::fixtures::{self, push_record, push_rep, read_dump, squat_dump, squat_set};
+use calypso_sim::fixtures::{self, push_record, push_rep, read_dump, set_dump};
+use calypso_sim::motion::{Rep, Set};
+
+/// The set the squat fixtures are made of: 0.4 m of travel per rep, 1.5 s each, 0.8 s of rest between.
+fn squat_set(reps: u32) -> Set {
+    Set {
+        rep: Rep::cosine(0.4, 1500),
+        reps,
+        inter_rep_rest_ms: 800,
+        unrack: None,
+        rerack: None,
+    }
+}
 
 #[test]
-fn squat_set_is_detected_and_traced() {
-    let (samples, spans) = squat_set(3, 1500, 800, 0.4);
-    assert_eq!(spans.len(), 3);
-
-    let reps = fixtures::detect_and_trace(&samples, 512);
+fn a_squat_set_is_detected_and_traced() {
+    let reps = fixtures::detect_and_trace(&squat_set(3).samples(), 512);
     assert_eq!(reps.len(), 3, "the detector should find three reps");
     for (summary, trace) in &reps {
         assert!(!trace.is_empty());
@@ -30,7 +39,7 @@ fn squat_set_is_detected_and_traced() {
 
 #[test]
 fn dump_round_trips_every_record() {
-    let dump = squat_dump(2, 0.4);
+    let dump = set_dump(&squat_set(2), 512);
     let (records, truncated) = read_dump(&dump);
     assert!(!truncated);
 
@@ -77,7 +86,7 @@ fn dump_round_trips_every_record() {
 
 #[test]
 fn truncation_is_reported_not_ignored() {
-    let dump = squat_dump(1, 0.4);
+    let dump = set_dump(&squat_set(1), 512);
     let (full_records, truncated) = read_dump(&dump);
     assert!(!truncated);
     assert!(full_records.len() > 1);
@@ -122,7 +131,7 @@ fn empty_and_single_point_dumps_are_valid() {
 
 #[test]
 fn decimation_keeps_the_last_point() {
-    let (samples, _) = squat_set(1, 10_000, 1_000, 1.2);
+    let samples = Rep::cosine(1.2, 10_000).samples();
     let lead_in = fixtures::LEAD_IN_MS as usize / fixtures::SAMPLE_DT_MS as usize;
     // Half a second either side, so the filter sees the bar at rest at both ends.
     let window = &samples[lead_in - 50..lead_in + 1_000 + 50];

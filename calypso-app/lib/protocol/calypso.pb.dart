@@ -674,7 +674,7 @@ class RepConfig extends $pb.GeneratedMessage {
   @$pb.TagNumber(5)
   void clearSampleRateHz() => $_clearField(5);
 
-  /// Which detection logic closed this rep (`DETECTOR_VERSION` in `calypso_core::rep`).
+  /// Which detection logic closed this rep (`DETECTOR_VERSION` in `calypso_core::motion::rep`).
   /// A summary recomputed by newer logic is a different summary, and this is what says so rather than leaving two numbers to be compared as if they were one.
   @$pb.TagNumber(6)
   $core.int get detectorVersion => $_getIZ(5);

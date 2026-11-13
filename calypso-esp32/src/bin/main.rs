@@ -39,13 +39,13 @@ use bno055::Bno055;
 use bno055::{AccBandwidth, AccGRange, BNO055OperationMode};
 use calypso_core::clock::{self, Boots};
 use calypso_core::flashlog::{self, FlashLog};
-use calypso_core::fusion::{Fusion, FusionState};
 use calypso_core::gatt::{
     CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncImuValue, SyncReportsValue,
 };
+use calypso_core::motion::fusion::{Fusion, FusionState};
+use calypso_core::motion::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, compute_rep};
 use calypso_core::pb::msg;
 use calypso_core::pipe::{self, Session, Stalled};
-use calypso_core::rep::{Detector, MARGIN_MS, RepSpan, TraceBuf, TracePoint, compute_rep};
 use calypso_core::report::Latch;
 use calypso_core::sampler::{SAMPLE_RATE_HZ, Sample, SampleRing};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
@@ -151,7 +151,7 @@ const SAMPLER_CONFIG: calypso_core::sampler::RepConfig = calypso_core::sampler::
     accel_bandwidth_hz: 63,
     gyro_bandwidth_hz: 32,
     sample_rate_hz: SAMPLE_RATE_HZ,
-    detector_version: calypso_core::rep::DETECTOR_VERSION,
+    detector_version: calypso_core::motion::rep::DETECTOR_VERSION,
 };
 
 /// Attempts at starting the sensor before the device reboots.
@@ -232,7 +232,7 @@ fn log_changed() {
 /// Ten seconds, and not the nine a window can ask for: a window is inclusive at both ends, so the longest one is 901 samples, and a buffer that fits it exactly would drop the newest sample — the one a trace is most worth having.
 const REP_WINDOW_SAMPLES: usize = 1000;
 /// Trace points kept per rep; longer reps are decimated uniformly.
-const TRACE_POINTS: usize = calypso_core::rep::TRACE_POINTS;
+const TRACE_POINTS: usize = calypso_core::motion::rep::TRACE_POINTS;
 
 // A default app-descriptor, required by the esp-idf bootloader: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -320,7 +320,7 @@ async fn main(spawner: Spawner) -> ! {
     }
     info!("Bno055 initialized");
     // **The raw sensors, not the chip's fusion.** ACCGYRO reports uncompensated accelerometer and gyroscope registers;
-    // the orientation is this firmware's (`fusion.rs`), because the fused output cannot say whether its own reading is right and a residue it left behind kept a session from recording anything.
+    // the orientation is this firmware's (`motion/fusion.rs`), because the fused output cannot say whether its own reading is right and a residue it left behind kept a session from recording anything.
     //
     // The range is set here because a non-fusion mode is the only one that allows it, and it decides only what clips:
     // the registers' scale is fixed at 1 m/s² = 100 LSB and 1 dps = 16 LSB whatever the range. ±8 g clips at 78 m/s², past a rep and past a rerack; the chip's 4 g default clips at 39 m/s², which a hard rerack can reach. The bandwidth is written too, so the number a rep's summary carries is one this build chose rather than a default.
@@ -955,7 +955,7 @@ async fn main(spawner: Spawner) -> ! {
                     let closed_at = Instant::now();
                     // Where the window begins and where the filter stood: the detector's answer for a rep it closed, the snapshot taken when the window opened for one that was recorded. A detected rep's is not always `MARGIN_MS` before it, because one close behind the boot has no history that far back.
                     let (from_ms, state) =
-                        edge.unwrap_or((span.start_ms, calypso_core::fusion::FusionState::LEVEL));
+                        edge.unwrap_or((span.start_ms, calypso_core::motion::fusion::FusionState::LEVEL));
                     let copied = samples
                         .borrow()
                         .copy_window(from_ms, span.end_ms, 0, MARGIN_MS, rep_window);
@@ -975,7 +975,7 @@ async fn main(spawner: Spawner) -> ! {
                     } else {
                         // Where the filter stood at the window's edge: the detector's for a real rep, level for a synthetic one the fake-reps build fabricates wholesale.
                         let state = if FAKE_REPS {
-                            calypso_core::fusion::FusionState::LEVEL
+                            calypso_core::motion::fusion::FusionState::LEVEL
                         } else {
                             state
                         };
@@ -992,7 +992,7 @@ async fn main(spawner: Spawner) -> ! {
                             info!(
                                 "rep discarded: {} m of travel, under the {} m a rep needs",
                                 sum.rom,
-                                calypso_core::rep::MIN_ROM_M
+                                calypso_core::motion::rep::MIN_ROM_M
                             );
                         } else {
                             reps += 1;
@@ -1120,7 +1120,7 @@ async fn main(spawner: Spawner) -> ! {
                 if fusion.ready() && n.is_multiple_of(SAMPLE_RATE_HZ * 5) {
                     let b = fusion.state().accel_bias;
                     // Centimetres per second squared, because defmt has no precision hint and whole numbers read better than raw floats.
-                    let a = calypso_core::fusion::magnitude(filtered.linear_accel);
+                    let a = calypso_core::motion::fusion::magnitude(filtered.linear_accel);
                     // Paused, the detector's numbers are the ones from before the stream and would read as if nothing had moved since, so the line says which it is instead.
                     if detecting {
                         info!(

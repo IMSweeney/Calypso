@@ -5,11 +5,11 @@
 //! No radio and no embassy, so every case a bench session would cost to find is reproducible here: a chunk lost, an acknowledgement swallowed, a transfer that stalls until it is given up on.
 
 use calypso_core::gatt::pipe_sync;
+use calypso_core::motion::rep::TracePoint;
 use calypso_core::pb::{self, msg, TRACE_CHUNK_SAMPLES};
 use calypso_core::pipe::{
     Kind, Session, Stalled, ATT_MTU_DEFAULT, FRAME_MAX, MESSAGE_MAX, XFER_TIMEOUT_MS,
 };
-use calypso_core::rep::TracePoint;
 use calypso_core::sampler::Sample;
 use calypso_core::sync::{self, SummaryCursor};
 use calypso_core::uuid::{fixture_uuid, RepUuid};

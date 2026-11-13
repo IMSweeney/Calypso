@@ -10,15 +10,14 @@ extern crate alloc;
 pub mod ble;
 pub mod clock;
 pub mod flashlog;
-pub mod fusion;
 /// The BLE GATT table the device serves, generated from `proto/calypso_gatt.proto` by `gatt-gen` (see `tool/gen_gatt.sh`) and committed.
 ///
 /// The generated file is items and nothing else, so the allow lives here.
 #[allow(clippy::all, nonstandard_style, unused, irrefutable_let_patterns)]
 pub mod gatt;
+pub mod motion;
 pub mod pb;
 pub mod pipe;
-pub mod rep;
 pub mod report;
 pub mod sampler;
 pub mod store;

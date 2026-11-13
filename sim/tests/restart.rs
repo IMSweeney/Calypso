@@ -2,8 +2,8 @@
 //!
 //! The two things that would otherwise cross it are a stroke left open — whose turn would pair with a stroke from the far side of the stream as one rep spanning it — and a first step measured from the last sample before it, which would integrate minutes of nothing as motion.
 
-use calypso_core::fusion::{Filtered, FusionState};
-use calypso_core::rep::Detector;
+use calypso_core::motion::fusion::{Filtered, FusionState};
+use calypso_core::motion::rep::Detector;
 
 const DT_MS: u32 = 10;
 

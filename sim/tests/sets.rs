@@ -1,6 +1,6 @@
 //! Pins for the `Set` generator: a set is the unrack, several reps, and the re-rack assembled into one stream, so these are the invariants about how several motions *coexist* — the thing a single-rep scenario cannot express.
 
-use calypso_core::fusion::GRAVITY;
+use calypso_core::motion::fusion::GRAVITY;
 use calypso_core::sampler::Sample;
 use calypso_sim::fixtures::{detect_and_trace, LEAD_IN_MS, SAMPLE_DT_MS};
 use calypso_sim::motion::{stored_set, Push, Rep, Set, TRACE_POINTS};

@@ -5,9 +5,9 @@ Where Calypso is and what is left. Feature documentation lives in
 
 ## Done
 
-- **Sampling and rep detection** — 100 Hz IMU sampling, a RAM ring, a detector, and a ZUPT-anchored trace and summary per rep. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
-- **Per-rep storage** — a flash log ring holds each rep's summary and trace across power loss. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
-- **Raw IMU, filtered in firmware** — the device reads the BNO055's accelerometer and gyroscope and computes its own attitude, gravity and offsets rather than trusting the chip's fusion, and recording waits on that filter settling on a still window. **Not yet run on hardware.** See [docs/RAW_IMU.md](docs/RAW_IMU.md).
+- **Sampling and rep detection** — 100 Hz IMU sampling, a RAM ring, a detector, and a ZUPT-anchored trace and summary per rep.
+- **Per-rep storage** — a flash log ring holds each rep's summary and trace across power loss.
+- **Raw IMU, filtered in firmware** — the device reads the BNO055's accelerometer and gyroscope and computes its own attitude, gravity and offsets rather than trusting the chip's fusion, and recording waits on that filter settling on a still window. **Not yet run on hardware.**
 - **BLE sync** — summaries auto-stream to a subscriber, traces stream on request, and per-rep UUIDs identify a rep across reboots. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
 - **A chunked pipe over one characteristic each way** — a message larger than one value is framed, chunked and reassembled by both ends, so a stored trace chunk is one transfer. No controlled bench session yet. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
 - **A generated BLE interface** — `proto/calypso_gatt.proto` declares the service and its characteristics, and `gatt-gen` writes both ends' code from it, committed rather than generated at build time. See [tools/gatt-gen/README.md](tools/gatt-gen/README.md).
@@ -17,10 +17,10 @@ Where Calypso is and what is left. Feature documentation lives in
 - **The device's own faults reach the app** — a failed mount, a rep that could not be stored, an unreadable trace or a dropped transfer arrives as a `Report` kind and is shown as a banner. **Not yet run on hardware.** See [docs/APP_SYNC.md](docs/APP_SYNC.md).
 - **Diagnostics that can be read back** — the app logs every BLE message to a rotating file, and the firmware's boot log carries the heap and stack figures. See [calypso-app/README.md](calypso-app/README.md).
 - **A day at a time** — the rep list opens on today, and an arrow either side walks it back a day per press. See [docs/APP_SYNC.md](docs/APP_SYNC.md).
-- **A rep is out and back** — the detector closes a rep on the return rather than where the bar rests, and drops a one-way push that pauses. See [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
-- **A rep is two strokes between turns** — the detector finds the turns from the bar's vertical velocity and measures the signed travel between them, so the travel check is part of detection rather than a test afterwards. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
-- **A turn is the acceleration's, not the integral's** — the bar reverses where its vertical acceleration does, which is a reading and cannot drift, and which way a leg went comes from the turn that ended it. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
-- **A stored rep is measured from its own turns** — the replay puts its velocity back to zero at every instant a cue names, and ROM is measured over the rep's span rather than the plot window. See [docs/REP_TRACKING.md](docs/REP_TRACKING.md).
+- **A rep is out and back** — the detector closes a rep on the return rather than where the bar rests, and drops a one-way push that pauses.
+- **A rep is two strokes between turns** — the detector finds the turns from the bar's vertical velocity and measures the signed travel between them, so the travel check is part of detection rather than a test afterwards.
+- **A turn is the acceleration's, not the integral's** — the bar reverses where its vertical acceleration does, which is a reading and cannot drift, and which way a leg went comes from the turn that ended it.
+- **A stored rep is measured from its own turns** — the replay puts its velocity back to zero at every instant a cue names, and ROM is measured over the rep's span rather than the plot window.
 
 ## Open
 
@@ -62,16 +62,16 @@ Where Calypso is and what is left. Feature documentation lives in
       noise-free synthetic motion. On the simulator, white per-sample noise of a few
       centimetres per second squared is enough that the filter never settles at all — so
       nothing is recorded, for a reason that looks exactly like a detector that never fires.
-      The noise map in [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md) is the instrument that
-      would say where the sensor actually is: its axes are sized from the part's datasheet
-      rather than from one capture, and it needs a still window from a device first, because
-      the part's own noise accounts for only half of the rest spread a bar in a rack shows.
-- [ ] **A real session with the raw input, and the map re-run against it.** Stage 3 of
-      [docs/RAW_IMU.md](docs/RAW_IMU.md) swapped what feeds the detector and deliberately changed
-      nothing else, so the first session is evidence rather than tuning: if reps are stored where
-      the fused build stored none, the fused output was the problem. What it does not settle is
-      whether the detector now reads travel correctly on a live bar — the maps are synthetic and
-      the annotated captures are gone — so the session's rep counts are written down before it
+      The noise map is the instrument that would say where the sensor actually is: its axes
+      are sized from the part's datasheet rather than from one capture, and it needs a still
+      window from a device first, because the part's own noise accounts for only half of the
+      rest spread a bar in a rack shows.
+- [ ] **A real session with the raw input, and the map re-run against it.** The raw-IMU
+      change swapped what feeds the detector and deliberately changed nothing else, so the
+      first session is evidence rather than tuning: if reps are stored where the fused build
+      stored none, the fused output was the problem. What it does not settle is whether the
+      detector now reads travel correctly on a live bar — the maps are synthetic and the
+      annotated captures are gone — so the session's rep counts are written down before it
       starts, the live stream captures the samples, and the fixtures come from them.
 - [ ] **Whether the detector consumes the filter's velocity.** Two integrators run in firmware
       today, deliberately, and they disagree. Folding the detector onto the filter's velocity is
@@ -148,9 +148,8 @@ Where Calypso is and what is left. Feature documentation lives in
       from a bench session were removed again because every window in it carried a jump in
       its sample times, so a test against them pinned numbers that came from bridging a
       2.2 s gap ([docs/FIXTURES.md](docs/FIXTURES.md)). The sampler's timeline is fixed and
-      the windows a real session stores now are in `captures/sets-2026-11-04.pblog`, which
-      `sim/tests/real_capture.rs` replays — but a handful of windows cannot say whether the
-      detector caught a *set*. Two sessions have now been recorded for that: a bench session
+      the windows a real session stores now are in `captures/sets-2026-11-04.pblog` — but a
+      handful of windows cannot say whether the detector caught a *set*. Two sessions have now been recorded for that: a bench session
       and a deadlift one, through the live stream with the detector off, every set written
       down as it was performed in `captures/captures.json`. Replaying them
       ([`sim/tests/captures.rs`](sim/tests/captures.rs)) finds every set where it happened and
@@ -164,8 +163,7 @@ Where Calypso is and what is left. Feature documentation lives in
       fixed, the instability is not), and five reps have less vertical travel than
       sideways. Either the clip turns during a rep or the fusion's orientation is poor,
       and either way it is the frame that has to be fixed before ROM means anything.
-      Still open: whether a squat lands the right way up
-      (see [docs/REP_TRACKING.md](docs/REP_TRACKING.md)).
+      Still open: whether a squat lands the right way up.
 - [ ] **What a rep does with the time it was not sampled.** A hole is motion nobody
       measured, and the trace integration bridges it as one step: the capture's most
       extreme rep is missing 2.3 s of the 5.6 s it claims, and the bridged gap lifts the
@@ -206,8 +204,7 @@ Where Calypso is and what is left. Feature documentation lives in
       alone (would this motion be stored); the noise map adds the impairments the part's
       datasheet allows; the false-positive map aims the same sweep at motion that is not a
       rep. The maps run by hand, `cargo test` pins the deterministic points, and the
-      labelled capture stays the reference rather than being replaced. Plan:
-      [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
+      labelled capture stays the reference rather than being replaced.
 
 ### Firmware
 
@@ -231,7 +228,7 @@ Where Calypso is and what is left. Feature documentation lives in
       `v0` rather than zero moves it by 0.9 mm, so what is missing is the samples: the
       trace carries no gyroscope, and it keeps every second point. The state is no longer
       part of the problem — a filter replayed from a recorded state tracks the run that
-      produced it (`docs/RAW_IMU.md`, stage 1) — so the raw trace format is what closes
+      produced it — so the raw trace format is what closes
       this, and full rate is stage 4's decision. Nor can the edges recover it — a set is fluid, so a window rarely begins
       or ends at rest, the detrend is always removing a real ramp, and the result is always
       grid-sensitive. That retires "a rep's window must begin and end at rest" as a
@@ -286,8 +283,7 @@ Where Calypso is and what is left. Feature documentation lives in
       both ways is an out-and-back by every rule the detector has, so telling it from a lift
       needs something the detector does not have — a net travel, or a window that has to end
       where it started. The cheap knob is the speed bar, and what it would cost is the slow
-      strokes above. The false-positive map is where the size of the region is measured; see
-      [docs/DETECTOR_TESTS.md](docs/DETECTOR_TESTS.md).
+      strokes above. The false-positive map is where the size of the region is measured.
 - [ ] **Trim the static heap region if the deepest stack figure ever asks for it.**
       The 64 KB `heap_allocator!` region is what the linker stack competes with
       most, and its surplus is stack the linker cannot use. Each byte trimmed moves

@@ -4,9 +4,20 @@
 //!
 //! The recordings are recorded data and live in the bucket, so a run needs them pulled into `captures/` or `CAPTURES_REMOTE` naming the bucket; without either they fail rather than read nothing.
 
-use calypso_core::rep::{DetectedRep, TracePoint, Zero};
+use calypso_core::motion::fusion::Fusion;
+use calypso_core::motion::rep::{DetectedRep, TracePoint, Zero};
 use calypso_sim::captures::{self, Capture, Set};
-use calypso_sim::stream;
+use calypso_sim::{replay, stream};
+
+/// A recording's samples through the firmware's filter and detector, started from a boot.
+fn replay_recording(pblog: &[u8]) -> replay::Replay {
+    replay::run(
+        &stream::samples(pblog),
+        Fusion::new(),
+        replay::TRACE_CAPACITY,
+        &mut |_, _, _| {},
+    )
+}
 
 /// The gap that separates one set from the next.
 ///
@@ -106,7 +117,7 @@ fn nothing_is_closed_after_the_session_was_noted_over() {
             .0;
         let pblog = captures::bytes(&capture.name);
         let epoch_ms = epoch_ms(&capture.name, &pblog);
-        let out = stream::replay(&stream::samples(&pblog), &mut |_, _, _| {});
+        let out = replay_recording(&pblog);
         for rep in &out.reps {
             let late_ms = epoch_ms + i64::from(rep.span.end_ms) - over_at;
             if late_ms > 0 {
@@ -134,9 +145,9 @@ fn a_stored_rep_begins_and_ends_at_the_same_height() {
         .into_iter()
         .filter(|c| c.expected.is_some())
     {
-        let samples = stream::samples(&captures::bytes(&capture.name));
-        let out = stream::replay(&samples, &mut |_, _, _| {});
-        for ((rep, rom), trace) in out.reps.iter().zip(&out.roms).zip(&out.traces) {
+        let out = replay_recording(&captures::bytes(&capture.name));
+        for ((rep, summary), trace) in out.reps.iter().zip(&out.summaries).zip(&out.traces) {
+            let rom = summary.rom;
             let Some((start, middle, end)) = shape(rep, trace) else {
                 continue;
             };
@@ -184,8 +195,7 @@ fn reps_per_set(name: &str) -> Vec<u32> {
 
 /// The sets the detector closes in one recording, in the order it closed them.
 fn found_sets(pblog: &[u8]) -> Vec<Vec<DetectedRep>> {
-    let samples = stream::samples(pblog);
-    sets(&stream::replay(&samples, &mut |_, _, _| {}).reps)
+    sets(&replay_recording(pblog).reps)
 }
 
 /// The wall clock the recording's uptime counts from, in unix milliseconds.

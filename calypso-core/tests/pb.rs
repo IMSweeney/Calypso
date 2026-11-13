@@ -1,5 +1,5 @@
+use calypso_core::motion::rep::TracePoint;
 use calypso_core::pb::{self, msg, Record, IMU_CHUNK_SAMPLES, TRACE_CHUNK_SAMPLES};
-use calypso_core::rep::TracePoint;
 use calypso_core::uuid::fixture_uuid;
 
 fn sample_summary() -> msg::RepSummary {

@@ -6,7 +6,7 @@
 //!
 //! A generator states the bar's own acceleration; [`at`] adds gravity and hands back what a sensor bolted level to the bar would measure. Everything below therefore reads as motion, and only [`Impairments`] speaks in sensor readings.
 
-use calypso_core::fusion::{conjugate, quat_from_rotvec, rotate_by_quat};
+use calypso_core::motion::fusion::{conjugate, quat_from_rotvec, rotate_by_quat};
 use calypso_core::pb::msg;
 use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, GYRO_SCALE};
 
@@ -16,7 +16,7 @@ use crate::fixtures::{at, detect_and_trace, LEAD_IN_MS, SAMPLE_DT_MS};
 const LEAD_OUT_MS: u32 = 1000;
 
 /// The trace capacity a scenario replays through, which is the plotted budget a device stores.
-pub use calypso_core::rep::TRACE_POINTS;
+pub use calypso_core::motion::rep::TRACE_POINTS;
 
 const PI: f32 = core::f32::consts::PI;
 
@@ -83,6 +83,20 @@ impl Rep {
             speed_out: 0.70,
             pause_top_ms: 150,
             pause_bottom_ms: 300,
+            settle_m: 0.0,
+            settle_speed: 0.0,
+        }
+    }
+
+    /// A rep whose drive and return are one cosine of `travel` in `duration_ms`: the shape the synthetic sets and the app's fixtures are made of.
+    pub fn cosine(travel: f32, duration_ms: u32) -> Self {
+        let speed = core::f32::consts::PI * travel / (duration_ms as f32 / 1000.0);
+        Rep {
+            travel,
+            speed_in: speed,
+            speed_out: speed,
+            pause_top_ms: 0,
+            pause_bottom_ms: 0,
             settle_m: 0.0,
             settle_speed: 0.0,
         }

@@ -6,12 +6,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use calypso_core::fusion::FusionState;
+use calypso_core::motion::fusion::{FusionState, GRAVITY};
+use calypso_core::motion::rep::{compute_rep, TraceBuf, TracePoint, TRACE_POINTS};
 use calypso_core::pb::{self, msg};
-use calypso_core::rep::{compute_rep, TraceBuf, TracePoint, TRACE_POINTS};
+use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE};
 use calypso_core::store::RECORD_BUF_BYTES;
 use calypso_core::uuid::fixture_uuid;
-use calypso_sim::fixtures::{self, push_record, push_rep, squat_set};
+use calypso_sim::fixtures::{self, push_record, push_rep, set_dump};
+use calypso_sim::motion::{Rep, Set};
 
 fn repo_root() -> PathBuf {
     // <repo>/sim/examples/gen_fixtures.rs -> <repo>
@@ -28,6 +30,18 @@ fn write(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Push the bar sideways in proportion to how hard it is accelerating vertically, so the path bows: the vertical travel is unchanged, so the detector and the summary are unaffected, but the trace visibly leaves the vertical plane.
+///
+/// Proportional and one-signed, so the bar drifts left through the whole rep rather than returning to centre — a bow you can see, not one straight line traversed twice.
+/// Measured against gravity rather than against zero, because a still sensor reads 1 g and a constant sideways push at rest is not a bow.
+fn bow(samples: &mut [Sample], lateral_fraction: f32) {
+    let rest = quantize(GRAVITY, ACCEL_SCALE);
+    for s in samples.iter_mut() {
+        let motion = s.accel[2].abs().saturating_sub(rest);
+        s.accel[0] = (f32::from(motion) * lateral_fraction) as i16;
+    }
+}
+
 fn main() -> std::io::Result<()> {
     let dir = repo_root().join("calypso-app/assets/fixtures");
     fs::create_dir_all(&dir)?;
@@ -35,8 +49,17 @@ fn main() -> std::io::Result<()> {
 
     let mut rec_buf = [0u8; RECORD_BUF_BYTES];
 
+    // A squat set: 0.4 m of travel per rep, 1.5 s each, 0.8 s of rest between.
+    let squat = Set {
+        rep: Rep::cosine(0.4, 1500),
+        reps: 3,
+        inter_rep_rest_ms: 800,
+        unrack: None,
+        rerack: None,
+    };
+
     // 1. A normal set: three squat reps, the happy path for the list and plot.
-    write(&dir, "synthetic-squat.pblog", &fixtures::squat_dump(3, 0.4))?;
+    write(&dir, "synthetic-squat.pblog", &set_dump(&squat, 512))?;
 
     // 2. A single-rep set whose trace is one point: the degenerate plot case (axis fitting, camera fit and the polyline must all cope).
     {
@@ -63,7 +86,7 @@ fn main() -> std::io::Result<()> {
     //    Built by running the trace computation directly rather than through the detector: a smooth 5 s squat has a peak acceleration of ~0.5 m/s^2, under the detector's 0.6 m/s^2 start threshold.
     //    Real long reps are jerky (that is why a long rep can overflow the device buffer at all), but a smooth synthetic one cannot trip the detector.
     {
-        let (samples, _) = squat_set(1, 10_000, 1_000, 1.2);
+        let samples = Rep::cosine(1.2, 10_000).samples();
         let lead_in = fixtures::LEAD_IN_MS as usize / fixtures::SAMPLE_DT_MS as usize;
         let motion = 10_000 / fixtures::SAMPLE_DT_MS as usize;
         // Half a second either side, so the filter sees the bar at rest at both ends and anchors the trace there.
@@ -142,14 +165,16 @@ fn main() -> std::io::Result<()> {
 
     // 6. A truncated dump: the last record ends mid-message, as a torn write or a dropped packet would leave it. Decoding must report the truncation.
     {
-        let full = fixtures::squat_dump(1, 0.4);
+        let one = Set { reps: 1, ..squat };
+        let full = set_dump(&one, 512);
         let cut = full.len() - 40;
         write(&dir, "truncated.pblog", &full[..cut])?;
     }
 
     // 7. A squat where the bar dips to one side: the vertical travel is the same, but the path bows, which is what the 3D plot is for.
     {
-        let (samples, _) = fixtures::dipped_squat_set(2, 0.35);
+        let mut samples = Set { reps: 2, ..squat }.samples();
+        bow(&mut samples, 0.35);
         let reps = fixtures::detect_and_trace(&samples, 512);
         assert_eq!(reps.len(), 2, "the dip should not stop the detector");
         let mut dump = fixtures::new_dump(&mut rec_buf);

@@ -6,7 +6,7 @@ import 'package:fixnum/fixnum.dart';
 import '../protocol/calypso.pb.dart' as pb;
 import 'uuid.dart';
 
-/// How many points a rep's plotted trace keeps, whatever its length (`calypso_core::rep::TRACE_POINTS`).
+/// How many points a rep's plotted trace keeps, whatever its length (`calypso_core::motion::rep::TRACE_POINTS`).
 ///
 /// Not enforced here, just documented: a summary says how many it actually has, and a rep long enough to be reduced carries fewer samples of its motion than it has milliseconds to draw.
 const int tracePointsBudget = 128;

@@ -4,8 +4,8 @@
 //!
 //! The motion here is written out by hand (`known_motion`), not generated: each one is a case with an answer worked out on paper — a cosine out-and-back whose travel is known, a still sensor whose offset must come out as nothing.
 
-use calypso_core::fusion::{roll_pitch_deg, Fusion, FusionState, GRAVITY};
-use calypso_core::rep::{compute_rep, TraceBuf, TracePoint, MARGIN_MS};
+use calypso_core::motion::fusion::{roll_pitch_deg, Fusion, FusionState, GRAVITY};
+use calypso_core::motion::rep::{compute_rep, TraceBuf, TracePoint, MARGIN_MS};
 use calypso_core::sampler::{quantize, Sample, ACCEL_SCALE, QUAT_SCALE};
 
 const HZ: u32 = 100;

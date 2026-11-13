@@ -8,7 +8,7 @@
 //!
 //! Usage: `cargo run --release --example noise -- <capture.pblog>...`, where each capture is a name in `captures/` or one the bucket holds.
 
-use calypso_core::fusion::{
+use calypso_core::motion::fusion::{
     magnitude, GRAVITY, STILL_GRAVITY, STILL_RATE_DPS, STILL_STRAY, STILL_WINDOW,
 };
 use calypso_core::sampler::{Sample, ACCEL_SCALE, GYRO_SCALE, SAMPLE_RATE_HZ};

@@ -1,13 +1,25 @@
 mod common;
 
 use calypso_core::flashlog::FlashLog;
+use calypso_core::motion::rep::{TraceBuf, TracePoint};
 use calypso_core::pb::msg;
-use calypso_core::rep::{TraceBuf, TracePoint};
 use calypso_core::sampler::{Sample, QUAT_SCALE};
 use calypso_core::store::{self, RECORD_BUF_BYTES};
 use calypso_core::uuid::{fixture_uuid, RepUuid};
-use calypso_sim::fixtures::{detect_and_trace, squat_set};
+use calypso_sim::fixtures::detect_and_trace;
+use calypso_sim::motion::{Rep, Set};
 use common::{erases, mount, reads, reset_erases, reset_reads, BigFlash, MockFlash, WideFlash};
+
+/// A set of 0.4 m squat reps with rest between them, which is what the store tests replay.
+fn squat_set(reps: u32) -> Set {
+    Set {
+        rep: Rep::cosine(0.4, 1500),
+        reps,
+        inter_rep_rest_ms: 800,
+        unrack: None,
+        rerack: None,
+    }
+}
 
 fn pipeline(samples: &[Sample]) -> (Vec<Vec<TracePoint>>, Vec<msg::RepSummary>) {
     let reps = detect_and_trace(samples, 512);
@@ -34,7 +46,7 @@ fn append_set(
 /// A set costs the sampler nothing but the write when the ring is erased ahead of it, and this is that said as the flash sees it: the same three reps, into the same wrapped ring, with and without a reserve.
 #[test]
 fn a_set_appended_into_a_reserve_erases_nothing() {
-    let (samples, _) = squat_set(3, 1500, 800, 0.4);
+    let samples = squat_set(3).samples();
     let (traces, summaries) = pipeline(&samples);
     let mut flash = WideFlash::new();
     let mut buf = [0u8; RECORD_BUF_BYTES];
@@ -65,7 +77,7 @@ fn a_set_appended_into_a_reserve_erases_nothing() {
 
 #[test]
 fn rep_survives_the_round_trip_through_flash() {
-    let (samples, _) = squat_set(3, 1500, 800, 0.4);
+    let samples = squat_set(3).samples();
     let (traces, summaries) = pipeline(&samples);
     assert_eq!(traces.len(), 3);
     assert_eq!(summaries.len(), 3);
@@ -139,7 +151,7 @@ fn rep_survives_the_round_trip_through_flash() {
 
 #[test]
 fn oldest_reps_fall_off_when_the_ring_wraps() {
-    let (samples, _) = squat_set(1, 1500, 800, 0.4);
+    let samples = squat_set(1).samples();
     let mut summary = pipeline(&samples).1.remove(0);
     let trace: Vec<TracePoint> = (0..4)
         .map(|i| TracePoint {
@@ -200,7 +212,7 @@ fn oldest_reps_fall_off_when_the_ring_wraps() {
 /// This is the path a trace request takes, and the cost is the thing being tested: the walk is what used to hold the sampler off its tick for seconds while the phone waited for a trace.
 #[test]
 fn a_trace_read_from_its_summary_walks_the_reps_records_only() {
-    let (samples, _) = squat_set(1, 1500, 800, 0.4);
+    let samples = squat_set(1).samples();
     let (traces, summaries) = pipeline(&samples);
     let trace = &traces[0];
     let chunks = calypso_core::pb::chunk_count_for(trace.len());
@@ -261,7 +273,7 @@ fn a_trace_read_from_its_summary_walks_the_reps_records_only() {
 /// the two runs are written together and read by kind, from a summary's record id and from a walk of the log.
 #[test]
 fn a_raw_trace_is_stored_after_the_plotted_one_and_reads_back_whole() {
-    let (samples, _) = squat_set(1, 1500, 800, 0.4);
+    let samples = squat_set(1).samples();
     let (traces, summaries) = pipeline(&samples);
     let trace = &traces[0];
     let mut summary = summaries[0].clone();
@@ -356,7 +368,7 @@ fn rebased(window: &[Sample]) -> Vec<Sample> {
 
 #[test]
 fn summary_and_chunks_share_the_rep_uuid() {
-    let (samples, _) = squat_set(1, 1500, 800, 0.4);
+    let samples = squat_set(1).samples();
     let (traces, summaries) = pipeline(&samples);
     let trace = &traces[0];
     let mut summary = summaries[0].clone();
@@ -396,7 +408,7 @@ fn summary_and_chunks_share_the_rep_uuid() {
 
 #[test]
 fn clock_records_sit_among_the_reps_without_disturbing_them() {
-    let (samples, _) = squat_set(1, 1500, 800, 0.4);
+    let samples = squat_set(1).samples();
     let (traces, summaries) = pipeline(&samples);
     assert_eq!(traces.len(), 1);
     let mut summary = summaries[0].clone();
@@ -426,7 +438,7 @@ fn clock_records_sit_among_the_reps_without_disturbing_them() {
     assert_eq!(back.len(), 1);
     assert_eq!(back[0].computed_len, traces[0].len() as u32);
 
-    let mut storage = vec![calypso_core::rep::TracePoint::ZERO; traces[0].len()];
+    let mut storage = vec![calypso_core::motion::rep::TracePoint::ZERO; traces[0].len()];
     let mut trace = TraceBuf::new(&mut storage);
     let points =
         store::read_trace(&mut log, &mut buf, &mut rec, fixture_uuid(1), &mut trace).unwrap();

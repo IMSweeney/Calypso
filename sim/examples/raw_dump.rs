@@ -2,14 +2,14 @@
 //!
 //! The noise map's two largest terms cannot be fitted from a datasheet — how much of a still window's spread is the part and how much is the platform, and what shape the second has — so they come off a device. One capture from a `--features record-mode` build answers all four questions the model needs, and this prints them.
 //!
-//! Everything is in the units the gate is written in: milligrammes of specific force, and milliseconds against the window and the run length `Fusion` is judged on. The constants come from `calypso_core::fusion` rather than being copied here, so a report cannot describe a gate nothing uses.
+//! Everything is in the units the gate is written in: milligrammes of specific force, and milliseconds against the window and the run length `Fusion` is judged on. The constants come from `calypso_core::motion::fusion` rather than being copied here, so a report cannot describe a gate nothing uses.
 //!
 //! Usage: `cargo run --release --example raw_dump -- <dump.pblog>`, where the dump came from `cargo run --example device_log -- <image.bin> --dump <dump.pblog>` or from the app's history.
 
 use std::env;
 use std::fs;
 
-use calypso_core::fusion::{
+use calypso_core::motion::fusion::{
     GRAVITY, READY_S, STILL_GRAVITY, STILL_RATE_DPS, STILL_STRAY, STILL_WINDOW,
 };
 use calypso_core::pb::{self, decode_record, Record};

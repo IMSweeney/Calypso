@@ -3,8 +3,8 @@
 //! The record buffer is the caller's: it is too large for the device's static RAM, so the firmware keeps one on the heap and reuses it.
 
 use crate::flashlog::{Error as LogError, FlashLog};
+use crate::motion::rep::{TraceBuf, TracePoint};
 use crate::pb::{self, msg, TRACE_CHUNK_SAMPLES};
-use crate::rep::{TraceBuf, TracePoint};
 use crate::sampler::Sample;
 use crate::uuid::RepUuid;
 use embedded_storage::nor_flash::NorFlash;
