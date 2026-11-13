@@ -9,8 +9,8 @@
 use std::env;
 use std::fs;
 
-use calypso_core::motion::fusion::{magnitude, Fusion, GRAVITY};
-use calypso_core::motion::integrate::Integration;
+use calypso_core::motion::fusion::{magnitude, GRAVITY};
+use calypso_core::motion::pipeline::Pipeline;
 use calypso_core::motion::rep::RepSeed;
 use calypso_sim::fixtures::{capture_windows, Window};
 use calypso_sim::replay::{self, TRACE_CAPACITY};
@@ -68,13 +68,12 @@ fn main() {
 ///
 /// This is the instrument a turn rule is designed against: it prints the two signals the detector gates on, so whether a turnaround shows up in them is a question with an answer.
 fn print_series(w: &Window) {
-    let mut fusion = Fusion::from_state(w.state.filter);
-    let mut integration = Integration::from_velocity(w.state.velocity);
+    let mut motion = Pipeline::from_seed(w.state);
     println!("{}\tt_ms\ta_z\tv_z\tv_h\ta_x\ta_y\ttilt\tstill", w.uuid);
     for s in &w.samples {
-        let f = fusion.update(s);
-        let m = integration.step(f.t_ms, f.linear_accel, f.resting, f.ready, &[]);
-        let v = m.velocity;
+        let step = motion.update(s, false);
+        let f = &step.filtered;
+        let v = step.integrated.velocity;
         // Where the world frame thinks gravity is, in degrees off vertical: zero if the attitude is right, and at a moment the bar is not accelerating, the attitude's own error.
         let a = f.linear_accel;
         let tilt = atan2f((a[0] * a[0] + a[1] * a[1]).sqrt(), a[2] + GRAVITY).to_degrees();
@@ -116,8 +115,7 @@ fn report(label: &str, r: replay::Replay) {
 fn run_window(w: &Window, from: RepSeed, spans: bool) -> replay::Replay {
     let out = replay::run(
         &w.samples,
-        Fusion::from_state(from.filter),
-        from.velocity,
+        Pipeline::from_seed(from),
         TRACE_CAPACITY,
         &mut |_, _, _, _| {},
     );

@@ -126,9 +126,9 @@ motion/
   fusion.rs     filter, attitude, biases, resting
   cues.rs       drift-resistant features
   integrate.rs  velocity, position, v_cross
-  detect.rs     anchors and legs
-  rep.rs        rep and set state, validation
+  rep.rs        detection, rep and set state, validation
   trace.rs      replay, detrend, decimate
+  pipeline.rs   `Pipeline`: the live entry point through fusion, cues, integration, detection
 ```
 
 ## Implementation plan

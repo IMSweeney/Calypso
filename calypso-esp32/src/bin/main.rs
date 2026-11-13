@@ -42,10 +42,8 @@ use calypso_core::flashlog::{self, FlashLog};
 use calypso_core::gatt::{
     CalypsoGatt, PIPE_STORAGE_MAX, SCHEMA_HASH, SyncImuValue, SyncReportsValue,
 };
-use calypso_core::motion::cues::CueReader;
-use calypso_core::motion::fusion::Fusion;
-use calypso_core::motion::integrate::Integration;
-use calypso_core::motion::rep::{Detector, MARGIN_MS, RepSeed, RepSpan};
+use calypso_core::motion::pipeline::Pipeline;
+use calypso_core::motion::rep::{MARGIN_MS, RepSeed, RepSpan};
 use calypso_core::motion::trace::{TraceBuf, TracePoint, compute_rep};
 use calypso_core::pb::msg;
 use calypso_core::pipe::{self, Session, Stalled};
@@ -779,10 +777,7 @@ async fn main(spawner: Spawner) -> ! {
             let rng = Rng::new();
             let mut ticker = Ticker::every(Duration::from_hz(SAMPLE_RATE_HZ as u64));
             // The detector runs inline at 100 Hz: it's a few comparisons per sample, and a closed rep does one trace computation.
-            let mut fusion = Fusion::new();
-            let mut detector = Detector::new();
-            let mut integration = Integration::new();
-            let mut cue_reader = CueReader::new();
+            let mut pipeline = Pipeline::new();
             // Whether the detector is being asked at all. The live stream turns it off (`DevMode`), because the flash write a closed rep ends in pauses this loop and puts a hole in the stream.
             let mut detecting = true;
             let mut reps: u32 = 0;
@@ -811,8 +806,7 @@ async fn main(spawner: Spawner) -> ! {
                 let streaming = STREAM_IMU.load(Ordering::Relaxed);
                 if streaming == detecting {
                     detecting = !streaming;
-                    detector.restart();
-                    integration.restart(t_ms);
+                    pipeline.restart(t_ms);
                     if detecting {
                         info!("dev mode off: the detector starts again from rest");
                     } else {
@@ -884,15 +878,9 @@ async fn main(spawner: Spawner) -> ! {
                     live_chunk.clear();
                 }
                 samples.borrow_mut().push(sample);
-                let filtered = fusion.update(&sample);
-                let integrated = integration.step(
-                    filtered.t_ms,
-                    filtered.linear_accel,
-                    filtered.resting,
-                    filtered.ready,
-                    &[],
-                );
-                let cues = cue_reader.update(&filtered);
+                let step = pipeline.update(&sample, detecting && !RECORD_MODE && !FAKE_REPS);
+                let filtered = &step.filtered;
+                let integrated = &step.integrated;
 
                 // Detect reps; on close, slice the window out of the ring and compute the ZUPT-anchored trace + summary, then persist it.
                 //
@@ -902,14 +890,8 @@ async fn main(spawner: Spawner) -> ! {
                     match recording {
                         // Not before the filter knows which way is down: a window that opens first has no vertical for `compute_rep` to replay in, and its trace reads hundreds of metres.
                         // The price is that a device whose gate never opens records nothing — which the sampler's own line says, rather than leaving silence to be interpreted.
-                        None if t_ms >= next_record_ms && fusion.ready() => {
-                            recording = Some((
-                                t_ms,
-                                RepSeed {
-                                    filter: filtered.state,
-                                    velocity: integrated.velocity,
-                                },
-                            ));
+                        None if t_ms >= next_record_ms && filtered.ready => {
+                            recording = Some((t_ms, pipeline.seed()));
                             info!(
                                 "record: window opened at {} ms, {} ms of samples to go",
                                 t_ms, RECORD_WINDOW_MS
@@ -962,10 +944,9 @@ async fn main(spawner: Spawner) -> ! {
                     } else {
                         None
                     }
-                } else if fusion.ready() && detecting {
+                } else if detecting {
                     // The filter is fed every sample, so its offsets and its attitude keep up with the sensor; only the detector is gated, and it starts from a real rest whenever the gate opens. The live stream is the other gate: a rep found while it runs would end in the flash write that leaves a hole in it.
-                    detector
-                        .update(&filtered, &integrated, &cues)
+                    step.rep
                         .map(|rep| (rep.span, Some((rep.from_ms, rep.state)), Some(rep.turns)))
                 } else {
                     None
@@ -1106,7 +1087,7 @@ async fn main(spawner: Spawner) -> ! {
                     && append_ms.is_none()
                     && recording.is_none()
                     && !streaming
-                    && fusion.still_for_s() >= RESERVE_STILL_S
+                    && pipeline.quiet_for_s() >= RESERVE_STILL_S
                     && let Ok(mut guard) = store.try_lock()
                 {
                     match prepare_log(&mut guard, RESERVE_SECTORS) {
@@ -1137,8 +1118,8 @@ async fn main(spawner: Spawner) -> ! {
                 // Every 5 s while recording: what the filter is subtracting, and how much motion it sees.
                 //
                 // A session that stores nothing has two causes that look identical from outside — the sensor's offset never came out of the signal, or the bar really was still — and the once-a-minute sampler line says neither.
-                if fusion.ready() && n.is_multiple_of(SAMPLE_RATE_HZ * 5) {
-                    let b = fusion.state().accel_bias;
+                if filtered.ready && n.is_multiple_of(SAMPLE_RATE_HZ * 5) {
+                    let b = pipeline.state().accel_bias;
                     // Centimetres per second squared, because defmt has no precision hint and whole numbers read better than raw floats.
                     let a = calypso_core::motion::fusion::magnitude(filtered.linear_accel);
                     // Paused, the detector's numbers are the ones from before the stream and would read as if nothing had moved since, so the line says which it is instead.
@@ -1149,9 +1130,9 @@ async fn main(spawner: Spawner) -> ! {
                             (b[1] * 100.0) as i32,
                             (b[2] * 100.0) as i32,
                             (a * 100.0) as i32,
-                            (detector.speed() * 100.0) as i32,
-                            detector.halves(),
-                            detector.rep_open()
+                            (pipeline.speed() * 100.0) as i32,
+                            pipeline.halves(),
+                            pipeline.rep_open()
                         );
                     } else {
                         info!(
@@ -1164,7 +1145,7 @@ async fn main(spawner: Spawner) -> ! {
                     }
                 }
 
-                let ready = fusion.ready();
+                let ready = pipeline.ready();
                 if n.is_multiple_of(SAMPLE_RATE_HZ * 60) || logged_ready != Some(ready) {
                     logged_ready = Some(ready);
                     let (len, pushed) = {
@@ -1190,7 +1171,7 @@ async fn main(spawner: Spawner) -> ! {
                             len,
                             SAMPLE_RING_LEN,
                             pushed,
-                            fusion.still_for_s(),
+                            pipeline.quiet_for_s(),
                             Stack
                         );
                     }

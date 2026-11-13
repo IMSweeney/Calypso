@@ -4,7 +4,7 @@
 //!
 //! The recordings are recorded data and live in the bucket, so a run needs them pulled into `captures/` or `CAPTURES_REMOTE` naming the bucket; without either they fail rather than read nothing.
 
-use calypso_core::motion::fusion::Fusion;
+use calypso_core::motion::pipeline::Pipeline;
 use calypso_core::motion::rep::DetectedRep;
 use calypso_core::motion::trace::TracePoint;
 use calypso_sim::captures::{self, Capture, Set};
@@ -14,8 +14,7 @@ use calypso_sim::{replay, stream};
 fn replay_recording(pblog: &[u8]) -> replay::Replay {
     replay::run(
         &stream::samples(pblog),
-        Fusion::new(),
-        [0.0; 3],
+        Pipeline::new(),
         replay::TRACE_CAPACITY,
         &mut |_, _, _, _| {},
     )

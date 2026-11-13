@@ -1,11 +1,11 @@
 //! One pass through the pipeline the firmware runs: samples in, the reps the detector closes out.
 //!
-//! Every replay in this crate — synthetic sets, a recording of the live stream, one stored window — is this loop with a different starting filter state, so the instruments and the tests cannot disagree about what the device would have done.
+//! Every replay in this crate — synthetic sets, a recording of the live stream, one stored window — is this loop with a different starting pipeline state, so the instruments and the tests cannot disagree about what the device would have done.
 
-use calypso_core::motion::cues::CueReader;
-use calypso_core::motion::fusion::{magnitude, Filtered, Fusion};
-use calypso_core::motion::integrate::{Integrated, Integration};
-use calypso_core::motion::rep::{DetectedRep, Detector, MARGIN_MS};
+use calypso_core::motion::fusion::{magnitude, Filtered};
+use calypso_core::motion::integrate::Integrated;
+use calypso_core::motion::pipeline::Pipeline;
+use calypso_core::motion::rep::{DetectedRep, MARGIN_MS};
 use calypso_core::motion::trace::{compute_rep, TraceBuf, TracePoint};
 use calypso_core::pb::msg;
 use calypso_core::sampler::{Sample, SampleRing};
@@ -37,22 +37,18 @@ pub struct Replay {
     pub halves: u32,
 }
 
-/// Feed the whole stream through one filter and one detector, and close the reps it finds.
+/// Feed the whole stream through the live pipeline and close the reps it finds.
 ///
-/// `fusion` is where the replay starts: [`Fusion::new`] for a stream whose beginning is a boot, [`Fusion::from_state`] for a window that says the state it was cut from.
+/// `pipeline` is where the replay starts: [`Pipeline::new`] for a stream whose beginning is a boot, [`Pipeline::from_seed`] for a window that says the state it was cut from.
 /// `each` sees every sample, where the filter stood after it, and the speed the detector counted on it, which is what a report on the signals the detections are made of is; a caller that only wants the reps passes a no-op.
 pub fn run(
     samples: &[Sample],
-    mut fusion: Fusion,
-    velocity: [f32; 3],
+    mut pipeline: Pipeline,
     trace_capacity: usize,
     each: &mut dyn FnMut(&Sample, &Filtered, &Integrated, f32),
 ) -> Replay {
     let mut ring_buf = vec![Sample::ZERO; RING];
     let mut ring = SampleRing::new(&mut ring_buf);
-    let mut integration = Integration::from_velocity(velocity);
-    let mut cue_reader = CueReader::new();
-    let mut det = Detector::new();
     let mut window = vec![Sample::ZERO; WINDOW_SAMPLES];
     let mut storage = vec![TracePoint::ZERO; trace_capacity];
     let mut out = Replay {
@@ -68,40 +64,30 @@ pub fn run(
 
     for s in samples {
         ring.push(*s);
-        let filtered = fusion.update(s);
-        let integrated = integration.step(
-            filtered.t_ms,
-            filtered.linear_accel,
-            filtered.resting,
-            filtered.ready,
-            &[],
-        );
-        let cues = cue_reader.update(&filtered);
+        let step = pipeline.update(s, true);
+        let filtered = &step.filtered;
+        let integrated = &step.integrated;
         if filtered.resting {
             out.resting += 1;
         }
         let v = integrated.velocity;
         out.peak_speed = out.peak_speed.max(magnitude(v));
         out.peak_horizontal = out.peak_horizontal.max((v[0] * v[0] + v[1] * v[1]).sqrt());
-        if out.ready_at_ms.is_none() && fusion.ready() {
+        if out.ready_at_ms.is_none() && filtered.ready {
             out.ready_at_ms = Some(s.t_ms);
         }
-        // The device gates the detector on the filter knowing which way is down, and so does this: before that there is no vertical for a rep to be measured against.
-        if fusion.ready() {
-            if let Some(rep) = det.update(&filtered, &integrated, &cues) {
-                let n = ring.copy_window(rep.from_ms, rep.span.end_ms, 0, MARGIN_MS, &mut window);
-                if n > 0 {
-                    let mut trace = TraceBuf::new(&mut storage);
-                    let summary =
-                        compute_rep(&window[..n], &rep.state, Some(rep.turns), &mut trace);
-                    out.reps.push(rep);
-                    out.summaries.push(summary);
-                    out.traces.push(trace.as_slice().to_vec());
-                }
+        if let Some(rep) = step.rep {
+            let n = ring.copy_window(rep.from_ms, rep.span.end_ms, 0, MARGIN_MS, &mut window);
+            if n > 0 {
+                let mut trace = TraceBuf::new(&mut storage);
+                let summary = compute_rep(&window[..n], &rep.state, Some(rep.turns), &mut trace);
+                out.reps.push(rep);
+                out.summaries.push(summary);
+                out.traces.push(trace.as_slice().to_vec());
             }
         }
-        each(s, &filtered, &integrated, det.vertical());
+        each(s, filtered, integrated, pipeline.vertical());
     }
-    out.halves = det.halves();
+    out.halves = pipeline.halves();
     out
 }

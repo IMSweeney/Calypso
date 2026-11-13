@@ -182,6 +182,10 @@ impl Fusion {
         self.state.ready
     }
 
+    pub fn quiet_for_s(&self) -> f32 {
+        self.quiet_s
+    }
+
     pub fn update(&mut self, s: &Sample) -> Filtered {
         let dt = match self.prev_t_ms {
             None => 0.0,

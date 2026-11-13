@@ -3,6 +3,7 @@
 pub mod cues;
 pub mod fusion;
 pub mod integrate;
+pub mod pipeline;
 pub mod rep;
 pub mod trace;
 

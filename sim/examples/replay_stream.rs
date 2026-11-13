@@ -7,8 +7,9 @@
 
 use std::env;
 
-use calypso_core::motion::fusion::{Filtered, Fusion, GRAVITY};
+use calypso_core::motion::fusion::{Filtered, GRAVITY};
 use calypso_core::motion::integrate::Integrated;
+use calypso_core::motion::pipeline::Pipeline;
 use calypso_core::sampler::{Sample, SAMPLE_RATE_HZ};
 use calypso_sim::{captures, replay, stream};
 use libm::atan2f;
@@ -56,13 +57,7 @@ fn main() {
             counted
         );
     };
-    let out = replay::run(
-        &samples,
-        Fusion::new(),
-        [0.0; 3],
-        replay::TRACE_CAPACITY,
-        &mut each,
-    );
+    let out = replay::run(&samples, Pipeline::new(), replay::TRACE_CAPACITY, &mut each);
 
     for (i, (rep, summary)) in out.reps.iter().zip(&out.summaries).enumerate() {
         println!(
