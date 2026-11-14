@@ -281,7 +281,15 @@ impl Legs {
             return ended;
         }
         if f.resting {
-            return self.take();
+            let ended = self.take();
+            // The stroke ended here, so the next one starts at the rest rather than at the turn this one came from.
+            if ended.is_some() {
+                self.prev = Some(Turn {
+                    ms: f.t_ms,
+                    state: self.hist.state_at(f.t_ms),
+                });
+            }
+            return ended;
         }
         None
     }
@@ -417,7 +425,7 @@ fn absf(x: f32) -> f32 {
     }
 }
 
-pub const DETECTOR_VERSION: u32 = 10;
+pub const DETECTOR_VERSION: u32 = 11;
 
 impl msg::RepSummary {
     pub fn is_a_rep(&self) -> bool {

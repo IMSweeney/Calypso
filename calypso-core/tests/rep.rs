@@ -165,6 +165,37 @@ fn a_stroke_the_bar_is_turned_through_is_not_a_lift() {
 }
 
 #[test]
+fn a_pause_at_the_top_begins_the_next_rep() {
+    let mut s = Script::new();
+    s.still(300, false);
+    s.stroke(1000, -0.5);
+    s.still(300, false);
+    s.stroke(1000, 0.5);
+    s.still(300, false);
+
+    let pause = s.t_ms;
+    s.still(5_000, true);
+
+    s.stroke(1000, -0.5);
+    s.still(300, false);
+    s.stroke(1000, 0.5);
+    s.still(300, false);
+    s.still(2_000, true);
+
+    assert_eq!(
+        s.reps.len(),
+        2,
+        "two strokes either side of a pause are two reps"
+    );
+    let second = s.reps[1];
+    assert!(
+        second.span.start_ms >= pause,
+        "the rep after the pause starts at {pause} ms, where the bar came to rest, not at {} ms, the turn before it",
+        second.span.start_ms
+    );
+}
+
+#[test]
 fn a_momentary_wobble_inside_a_stroke_is_still_a_lift() {
     let mut s = Script::new();
     s.still(300, false);
