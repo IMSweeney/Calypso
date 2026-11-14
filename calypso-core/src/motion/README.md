@@ -2,7 +2,7 @@
 
 Turns raw accelerometer and gyroscope samples into rep spans, traces, and summaries.
 
-**Status: the layers and the replay are in place.** This describes the module's shape; the implementation plan below records the order it was built in.
+**Status: the layers and the replay are in place.** This describes the module's shape.
 
 ## Design
 
@@ -130,14 +130,3 @@ motion/
   trace.rs      replay, detrend, decimate
   pipeline.rs   `Pipeline`: the live entry point through fusion, cues, integration, detection
 ```
-
-## Implementation plan
-
-1. Add `Anchor { t_ms, kind, apply }` and `Integration`, with `step`; move `zero_velocity` and world-frame velocity out of fusion.
-2. Reduce `FusionState` to a filter snapshot: attitude, biases, `resting`, `ready`; expose `resting` as the local gate.
-3. Add a replay entry point on fusion that re-seeds bias and gravity from a confirmed rest window.
-4. Extract cues into their own module; keep them stateless beyond one sample.
-5. Rewrite detection around `v`, `v_cross`, `resting`, and cues; delete its private leaky velocity.
-6. Split `rep.rs` into rep and set validation plus `trace.rs` replay; detrend and decimate in replay.
-7. Move tests to the new seams; delete assertions that restate the layering.
-8. Point the firmware and sim at the same top-level entry point once the layers are green.
