@@ -54,3 +54,6 @@ to; a spike outside a band is a stage reacting to something the detector did not
 - **The trace panel against the band.** A rep whose trace leaves its band's height range is a rep
   whose position came from a velocity that never returned; a rep whose trace only travels one way
   is a span whose ends are not at the same height, which no detrend can fix.
+- **`rate_mag` against the band.** A lift turns the device only slightly; carrying, loading or
+  adjusting the bar turns it a lot. A stroke with a sustained rate the bar cannot reach while it is
+  being lifted is motion the detector should decline, so a band around one is a span to check.

@@ -21,6 +21,12 @@ pub const MARGIN_MS: u32 = 500;
 const HIST: usize = 64;
 /// Smallest dominant-axis travel (metres) a stored summary can report and still be called a rep.
 pub const MIN_ROM_M: f32 = 0.07;
+/// Rotation rate (rad/s) a lifted bar does not reach, so time spent above it is the bar being carried.
+const CARRIED_RATE: f32 = 1.0;
+/// How much of a rep may be spent above [`CARRIED_RATE`] before it is the bar being carried. A lifted bar stays under this through every stroke of the recorded sets; loading a clip onto one does not.
+const CARRIED_MS: u32 = 350;
+/// Longest step a sample is credited with, so a gap in the stream cannot be counted as time spent turning.
+const STEP_CAP_MS: u32 = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RepSpan {
@@ -161,6 +167,8 @@ struct Leg {
     end_ms: u32,
     /// The state where the stroke started, which is what a stored window is seeded with.
     state: RepSeed,
+    /// Time the stroke spent turning faster than a lift does, which says whether the bar was carried through it.
+    carried_ms: u32,
 }
 struct Legs {
     /// The last motion the detector saw, for the readouts a caller takes between samples.
@@ -175,6 +183,8 @@ struct Legs {
     hist: Hist,
     /// Strokes the bar has made since the detector started, which is the count that says whether detection got past its first stage.
     halves: u32,
+    /// Time the stroke in progress has spent turning faster than a lift does.
+    carried_ms: u32,
 }
 
 impl Legs {
@@ -186,10 +196,12 @@ impl Legs {
             ending: None,
             hist: Hist::new(),
             halves: 0,
+            carried_ms: 0,
         }
     }
 
     fn take(&mut self) -> Option<Leg> {
+        let carried_ms = core::mem::take(&mut self.carried_ms);
         let ending = self.ending.take()?;
         if ending.quietest > TURN_QUIET_MPS && ending.cue_ms.is_none() {
             return None;
@@ -202,12 +214,17 @@ impl Legs {
             start_ms: prev.ms,
             end_ms: ending.quietest_ms,
             state: prev.state,
+            carried_ms,
         })
     }
 
     fn update(&mut self, f: &Filtered, m: &Integrated, cues: &Cues) -> Option<Leg> {
         let vz = m.v_cross[2];
         let bar = m.velocity[2];
+        let dt_ms = m.t_ms.saturating_sub(self.last.t_ms).min(STEP_CAP_MS);
+        if cues.rate_mag > CARRIED_RATE {
+            self.carried_ms = self.carried_ms.saturating_add(dt_ms);
+        }
         self.last = *m;
         self.hist.push(Note {
             t_ms: f.t_ms,
@@ -236,6 +253,7 @@ impl Legs {
             // A rest ends the stroke too, so the next one counts whichever way it goes.
             self.prev = None;
             self.side = 0;
+            self.carried_ms = 0;
         }
 
         let side = if vz >= SWING_MPS {
@@ -312,6 +330,10 @@ impl Reps {
             self.pending = Some(leg);
             return None;
         };
+        if first.carried_ms + leg.carried_ms > CARRIED_MS {
+            // The bar was turned to get it there, so the strokes either side of that are not one lift.
+            return None;
+        }
         match join(first, leg) {
             Some(rep) => Some(rep),
             None => {
@@ -395,7 +417,7 @@ fn absf(x: f32) -> f32 {
     }
 }
 
-pub const DETECTOR_VERSION: u32 = 9;
+pub const DETECTOR_VERSION: u32 = 10;
 
 impl msg::RepSummary {
     pub fn is_a_rep(&self) -> bool {
