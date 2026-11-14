@@ -26,6 +26,7 @@ fn sample(t_ms: u32, velocity: f32, cue: bool) -> (Filtered, Integrated, Cues) {
         rate_mag: 0.0,
         tilt: 0.0,
         sign_change: cue,
+        landing: None,
     };
     (f, m, cues)
 }

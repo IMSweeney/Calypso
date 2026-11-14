@@ -15,6 +15,8 @@ struct Script {
     detector: Detector,
     t_ms: u32,
     reps: Vec<DetectedRep>,
+    /// The speed the sample before carried, so the change in it is the acceleration's sign.
+    last_velocity: f32,
 }
 
 impl Script {
@@ -23,6 +25,7 @@ impl Script {
             detector: Detector::new(),
             t_ms: 0,
             reps: Vec::new(),
+            last_velocity: 0.0,
         }
     }
 
@@ -65,7 +68,17 @@ impl Script {
         self.sample_at(velocity, resting, 0.0);
     }
 
+    /// One sample of the bar being stopped by what it landed on: the filter sees a shock here.
+    fn landing(&mut self) {
+        let at = self.t_ms;
+        self.sample_with(0.0, false, 0.0, Some(at));
+    }
+
     fn sample_at(&mut self, velocity: f32, resting: bool, rate_mag: f32) {
+        self.sample_with(velocity, resting, rate_mag, None);
+    }
+
+    fn sample_with(&mut self, velocity: f32, resting: bool, rate_mag: f32, landing: Option<u32>) {
         let f = Filtered {
             t_ms: self.t_ms,
             linear_accel: [0.0; 3],
@@ -79,11 +92,21 @@ impl Script {
             velocity: [0.0, 0.0, velocity],
             v_cross: [0.0, 0.0, velocity],
         };
+        let accel = velocity - self.last_velocity;
+        self.last_velocity = velocity;
+        let sign_vert = if accel > 0.0 {
+            1
+        } else if accel < 0.0 {
+            -1
+        } else {
+            0
+        };
         let cues = Cues {
-            sign_vert: 0,
+            sign_vert,
             rate_mag,
             tilt: 0.0,
             sign_change: false,
+            landing,
         };
         if let Some(rep) = self.detector.update(&f, &m, &cues) {
             self.reps.push(rep);
@@ -192,6 +215,50 @@ fn a_pause_at_the_top_begins_the_next_rep() {
         second.span.start_ms >= pause,
         "the rep after the pause starts at {pause} ms, where the bar came to rest, not at {} ms, the turn before it",
         second.span.start_ms
+    );
+}
+
+#[test]
+fn a_bar_put_down_turns_where_it_lands() {
+    let mut s = Script::new();
+    s.still(300, false);
+    // A lift: up, and down fast enough that the detector sees the top.
+    s.stroke(1000, 0.5);
+    s.stroke(1000, -0.5);
+    // And a lowering too slow for the swing threshold, which ends by the bar reaching the ground.
+    s.stroke(400, -0.15);
+    let landing = s.t_ms;
+    s.landing();
+    s.still(300, false);
+    // The next lift, landing the same way.
+    s.stroke(1000, 0.5);
+    s.stroke(1000, -0.5);
+    s.stroke(400, -0.15);
+    let next_landing = s.t_ms;
+    s.landing();
+    s.still(500, false);
+
+    let first = s.reps.first().expect("two lifts made a rep");
+    assert_eq!(
+        first.span.end_ms, landing,
+        "the rep ends at {landing} ms, where the bar landed, not at {} ms",
+        first.span.end_ms
+    );
+    assert_eq!(
+        first.turns.zeros.last().and_then(|a| *a).map(|a| a.t_ms),
+        Some(landing),
+        "the landing is the turn the rep is anchored on"
+    );
+
+    let second = s.reps.get(1).expect("the lift after a landing made a rep");
+    assert_eq!(
+        second.span.start_ms, landing,
+        "the next rep starts where the bar landed, not at {} ms",
+        second.span.start_ms
+    );
+    assert_eq!(
+        second.span.end_ms, next_landing,
+        "and ends where it landed again"
     );
 }
 

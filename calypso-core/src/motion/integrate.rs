@@ -34,20 +34,24 @@ pub struct Anchor {
 }
 
 impl Anchor {
-    pub const fn rest(t_ms: u32) -> Self {
+    /// An anchor at `t_ms` of `kind`: a rest is zeroed before its step, a turn after it.
+    pub const fn at(t_ms: u32, kind: AnchorKind) -> Self {
         Anchor {
             t_ms,
-            kind: AnchorKind::Rest,
-            apply: Apply::Before,
+            kind,
+            apply: match kind {
+                AnchorKind::Rest => Apply::Before,
+                AnchorKind::Turn => Apply::After,
+            },
         }
     }
 
+    pub const fn rest(t_ms: u32) -> Self {
+        Anchor::at(t_ms, AnchorKind::Rest)
+    }
+
     pub const fn turn(t_ms: u32) -> Self {
-        Anchor {
-            t_ms,
-            kind: AnchorKind::Turn,
-            apply: Apply::After,
-        }
+        Anchor::at(t_ms, AnchorKind::Turn)
     }
 }
 

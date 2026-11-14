@@ -100,10 +100,10 @@ Edge 1 is replay-only because fusion cannot wait for detection and still produce
 | Block | Input | Output | State | Inner loop |
 | --- | --- | --- | --- | --- |
 | **Fusion** | raw `accel[3]`, `gyro[3]`, `t_ms` | `a_world[3]`, `attitude`, `accel_bias`, `gyro_bias`, `resting`, `ready` | attitude quat; both biases; ring of raw samples for the rest window; `prev_t`; `quiet_s`; `ready` | gyro predicts attitude, accel pulls it toward gravity; bias tracked while resting |
-| **Cues** | `a_world`, `attitude`, bias-corrected rate | `sign_vert`, `rate_mag`, `tilt`, `sign_change` event | previous sign; previous rate and tilt; last event time | none; comparison only |
+| **Cues** | `a_world`, `attitude`, bias-corrected rate | `sign_vert`, `rate_mag`, `tilt`, `sign_change` event, `landing` | previous sign; previous rate and tilt; the last few samples of vertical acceleration and their times; last event time | none; comparison only; a landing is a peak of vertical acceleration that rises fast and comes back off |
 | **Integration** | `a_vert`, `dt`, `Anchor` events | `v[3]`, `p[3]`, `v_cross` | `v`, `p`, `prev_t`, per-rep accumulator, anchor cursor, high-pass state if used | trapezoid; ZUPT at anchors; detrend at finish |
-| **Detection** | `v`, `v_cross`, `resting`, cues, optional `p` | `Anchor { t_ms, kind, apply }`, `Leg` | crossing side; pending turn; quietest tracker; time the stroke has spent turning; history of `(t, v, FusionState)`; lag buffer; candidate anchors | hysteresis on crossings; confirmation with cues; a rest ends the stroke and begins the next one where the bar came to rest, and a long rest clears the pending turn and the crossing side; a stroke that spends too long turning is the bar being carried, not lifted, and is not a rep |
-| **Reps / Set** | anchors and legs, `resting`, `t_ms` | `RepSpan`, `RepSummary`, set state | pending leg; `resting_since`; `rested`; set open; rep count | duration and ROM validation; inter-rep gap; set end |
+| **Detection** | `v`, `v_cross`, `resting`, cues, optional `p` | `Anchor { t_ms, kind, apply }`, `Leg` | crossing side; pending turn; quietest tracker; time the stroke has spent turning and lifting; history of `(t, v, FusionState)`; lag buffer; candidate anchors | hysteresis on crossings; confirmation with cues; a landing ends the stroke it lands on and begins the next one at zero, and a stroke that left the ground ends only when it lands; a rest ends the stroke and begins the next one where the bar came to rest, and a long rest clears the pending turn and the crossing side; a stroke that spends too long turning is the bar being carried, not lifted, and is not a rep |
+| **Reps / Set** | anchors and legs, `resting`, `t_ms` | `RepSpan`, `RepSummary`, set state | pending leg; `resting_since`; `rested`; set open; rep count | two halves make a rep; a stroke from one landing to the next is a whole rep and waits for no partner; a rep off the ground has to be lifted and not carried; duration and ROM validation; inter-rep gap; set end |
 | **Finalize / Trace** | span, seed state, samples, confirmed anchors | trace points, ROM, peak velocity, roll and pitch ranges | replay fusion; replay integrator; decimation cursor | replay from seed; ZUPT; detrend; decimate |
 
 ## Invariants
@@ -113,6 +113,7 @@ Edge 1 is replay-only because fusion cannot wait for detection and still produce
 - Detection owns no filter and no integrator.
 - An anchor carries its timestamp and whether it applies before or after the integration step.
 - `resting` is causal and local; it is not an anchor and makes no zero-velocity claim.
+- A landing is the one turn the sensor reports outright: the bar is stopped by what it hit, and the shock is in the acceleration, so it is a zero-velocity instant the detector does not have to infer.
 - Bias and gravity corrections from confirmed anchors happen in replay.
 - Replay is a pure function of seed, samples, and anchors.
 - Bias subtraction at an anchor is the primary drift fix; a high-pass may shape `v_cross` but never `p`.

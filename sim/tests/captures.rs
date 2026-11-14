@@ -165,16 +165,26 @@ fn a_stored_rep_begins_and_ends_at_the_same_height() {
     assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
 }
 
-/// The height a rep's trace begins at, is at the turn between its halves, and ends at.
+/// The height a rep's trace begins at, is at the far end of its stroke, and ends at.
 ///
 /// The end is read at the rep's own last turn rather than at the window's last sample, because the window plots a margin past the rep and what the bar did in it is not what is being measured.
+/// The far end is the turn the detector named between the rep's halves; a rep that is a whole stroke off the ground has no turn there, and its far end is wherever the trace got furthest from where it began.
 fn shape(rep: &DetectedRep, trace: &[TracePoint]) -> Option<(f32, f32, f32)> {
-    let middle = rep.turns.zeros[1].map_or(rep.span.end_ms, |anchor| anchor.t_ms);
-    Some((
-        trace.first()?.pos[2],
-        height_at(trace, middle)?,
-        height_at(trace, rep.span.end_ms)?,
-    ))
+    let start = trace.first()?.pos[2];
+    let middle = match rep.turns.zeros[1] {
+        Some(anchor) => height_at(trace, anchor.t_ms)?,
+        None => trace
+            .iter()
+            .filter(|p| (rep.span.start_ms..=rep.span.end_ms).contains(&p.t_ms))
+            .map(|p| p.pos[2])
+            .min_by(|a, b| {
+                (a - start)
+                    .abs()
+                    .partial_cmp(&(b - start).abs())
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            })?,
+    };
+    Some((start, middle, height_at(trace, rep.span.end_ms)?))
 }
 
 fn height_at(trace: &[TracePoint], t_ms: u32) -> Option<f32> {

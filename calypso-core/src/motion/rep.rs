@@ -2,7 +2,7 @@
 
 use crate::motion::cues::Cues;
 use crate::motion::fusion::{Filtered, FusionState};
-use crate::motion::integrate::{Anchor, Integrated};
+use crate::motion::integrate::{Anchor, AnchorKind, Integrated};
 use crate::pb::msg;
 
 /// Speed (m/s) the bar has to reach going each way for a stroke to be a leg.
@@ -27,6 +27,10 @@ const CARRIED_RATE: f32 = 1.0;
 const CARRIED_MS: u32 = 350;
 /// Longest step a sample is credited with, so a gap in the stream cannot be counted as time spent turning.
 const STEP_CAP_MS: u32 = 100;
+/// How much of a rep off the ground has to be spent accelerating up before it is a lift rather than the bar being put somewhere.
+///
+/// A deadlift's five sets spend 1.4–4.3 s of each rep accelerating up; handling the bar between sets does not.
+const LIFTED_MS: u32 = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RepSpan {
@@ -155,10 +159,34 @@ impl Hist {
     }
 }
 
+/// Which end of a stroke a turn is, and how the bar came to zero there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnEnd {
+    /// The bar was already still: a rest, and the bottom a stroke begins from.
+    Still,
+    /// The bar was stopped by what it landed on, which is the bottom of a lift off the floor.
+    Landed,
+    /// The bar turned in the air, which is the top of a stroke.
+    Reversed,
+}
+
+impl TurnEnd {
+    /// How the integration zeroes the bar at this turn.
+    fn anchor(self) -> AnchorKind {
+        match self {
+            // A landing's deceleration is inside the step that lands it; anything else was still before its step began.
+            TurnEnd::Landed => AnchorKind::Turn,
+            _ => AnchorKind::Rest,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Turn {
     ms: u32,
     state: RepSeed,
+    /// How the bar came to zero here, which is also which end of a stroke it is.
+    end: TurnEnd,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -167,8 +195,14 @@ struct Leg {
     end_ms: u32,
     /// The state where the stroke started, which is what a stored window is seeded with.
     state: RepSeed,
+    /// How the stroke began, which is how the window it seeds is anchored.
+    start_end: TurnEnd,
+    /// How the stroke ended: on the ground, in the air, or at a rest.
+    end_end: TurnEnd,
     /// Time the stroke spent turning faster than a lift does, which says whether the bar was carried through it.
     carried_ms: u32,
+    /// Time the bar spent accelerating up through the stroke, which is what a lift has and handling does not.
+    lifted_ms: u32,
 }
 struct Legs {
     /// The last motion the detector saw, for the readouts a caller takes between samples.
@@ -185,6 +219,8 @@ struct Legs {
     halves: u32,
     /// Time the stroke in progress has spent turning faster than a lift does.
     carried_ms: u32,
+    /// Time the stroke in progress has spent accelerating up.
+    lifted_ms: u32,
 }
 
 impl Legs {
@@ -197,11 +233,23 @@ impl Legs {
             hist: Hist::new(),
             halves: 0,
             carried_ms: 0,
+            lifted_ms: 0,
         }
     }
 
-    fn take(&mut self) -> Option<Leg> {
+    /// Forget the stroke in progress, so the next one starts from wherever the bar is now.
+    fn start_afresh(&mut self) {
+        self.prev = None;
+        self.side = 0;
+        self.carried_ms = 0;
+        self.lifted_ms = 0;
+        self.ending = None;
+    }
+
+    /// Close the stroke in progress on the turn it ended at, which `end` says how the bar arrived at.
+    fn take(&mut self, end: TurnEnd) -> Option<Leg> {
         let carried_ms = core::mem::take(&mut self.carried_ms);
+        let lifted_ms = core::mem::take(&mut self.lifted_ms);
         let ending = self.ending.take()?;
         if ending.quietest > TURN_QUIET_MPS && ending.cue_ms.is_none() {
             return None;
@@ -209,13 +257,18 @@ impl Legs {
         let ended = Turn {
             ms: ending.quietest_ms,
             state: self.hist.state_at(ending.quietest_ms),
+            end,
         };
-        self.prev.replace(ended).map(|prev| Leg {
+        let leg = self.prev.replace(ended).map(|prev| Leg {
             start_ms: prev.ms,
             end_ms: ending.quietest_ms,
             state: prev.state,
+            start_end: prev.end,
+            end_end: end,
             carried_ms,
-        })
+            lifted_ms,
+        });
+        leg
     }
 
     fn update(&mut self, f: &Filtered, m: &Integrated, cues: &Cues) -> Option<Leg> {
@@ -224,6 +277,9 @@ impl Legs {
         let dt_ms = m.t_ms.saturating_sub(self.last.t_ms).min(STEP_CAP_MS);
         if cues.rate_mag > CARRIED_RATE {
             self.carried_ms = self.carried_ms.saturating_add(dt_ms);
+        }
+        if cues.sign_vert > 0 {
+            self.lifted_ms = self.lifted_ms.saturating_add(dt_ms);
         }
         self.last = *m;
         self.hist.push(Note {
@@ -244,6 +300,17 @@ impl Legs {
             }
         }
 
+        if let Some(landed_ms) = cues.landing {
+            // The bar was stopped by what it landed on: the turn this stroke ended on is that instant, and the next begins there at zero.
+            self.side = 0;
+            self.ending = Some(Ending {
+                quietest_ms: landed_ms,
+                quietest: 0.0,
+                cue_ms: Some(landed_ms),
+            });
+            return self.take(TurnEnd::Landed);
+        }
+
         if f.resting
             && self.ending.is_none()
             && self
@@ -251,9 +318,14 @@ impl Legs {
                 .is_some_and(|turn| f.t_ms.saturating_sub(turn.ms) > REST_MS)
         {
             // A rest ends the stroke too, so the next one counts whichever way it goes.
-            self.prev = None;
-            self.side = 0;
-            self.carried_ms = 0;
+            self.start_afresh();
+        }
+        if self
+            .prev
+            .is_some_and(|turn| turn.end == TurnEnd::Landed && f.t_ms - turn.ms > REST_MS)
+        {
+            // The bar has been down on what it landed on long enough that the stroke off it is over.
+            self.start_afresh();
         }
 
         let side = if vz >= SWING_MPS {
@@ -266,11 +338,22 @@ impl Legs {
         if side != 0 && side != self.side {
             self.side = side;
             self.halves += 1;
-            let ended = self.take();
+            // A stroke that began on the ground only ends on the ground: what it passes through in the air is not a turn.
+            let off_the_floor = self.prev.is_some_and(|turn| turn.end == TurnEnd::Landed);
+            let ended = if off_the_floor {
+                None
+            } else {
+                self.take(if side > 0 {
+                    TurnEnd::Still
+                } else {
+                    TurnEnd::Reversed
+                })
+            };
             if self.prev.is_none() {
                 self.prev = self.hist.turn(f.t_ms).map(|note| Turn {
                     ms: note.t_ms,
                     state: note.state,
+                    end: TurnEnd::Still,
                 });
             }
             self.ending = Some(Ending {
@@ -281,12 +364,17 @@ impl Legs {
             return ended;
         }
         if f.resting {
-            let ended = self.take();
+            if self.prev.is_some_and(|turn| turn.end == TurnEnd::Landed) {
+                // The bar is on the ground it landed on: that stroke ends when it leaves and lands again.
+                return None;
+            }
+            let ended = self.take(TurnEnd::Still);
             // The stroke ended here, so the next one starts at the rest rather than at the turn this one came from.
             if ended.is_some() {
                 self.prev = Some(Turn {
                     ms: f.t_ms,
                     state: self.hist.state_at(f.t_ms),
+                    end: TurnEnd::Still,
                 });
             }
             return ended;
@@ -334,6 +422,14 @@ impl Reps {
             self.pending = None;
             self.rested = false;
         }
+        if leg.start_end == TurnEnd::Landed && leg.end_end == TurnEnd::Landed {
+            // A stroke from one landing to the next is a whole lift, so it waits for no partner.
+            return whole(leg);
+        }
+        if leg.start_end == TurnEnd::Landed {
+            // A stroke that came off the ground and did not land again is not a lift.
+            return None;
+        }
         let Some(first) = self.pending.take() else {
             self.pending = Some(leg);
             return None;
@@ -352,6 +448,36 @@ impl Reps {
     }
 }
 
+/// The rep a stroke makes on its own: off the bottom of one landing and back onto the bottom of the next.
+///
+/// Its middle is not a turn the detector saw — the bar passes through the top of the lift without stopping — so the trace is left to find where it went.
+fn whole(leg: Leg) -> Option<DetectedRep> {
+    let span = RepSpan {
+        start_ms: leg.start_ms,
+        end_ms: leg.end_ms,
+    };
+    if leg.carried_ms > CARRIED_MS
+        || leg.lifted_ms < LIFTED_MS
+        || !(MIN_SWING_MS..=MAX_SWING_MS).contains(&span.duration_ms())
+    {
+        return None;
+    }
+    Some(DetectedRep {
+        span,
+        turns: RepTurns {
+            start_ms: span.start_ms,
+            end_ms: span.end_ms,
+            zeros: [
+                Some(Anchor::at(span.start_ms, leg.start_end.anchor())),
+                None,
+                Some(Anchor::at(span.end_ms, leg.end_end.anchor())),
+            ],
+        },
+        from_ms: span.start_ms,
+        state: leg.state,
+    })
+}
+
 fn join(first: Leg, second: Leg) -> Option<DetectedRep> {
     let span = RepSpan {
         start_ms: first.start_ms,
@@ -366,7 +492,7 @@ fn join(first: Leg, second: Leg) -> Option<DetectedRep> {
             start_ms: span.start_ms,
             end_ms: span.end_ms,
             zeros: [
-                Some(Anchor::rest(span.start_ms)),
+                Some(Anchor::at(span.start_ms, first.start_end.anchor())),
                 Some(Anchor::turn(first.end_ms)),
                 Some(Anchor::turn(span.end_ms)),
             ],
@@ -425,7 +551,7 @@ fn absf(x: f32) -> f32 {
     }
 }
 
-pub const DETECTOR_VERSION: u32 = 11;
+pub const DETECTOR_VERSION: u32 = 12;
 
 impl msg::RepSummary {
     pub fn is_a_rep(&self) -> bool {
