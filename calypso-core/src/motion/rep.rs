@@ -233,7 +233,9 @@ impl Legs {
                 .prev
                 .is_some_and(|turn| f.t_ms.saturating_sub(turn.ms) > REST_MS)
         {
+            // A rest ends the stroke too, so the next one counts whichever way it goes.
             self.prev = None;
+            self.side = 0;
         }
 
         let side = if vz >= SWING_MPS {
@@ -393,7 +395,7 @@ fn absf(x: f32) -> f32 {
     }
 }
 
-pub const DETECTOR_VERSION: u32 = 8;
+pub const DETECTOR_VERSION: u32 = 9;
 
 impl msg::RepSummary {
     pub fn is_a_rep(&self) -> bool {
