@@ -29,6 +29,9 @@ CAPTURES = ROOT / "captures"
 X_COLOR, Y_COLOR, Z_COLOR = "tab:blue", "tab:green", "tab:red"
 BAND, TURN = "0.92", "tab:orange"
 
+# The three turns a rep is anchored on. A rep with no turn between its halves leaves that cell empty.
+TURNS = ("turn0_ms", "turn1_ms", "turn2_ms")
+
 
 def rows(path):
     with open(path, newline="") as f:
@@ -104,7 +107,7 @@ def finish(ax, title, unit, zero=False):
 
 def plot_set(data, entry, index, margin, out):
     spans = [(float(r["t_start_ms"]) / 1000, float(r["t_end_ms"]) / 1000) for r in data["reps"]]
-    turns = sorted({float(r[key]) / 1000 for r in data["reps"] for key in ("turn0_ms", "turn1_ms", "turn2_ms")})
+    turns = sorted({float(r[key]) / 1000 for r in data["reps"] for key in TURNS if r[key]})
     first, last = spans[0][0] - margin, spans[-1][1] + margin
     keep = [i for i, t in enumerate(data["t"]) if first <= t <= last]
     t = [data["t"][i] for i in keep]
@@ -186,9 +189,9 @@ def plot_rep(data, entry, index, position, margin, out):
     rep_rows = data["reps"]
     gid = int(rep_rows[position]["rep"])
     spans = [(float(r["t_start_ms"]) / 1000, float(r["t_end_ms"]) / 1000) for r in rep_rows]
-    turns = sorted({float(r[key]) / 1000 for r in rep_rows for key in ("turn0_ms", "turn1_ms", "turn2_ms")})
+    turns = sorted({float(r[key]) / 1000 for r in rep_rows for key in TURNS if r[key]})
     start, end = spans[position]
-    anchors = [float(rep_rows[position][key]) / 1000 for key in ("turn0_ms", "turn1_ms", "turn2_ms")]
+    anchors = [float(rep_rows[position][key]) / 1000 for key in TURNS if rep_rows[position][key]]
     first, last = start - margin, end + margin
     keep = [i for i, t in enumerate(data["t"]) if first <= t <= last]
     t = [data["t"][i] for i in keep]

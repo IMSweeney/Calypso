@@ -9,11 +9,17 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
+use calypso_core::motion::integrate::Anchor;
 use calypso_core::motion::pipeline::Pipeline;
 use calypso_sim::{captures, replay, stream};
 
 /// The gap that separates one set from the next: the rest between sets is minutes, and the pause at the top of a stroke is a couple of seconds.
 const SET_GAP_MS: u32 = 30_000;
+
+/// A turn as a cell: a rep that has no turn there — one stroke from landing to landing has nothing between its halves — writes nothing rather than a time it never had.
+fn turn(anchor: Option<Anchor>) -> String {
+    anchor.map_or_else(String::new, |a| a.t_ms.to_string())
+}
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -63,9 +69,9 @@ fn main() {
             "{set},{i},{},{},{},{},{},{},{:.4},{back:.4}",
             rep.span.start_ms,
             rep.span.end_ms,
-            rep.turns.zeros[0].map_or(0, |a| a.t_ms),
-            rep.turns.zeros[1].map_or(0, |a| a.t_ms),
-            rep.turns.zeros[2].map_or(0, |a| a.t_ms),
+            turn(rep.turns.zeros[0]),
+            turn(rep.turns.zeros[1]),
+            turn(rep.turns.zeros[2]),
             rep.span.duration_ms(),
             found.summaries[i].rom,
         )
