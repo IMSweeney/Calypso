@@ -20,6 +20,7 @@ cargo run --example replay_capture -- <dump.pblog>      # stored windows, throug
 cargo run --example device_log -- <image.bin>           # what a flash-partition image holds
 cargo run --example noise -- <capture.pblog>...         # the sensors' noise against the datasheet
 cargo run --example raw_dump -- <dump.pblog>            # what a window's raw samples say
+cargo run --example pipeline_dump -- <capture.pblog> [--out DIR]  # every stage, sample by sample, for replay/
 ```
 
 `detector_report` is the one command that runs all of it: the same cells the maps draw, counted

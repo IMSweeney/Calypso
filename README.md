@@ -11,6 +11,7 @@ lifter who leaned forward, is visible afterwards.
 | `calypso-app/` | The Flutter client: syncs reps over BLE, lists them, plots one in 3D. |
 | `sim/` | Simulation and fixture tooling: synthetic motion through the real detector, and the `.pblog` fixtures the app is developed against. Depends on `calypso-core`; nothing depends on it. |
 | `proto/` | The single source of truth for the interface. `calypso.proto` is the wire format (messages and records), `calypso_gatt.proto` is the device's BLE table. The firmware generates Rust from both, the app generates Dart. |
+| `replay/` | Drawing the pipeline: every stage of one recorded set, so a rep that reads wrong has a picture and not just a number. It replays through `sim`, so it cannot disagree with the device. |
 | `dist/` | Deployable firmware images, one folder per chip family, each with a `flash.sh`. Images are build artifacts, not committed. |
 
 ## Quick start
