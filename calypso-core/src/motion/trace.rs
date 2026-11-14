@@ -282,11 +282,8 @@ pub fn compute_rep(
     });
     let mut pass = replay(samples, from, turns, out, shift);
     if let Some(turns) = turns {
-        let rom = pass.hi[2] - pass.lo[2];
-        // A residual the size of the travel is a span whose ends are not at the same height, not drift to take out.
-        if pass.p_end[2].abs() <= 0.25 * rom {
-            detrend_position(out, pass.p_end[2], turns, &mut pass);
-        }
+        // A rep begins and ends at a turn, where the bar is still, so it began and ended at the same height: whatever height the trace has left is drift to take out.
+        detrend_position(out, pass.p_end[2], turns, &mut pass);
     }
 
     let mut summary = msg::RepSummary {

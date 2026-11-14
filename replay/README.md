@@ -51,9 +51,10 @@ to; a spike outside a band is a stage reacting to something the detector did not
   by the span's length into a position that ramps.
 - **`resting`.** How often the filter calls the bar still inside a set says whether gravity and
   bias are being re-estimated at all.
-- **The trace panel against the band.** A rep whose trace leaves its band's height range is a rep
-  whose position came from a velocity that never returned; a rep whose trace only travels one way
-  is a span whose ends are not at the same height, which no detrend can fix.
+- **The trace panel against the band.** Every rep is put back on the height it began at, because
+  both of its ends are turns where the bar is still, so a trace that does not close is a bug rather
+  than a rep that drifted. What the panel still shows is the shape: a trace that only travels one
+  way, or whose deepest point is not at its middle anchor, is a span that is not a full stroke.
 - **`rate_mag` against the band.** A lift turns the device only slightly; carrying, loading or
   adjusting the bar turns it a lot. A stroke with a sustained rate the bar cannot reach while it is
   being lifted is motion the detector should decline, so a band around one is a span to check.

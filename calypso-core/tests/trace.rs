@@ -128,6 +128,42 @@ fn a_rep_removes_the_velocity_its_bias_carried() {
     );
 }
 
+/// A rep ends at the height it began, whatever speed it was carrying into it.
+///
+/// Both ends of a rep are turns, where the bar is still, so the height it ended at is the height it began at. How far the replay drifted is not evidence against that: a rep that came back but integrated low still has to be put back, or the trace draws a bar that finished its stroke somewhere else.
+#[test]
+fn a_rep_ends_at_the_height_it_began() {
+    let a = 0.4f32;
+    let samples = known_motion(a, 1500, 0);
+    let turns = RepTurns {
+        start_ms: samples[0].t_ms,
+        end_ms: samples.last().unwrap().t_ms,
+        zeros: [None; 3],
+    };
+    // The seed carries the speed the live integration had when the window opened, which is the drift the replay inherits.
+    let seed = RepSeed {
+        velocity: [0.0, 0.0, 0.15],
+        ..RepSeed::LEVEL
+    };
+
+    let mut storage = [TracePoint::ZERO; TRACE_CAP];
+    let mut buf = TraceBuf::new(&mut storage);
+    let sum = compute_rep(&samples, &seed, Some(turns), &mut buf);
+
+    let first = buf.get(0).unwrap().pos[2];
+    let last = buf.get(buf.len() - 1).unwrap().pos[2];
+    assert!(first.abs() < 1e-3);
+    assert!(
+        last.abs() < 0.02,
+        "a rep that came back to its start ended {last:.3} m away"
+    );
+    assert!(
+        (sum.rom - a).abs() < 0.2 * a,
+        "rom {:.3} for {a} m of travel",
+        sum.rom
+    );
+}
+
 /// A still sensor carrying an offset integrates nothing once that offset is known — which is what a trace's own header says it is.
 ///
 /// This is the property the whole trace rests on, and it is the one the raw accelerometer can state plainly: a fused "linear acceleration" reads zero at rest whatever the truth is, so a constant offset there is only distinguishable from motion by its constancy. Here the offset is what has to be explained, the seed says what it is, and a window of a sensor that never moved is nothing.
