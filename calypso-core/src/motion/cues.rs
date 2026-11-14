@@ -108,12 +108,8 @@ impl CueReader {
     fn landing(&mut self) -> Option<u32> {
         let (now_ms, now) = self.at(0)?;
         for back in 1..=CONTACT_SETTLE {
-            let Some((peak_ms, peak)) = self.at(back) else {
-                return None;
-            };
-            let Some((before_ms, before)) = self.at(back + 1) else {
-                return None;
-            };
+            let (peak_ms, peak) = self.at(back)?;
+            let (before_ms, before) = self.at(back + 1)?;
             if now_ms.saturating_sub(peak_ms) > CONTACT_STEP_MS * CONTACT_SETTLE as u32 {
                 return None;
             }

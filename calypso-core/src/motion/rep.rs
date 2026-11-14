@@ -259,7 +259,7 @@ impl Legs {
             state: self.hist.state_at(ending.quietest_ms),
             end,
         };
-        let leg = self.prev.replace(ended).map(|prev| Leg {
+        self.prev.replace(ended).map(|prev| Leg {
             start_ms: prev.ms,
             end_ms: ending.quietest_ms,
             state: prev.state,
@@ -267,8 +267,7 @@ impl Legs {
             end_end: end,
             carried_ms,
             lifted_ms,
-        });
-        leg
+        })
     }
 
     fn update(&mut self, f: &Filtered, m: &Integrated, cues: &Cues) -> Option<Leg> {

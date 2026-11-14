@@ -5,6 +5,7 @@
 //!
 //! Usage: `cargo run --release --example replay_stream -- <capture.pblog> [--series]`, where the capture is a name in `captures/` or one the bucket holds.
 
+use std::cmp::Reverse;
 use std::env;
 
 use calypso_core::motion::fusion::{Filtered, GRAVITY};
@@ -102,7 +103,7 @@ fn holes(samples: &[Sample], t0: u32) {
         println!("  timeline    no holes");
         return;
     }
-    found.sort_by(|a, b| b.1.cmp(&a.1));
+    found.sort_by_key(|hole| Reverse(hole.1));
     print!("  timeline    {} holes, largest:", found.len());
     for (at, d) in found.iter().take(6) {
         print!(" {} ms at +{} ms", d, at);

@@ -880,7 +880,6 @@ async fn main(spawner: Spawner) -> ! {
                 samples.borrow_mut().push(sample);
                 let step = pipeline.update(&sample, detecting && !RECORD_MODE && !FAKE_REPS);
                 let filtered = &step.filtered;
-                let integrated = &step.integrated;
 
                 // Detect reps; on close, slice the window out of the ring and compute the ZUPT-anchored trace + summary, then persist it.
                 //
@@ -1503,6 +1502,10 @@ struct SummaryBatch {
 }
 
 impl SummaryBatch {
+    #[allow(
+        clippy::large_stack_frames,
+        reason = "536 B: the batch is the value being built, then moved into main's exempt frame"
+    )]
     fn new(messages: &'static mut AllocVec<msg::RepSummary>) -> Self {
         messages.clear();
         SummaryBatch {

@@ -6,6 +6,7 @@
 //!
 //! Usage: `cargo run --release --example raw_dump -- <dump.pblog>`, where the dump came from `cargo run --example device_log -- <image.bin> --dump <dump.pblog>` or from the app's history.
 
+use std::cmp::Reverse;
 use std::env;
 use std::fs;
 
@@ -136,7 +137,7 @@ fn report(index: usize, w: &Window) {
                 (d > dt_ms * 3 / 2).then(|| (d, pair[1].t_ms))
             })
             .collect();
-        gaps.sort_by(|a, b| b.0.cmp(&a.0));
+        gaps.sort_by_key(|gap| Reverse(gap.0));
         print!("    largest:");
         for (d, at) in gaps.iter().take(6) {
             print!(" {} ms at +{} ms", d, *at as i64 - w.t_start_ms as i64);
@@ -229,7 +230,7 @@ fn report(index: usize, w: &Window) {
     // The quantiser: how often two consecutive readings are the same value, and by how much they move when they are not. A part whose die is 3.9 mg a count at ±8 g shows steps of about four of the output's 1 mg counts; one that rescales internally shows steps of one.
     let mut steps = [0u32; 9];
     let mut pairs = 0u32;
-    for axis in 0..3 {
+    for (axis, name) in "xyz".chars().enumerate() {
         let mut repeats = 0u32;
         for i in 1..n {
             let a = (accel[i - 1][axis] * ACCEL_SCALE as f32).round() as i32;
@@ -243,7 +244,7 @@ fn report(index: usize, w: &Window) {
         }
         print!(
             "  repeats {} {:>4.0}%  ",
-            "xyz".chars().nth(axis).unwrap(),
+            name,
             repeats as f32 * 100.0 / (n - 1) as f32
         );
     }
